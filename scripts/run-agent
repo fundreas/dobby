@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+# run-agent — Claude Code, unattended, in a container that owns nothing but this
+# repo, the Android toolchain, and whatever phone is plugged into the host.
+#
+#   scripts/run-agent                      interactive session
+#   scripts/run-agent "add the ClockSock"  interactive session, prompt already typed
+#   scripts/run-agent -p "fix the lint"    headless: runs, prints, exits
+#   scripts/run-agent --build              rebuild the image first (pulls a fresh Claude)
+#   scripts/run-agent --shell              bash inside the container instead of claude
+#   scripts/run-agent --no-usb             do not hand the container the USB bus
+#
+# Everything after the script's own flags goes straight to `claude`.
+#
+# What the container gets:
+#   * this repo, bind-mounted at the same absolute path as on the host, so the
+#     per-project Claude state (memory, history) is the very same as outside
+#   * your ~/.claude (login, settings, skills, memory) at the same path inside,
+#     via CLAUDE_CONFIG_DIR — the container keeps its own .claude.json in there
+#     so it never fights the host over that file
+#   * JDK 21, the Android SDK (platform 36, build-tools, NDK, CMake) and
+#     platform-tools at /opt/android-sdk, with ANDROID_HOME already set, so
+#     ./gradlew needs no local.properties. Set AGENT_ANDROID_SDK=/path/to/Sdk to
+#     bind-mount your host SDK over it instead (saves re-downloading, but the
+#     agent can then write to your SDK).
+#   * persistent named volumes for ~/.gradle, ~/.m2 and ~/.android, so the
+#     Gradle distribution and dependency cache survive between runs — and so
+#     does the adb key, meaning the phone's "always allow this computer" is
+#     answered once, not every session
+#   * the USB bus (/dev/bus/usb) plus the groups that own it, so `adb devices`
+#     sees the phone. With --network host it will also just use an adb server
+#     already running on the host, if the versions match.
+#   * the variables from .env.agent in the repo root — PICOVOICE_ACCESS_KEY for
+#     the wake word, and anything else a Sock needs (see .env.agent.example)
+#   * your git author/committer identity as env vars — no .gitconfig, no ssh
+#     keys, no credential helpers, so `git push` has nothing to push with
+#
+# Model and effort default to Opus at high effort (scripts/agent/settings.json),
+# not the host's user setting; `scripts/run-agent --model fable` overrides.
+#
+# Claude runs with --dangerously-skip-permissions. The only gate left is the
+# PreToolUse hook baked into the image (scripts/agent/guard.py): git push, any
+# git command that discards work, and anything that could wipe or brick the
+# phone are refused; everything else just runs.
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CTX="$ROOT/scripts/agent"
+IMAGE="${AGENT_IMAGE:-dobby-agent}"
+ENV_FILE="${AGENT_ENV_FILE:-$ROOT/.env.agent}"
+HOST_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+
+USER_NAME="$(id -un)"
+USER_UID="$(id -u)"
+USER_GID="$(id -g)"
+CONTAINER_HOME="/home/$USER_NAME"
+
+FORCE_BUILD=false
+SHELL_MODE=false
+WANT_USB=true
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --build) FORCE_BUILD=true; shift ;;
+    --shell) SHELL_MODE=true; shift ;;
+    --no-usb) WANT_USB=false; shift ;;
+    -h|--help) sed -n '2,43p' "$0"; exit 0 ;;
+    --) shift; break ;;
+    *) break ;;
+  esac
+done
+
+die() { echo "run-agent: $*" >&2; exit 1; }
+command -v docker >/dev/null || die "docker is not installed"
+[[ -d "$HOST_CONFIG_DIR" ]] || die "$HOST_CONFIG_DIR not found — log in to Claude Code on the host once first"
+
+# ---------------------------------------------------------------- image ----
+# Build when the image is missing, when asked, or when anything in
+# scripts/agent/ is newer than the image (the guard is baked in, so an edited
+# guard.py needs a rebuild to take effect).
+needs_build=$FORCE_BUILD
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  needs_build=true
+elif [[ $needs_build == false ]]; then
+  created="$(docker image inspect --format '{{.Created}}' "$IMAGE")"
+  if [[ -n "$(find "$CTX" -type f -newermt "$created" 2>/dev/null)" ]]; then
+    echo "run-agent: scripts/agent/ changed since the image was built — rebuilding" >&2
+    needs_build=true
+  fi
+fi
+
+if [[ $needs_build == true ]]; then
+  echo "run-agent: building $IMAGE — the Android SDK and NDK make this a ~6 GB image, first build takes a while" >&2
+  build_flags=()
+  [[ $FORCE_BUILD == true ]] && build_flags+=(--pull --no-cache)
+  docker build "${build_flags[@]}" \
+    --build-arg "USER_NAME=$USER_NAME" \
+    --build-arg "USER_UID=$USER_UID" \
+    --build-arg "USER_GID=$USER_GID" \
+    -t "$IMAGE" "$CTX"
+fi
+
+# ----------------------------------------------------------- first run ----
+# The container keeps its own .claude.json inside the shared config dir. Seed
+# the three answers Claude would otherwise ask for on the first interactive
+# start: onboarding done, this repo trusted, bypass mode acknowledged.
+python3 - "$HOST_CONFIG_DIR/.claude.json" "$ROOT" <<'PY'
+import json, os, sys
+path, root = sys.argv[1], sys.argv[2]
+cfg = {}
+if os.path.exists(path):
+    with open(path) as f:
+        try:
+            cfg = json.load(f)
+        except json.JSONDecodeError:
+            cfg = {}
+before = json.dumps(cfg, sort_keys=True)
+cfg.setdefault("hasCompletedOnboarding", True)
+cfg.setdefault("bypassPermissionsModeAccepted", True)
+project = cfg.setdefault("projects", {}).setdefault(root, {})
+project["hasTrustDialogAccepted"] = True
+project.setdefault("hasCompletedProjectOnboarding", True)
+if json.dumps(cfg, sort_keys=True) != before:
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(cfg, f, indent=2)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+PY
+
+# ------------------------------------------------------------------ run ----
+run_args=(
+  --rm --init
+  --hostname dobby-agent
+  --network host
+  --security-opt no-new-privileges
+  -v "$ROOT:$ROOT"
+  -w "$ROOT"
+  -v "$HOST_CONFIG_DIR:$CONTAINER_HOME/.claude"
+  -v "dobby-agent-gradle:$CONTAINER_HOME/.gradle"
+  -v "dobby-agent-m2:$CONTAINER_HOME/.m2"
+  -v "dobby-agent-android:$CONTAINER_HOME/.android"
+  -e "CLAUDE_CONFIG_DIR=$CONTAINER_HOME/.claude"
+  -e "GIT_AUTHOR_NAME=$(git -C "$ROOT" config user.name || echo agent)"
+  -e "GIT_AUTHOR_EMAIL=$(git -C "$ROOT" config user.email || echo agent@localhost)"
+  -e "GIT_COMMITTER_NAME=$(git -C "$ROOT" config user.name || echo agent)"
+  -e "GIT_COMMITTER_EMAIL=$(git -C "$ROOT" config user.email || echo agent@localhost)"
+  -e "TZ=${TZ:-$(cat /etc/timezone 2>/dev/null || echo UTC)}"
+  -e "TERM=${TERM:-xterm-256color}"
+  -e "COLORTERM=${COLORTERM:-truecolor}"
+)
+
+# Interactive only when there is a terminal; `run-agent -p … | tee` still works.
+run_args+=(-i)
+[[ -t 0 && -t 1 ]] && run_args+=(-t)
+
+# Your own SDK instead of the baked one, if you would rather not keep two
+# copies of the NDK on disk.
+if [[ -n "${AGENT_ANDROID_SDK:-}" ]]; then
+  [[ -d "$AGENT_ANDROID_SDK" ]] || die "AGENT_ANDROID_SDK=$AGENT_ANDROID_SDK is not a directory"
+  echo "run-agent: using the host SDK at $AGENT_ANDROID_SDK — the agent can write to it" >&2
+  run_args+=(-v "$AGENT_ANDROID_SDK:/opt/android-sdk")
+fi
+
+# ------------------------------------------------------------------ usb ----
+# The phone. /dev/bus/usb plus a cgroup rule for USB char devices (major 189)
+# lets the container's own adb server claim it; --group-add covers the case
+# where udev has handed the nodes to a group (plugdev) rather than to root.
+if [[ $WANT_USB == true && -d /dev/bus/usb ]]; then
+  run_args+=(-v /dev/bus/usb:/dev/bus/usb --device-cgroup-rule 'c 189:* rmw')
+  while read -r gid; do
+    [[ -n "$gid" && "$gid" != "0" ]] && run_args+=(--group-add "$gid")
+  done < <(find /dev/bus/usb -type c -printf '%G\n' 2>/dev/null | sort -u)
+
+  # A host adb server owns the phone until it lets go. The container's client
+  # will reach it over --network host if the versions match, and otherwise kill
+  # it and start its own — which is why the USB bus is mounted either way.
+  if command -v adb >/dev/null && adb devices 2>/dev/null | grep -qE '\sdevice$'; then
+    echo "run-agent: host adb server is running and has a device — the container shares it via --network host" >&2
+  fi
+elif [[ $WANT_USB == true ]]; then
+  echo "run-agent: no /dev/bus/usb on this host — adb will need wireless debugging (adb connect <ip>:5555)" >&2
+fi
+
+# Wake-word key and friends. Docker passes the file's KEY=VALUE lines verbatim
+# (no quote stripping), which is how .env.agent.example is written.
+if [[ -f "$ENV_FILE" ]]; then
+  run_args+=(--env-file "$ENV_FILE")
+else
+  echo "run-agent: no $ENV_FILE — starting without PICOVOICE_ACCESS_KEY (see .env.agent.example)" >&2
+fi
+
+# Alternative auth if you prefer a token over the shared ~/.claude login.
+for var in CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; do
+  [[ -n "${!var:-}" ]] && run_args+=(-e "$var")
+done
+
+if [[ $SHELL_MODE == true ]]; then
+  exec docker run "${run_args[@]}" "$IMAGE" bash
+fi
+
+exec docker run "${run_args[@]}" "$IMAGE" \
+  claude --dangerously-skip-permissions --settings /opt/agent/settings.json "$@"

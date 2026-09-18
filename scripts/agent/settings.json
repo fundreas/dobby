@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "_comment": "Loaded via `claude --settings /opt/agent/settings.json` inside the agent container only. Ranks above the shared user settings, so model and effort here win over ~/.claude/settings.json; a --model/--effort flag on run-agent still wins over these. The hook is the real gate (it runs even under --dangerously-skip-permissions); the deny list is belt and braces.",
+  "model": "opus",
+  "effortLevel": "high",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /opt/agent/guard.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "deny": [
+      "Bash(git push*)",
+      "Bash(git * push*)",
+      "Bash(git branch -d*)",
+      "Bash(git branch -D*)",
+      "Bash(git branch --delete*)",
+      "Bash(git tag -d*)",
+      "Bash(git tag --delete*)",
+      "Bash(git reset --hard*)",
+      "Bash(git checkout -- *)",
+      "Bash(git checkout .)",
+      "Bash(git restore *)",
+      "Bash(git clean*)",
+      "Bash(git stash drop*)",
+      "Bash(git stash clear*)",
+      "Bash(git rm *)",
+      "Bash(git commit --amend*)",
+      "Bash(git reflog expire*)",
+      "Bash(git reflog delete*)",
+      "Bash(git gc --prune*)",
+      "Bash(git prune*)",
+      "Bash(git worktree remove*)",
+      "Bash(git remote remove*)",
+      "Bash(git remote rm*)",
+      "Bash(git filter-branch*)",
+      "Bash(rm -rf .git*)",
+      "Bash(rm -rf */.git*)",
+      "Bash(fastboot*)",
+      "Bash(adb reboot bootloader*)",
+      "Bash(adb reboot recovery*)",
+      "Bash(adb * reboot bootloader*)",
+      "Bash(adb * reboot recovery*)",
+      "Bash(adb sideload*)",
+      "Bash(adb remount*)",
+      "Bash(adb disable-verity*)",
+      "Bash(adb root*)",
+      "Bash(rm -rf /opt/android-sdk*)"
+    ]
+  }
+}
