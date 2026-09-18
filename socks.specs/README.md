@@ -95,7 +95,8 @@ templates = listOf(
 ```
 
 A slot capture always beats a static param. Use this rather than re-parsing German in the handler.
-- **Exhaustiveness matters.** The registry test asserts no two Socks match the same utterance *for different commands*, so a spec that under-lists its utterances hides a collision until runtime. Templates contributed to the same `shared.*` id are exempt — that overlap is the design.
+
+**Exhaustiveness matters.** The registry test asserts no two Socks match the same utterance *for different commands*, so a spec that under-lists its utterances hides a collision until runtime. Templates contributed to the same `shared.*` id are exempt — that overlap is the design.
 
 ## 6. Writing a spec file
 
@@ -124,12 +125,13 @@ Keep German user-facing strings **in the spec**, verbatim. They are product copy
 
 | Sock | Spec | Exclusive commands | Chains | Milestone |
 |---|---|---|---|---|
+| **Help** ✅ | [help.specs.md](help.specs.md) | `overview`, `sock_commands` | — | M1 |
 | Spotify | [spotify.specs.md](spotify.specs.md) | `play_music`, `pause`, `resume`, `skip_next` | `shared.stop`, `shared.resume` | M1 |
-| Clock | [clock.specs.md](clock.specs.md) | `set_timer`, `cancel_timer`, `whats_the_time` | `shared.stop` | M3 |
+| Clock ⬤ | [clock.specs.md](clock.specs.md) | `set_timer`, `cancel_timer`, **`whats_the_time`** ✅ | `shared.stop` | M3 |
 | System | [system.specs.md](system.specs.md) | `volume`, `mute`, `turn_on_screen`, `turn_off_screen` | — | M3 |
 | Radio | [radio.specs.md](radio.specs.md) | `play_radio`, `stop_radio` | `shared.stop`, `shared.resume` | M4 |
 | Departures | [departures.specs.md](departures.specs.md) | `departures` | — | M4 |
 
-Plus the shared-command catalog, which is not a Sock: [shared-commands.specs.md](shared-commands.specs.md).
+✅ built · ⬤ partly built. Plus the shared-command catalog, which is not a Sock: [shared-commands.specs.md](shared-commands.specs.md).
 
 See [`../dobby-plan.md`](../dobby-plan.md) §3 for the core-side Sock API.

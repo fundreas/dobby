@@ -1,9 +1,9 @@
 plugins {
     alias(libs.plugins.kotlin.jvm)
-    `java-test-fixtures`
 }
 
 dependencies {
-    api(libs.kotlinx.coroutines.core)
+    api(project(":core"))
+    testImplementation(testFixtures(project(":core")))
     testImplementation(libs.kotlinx.coroutines.test)
 }

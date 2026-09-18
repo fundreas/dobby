@@ -6,6 +6,8 @@ plugins {
 dependencies {
     implementation(project(":core"))
     implementation(project(":socks:devi"))
+    implementation(project(":socks:clock"))
+    implementation(project(":socks:help"))
 }
 
 application {

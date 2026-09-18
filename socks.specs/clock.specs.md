@@ -1,5 +1,11 @@
 # Sock: Clock
 
+> **Implementation status.** `whats_the_time` is built and shipping in `:socks:clock`.
+> `set_timer`, `cancel_timer` and the `shared.stop` subscription are specified below but **not
+> implemented**, and the Sock deliberately does not declare them — a command that is declared
+> but unhandled is worse than one that is absent, because the palette advertises it and the
+> Tier 2 prompt teaches the LLM to emit it.
+
 ## 1. Identity
 
 | | |
