@@ -33,11 +33,18 @@ data class DobbyUiState(
     /** "2 Socks · 3 Befehle · 11 Vorlagen" — the terminal banner, on the wall. */
     val summary: String,
     val canListen: Boolean,
+    /** Whether the wake word is armed. Drives the toggle in the header. */
+    val handsFree: Boolean = false,
+    /** The phrase the panel answers to, or null when no wake word model loaded. */
+    val wakePhrase: String? = null,
 )
 
 enum class Phase {
     PREPARING,
     READY,
+
+    /** Hands-free and armed: the microphone is open, waiting for the wake phrase. */
+    WAITING,
     LISTENING,
     THINKING,
     SPEAKING,
@@ -114,13 +121,20 @@ class DobbyController(
     }
 
     val state: StateFlow<DobbyUiState> =
-        combine(pipeline.state, transcript.messages, thinking) { voice, messages, isThinking ->
+        combine(
+            pipeline.state,
+            transcript.messages,
+            thinking,
+            pipeline.handsFree,
+        ) { voice, messages, isThinking, armed ->
             DobbyUiState(
                 phase = phaseOf(voice, isThinking),
                 detail = detailOf(voice),
                 messages = messages,
                 summary = summary,
                 canListen = pipeline.canListen && engine != null,
+                handsFree = armed,
+                wakePhrase = pipeline.wakePhrase,
             )
         }.stateIn(
             scope,
@@ -128,15 +142,45 @@ class DobbyController(
             DobbyUiState(Phase.PREPARING, "Starte…", emptyList(), summary, canListen = false),
         )
 
-    /** Loads the Socks and the acoustic model. Returns once Dobby is usable, or known not to be. */
+    /**
+     * Loads the Socks and the models, then arms the wake word.
+     *
+     * Hands-free is the default because that is what the product is: a panel you talk to. The
+     * button remains for a noisy room, and the toggle for when you would rather it not listen.
+     */
     suspend fun start() {
         engine?.start(sockContext)
+
+        // Listening starts before prepare() finishes, so a wake word spoken during the first
+        // run's download is not lost — it just waits for the turn it triggers.
+        scope.launch {
+            pipeline.wakeWords.collect { onWakeWord() }
+        }
+
         pipeline.prepare()
+        if (engine != null) pipeline.startHandsFree()
     }
 
     suspend fun stop() {
         engine?.stop()
         pipeline.shutdown()
+    }
+
+    /**
+     * The wake phrase was heard: wake the screen and take the same turn the button takes.
+     *
+     * The screen is woken here rather than in the pipeline because the wake lock belongs to
+     * `SockContext` (§7.2) — the pipeline has no business holding one, and a Sock asking for
+     * the screen and the wake word asking for it must go through the same controller.
+     */
+    private fun onWakeWord() {
+        sockContext.screen.wakeFor(WAKE_SCREEN_SECONDS)
+        listen()
+    }
+
+    /** Arms or disarms the wake word. */
+    fun setHandsFree(enabled: Boolean) {
+        if (enabled) pipeline.startHandsFree() else pipeline.stopHandsFree()
     }
 
     /** Push to talk: one utterance, dispatched and answered. */
@@ -215,16 +259,21 @@ class DobbyController(
         voice is VoiceState.Speaking -> Phase.SPEAKING
         voice is VoiceState.Preparing -> Phase.PREPARING
         voice is VoiceState.Unavailable -> Phase.UNAVAILABLE
+        voice is VoiceState.Waiting -> Phase.WAITING
         else -> Phase.READY
     }
 
     private fun detailOf(voice: VoiceState): String = when (voice) {
         is VoiceState.Preparing -> voice.detail
         is VoiceState.Unavailable -> voice.reason
+        is VoiceState.Waiting -> "Sag \"${voice.phrase}\""
         else -> ""
     }
 
     private companion object {
         const val TAG = "Dobby"
+
+        /** Long enough to read the answer that is about to appear. */
+        const val WAKE_SCREEN_SECONDS = 30
     }
 }

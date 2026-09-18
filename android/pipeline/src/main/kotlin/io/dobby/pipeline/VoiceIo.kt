@@ -1,5 +1,6 @@
 package io.dobby.pipeline
 
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -15,6 +16,27 @@ interface VoiceIo {
 
     /** False while speech input is impossible — no model, no microphone, no German voice. */
     val canListen: Boolean
+
+    /**
+     * Fires when the wake phrase is heard, carrying the detection score.
+     *
+     * Only a signal: what happens next is the same turn the button triggers, decided one layer
+     * up. Hands-free that ran its own turn would be a second path to keep in step with the
+     * first, and they would not stay in step.
+     */
+    val wakeWords: SharedFlow<Float>
+
+    /** Whether the wake word is currently armed. */
+    val handsFree: StateFlow<Boolean>
+
+    /** The phrase the panel answers to, or null when no wake word model could be loaded. */
+    val wakePhrase: String?
+
+    /** Arms the wake word. Returns false when there is no model, leaving push-to-talk. */
+    fun startHandsFree(): Boolean
+
+    /** Disarms the wake word, closing the microphone if nothing else is listening. */
+    fun stopHandsFree()
 
     suspend fun prepare()
 

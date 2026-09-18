@@ -1,5 +1,6 @@
 package io.dobby.pipeline.stt
 
+import io.dobby.pipeline.download.Downloader
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
@@ -9,9 +10,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
-import java.io.InputStream
-import java.net.HttpURLConnection
-import java.net.URI
 import java.util.zip.ZipInputStream
 import kotlin.coroutines.coroutineContext
 
@@ -88,43 +86,7 @@ class VoskModelStore(
 
     private suspend fun download(into: File) {
         _state.value = ModelState.Downloading(0)
-        val connection = URI(url).toURL().openConnection() as HttpURLConnection
-        connection.connectTimeout = CONNECT_TIMEOUT_MS
-        connection.readTimeout = READ_TIMEOUT_MS
-        try {
-            connection.connect()
-            if (connection.responseCode != HttpURLConnection.HTTP_OK) {
-                throw IOException("the model server answered ${connection.responseCode}")
-            }
-            val total = connection.contentLengthLong
-            connection.inputStream.use { source ->
-                into.outputStream().use { sink ->
-                    copyReportingProgress(source, sink, total)
-                }
-            }
-        } finally {
-            connection.disconnect()
-        }
-    }
-
-    private suspend fun copyReportingProgress(source: InputStream, sink: java.io.OutputStream, total: Long) {
-        val buffer = ByteArray(COPY_BUFFER)
-        var written = 0L
-        var lastPercent = -1
-        while (true) {
-            coroutineContext.ensureActive()
-            val read = source.read(buffer)
-            if (read < 0) break
-            sink.write(buffer, 0, read)
-            written += read
-            if (total > 0) {
-                val percent = (written * PERCENT / total).toInt()
-                if (percent != lastPercent) {
-                    lastPercent = percent
-                    _state.value = ModelState.Downloading(percent)
-                }
-            }
-        }
+        Downloader.fetch(url, into) { _state.value = ModelState.Downloading(it) }
     }
 
     private suspend fun unzip(archive: File, into: File) {
@@ -142,7 +104,7 @@ class VoskModelStore(
                     file.mkdirs()
                 } else {
                     file.parentFile?.mkdirs()
-                    file.outputStream().use { zip.copyTo(it, COPY_BUFFER) }
+                    file.outputStream().use { zip.copyTo(it, Downloader.BUFFER) }
                 }
                 zip.closeEntry()
             }
@@ -155,9 +117,5 @@ class VoskModelStore(
         const val DEFAULT_MODEL: String = "vosk-model-small-de-0.15"
         const val MODEL_BASE_URL: String = "https://alphacephei.com/vosk/models"
 
-        private const val CONNECT_TIMEOUT_MS = 15_000
-        private const val READ_TIMEOUT_MS = 30_000
-        private const val COPY_BUFFER = 64 * 1024
-        private const val PERCENT = 100
     }
 }

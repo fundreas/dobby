@@ -6,11 +6,19 @@ import io.dobby.pipeline.audio.MicrophoneUnavailableException
 import io.dobby.pipeline.stt.ModelState
 import io.dobby.pipeline.stt.VoskEngine
 import io.dobby.pipeline.stt.VoskModelStore
+import io.dobby.pipeline.tts.Earcon
 import io.dobby.pipeline.tts.Speaker
+import io.dobby.pipeline.wakeword.WakeWordDetector
+import io.dobby.pipeline.wakeword.WakeWordModelStore
+import io.dobby.pipeline.wakeword.WakeWordModels
+import io.dobby.pipeline.wakeword.WakeWordState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -24,15 +32,19 @@ import kotlin.time.Duration.Companion.seconds
 
 /** What the voice side of Dobby is doing. The chat view renders this as its status line. */
 sealed interface VoiceState {
-    /** Fetching or loading the acoustic model. [detail] is fit to show a person. */
+    /** Fetching or loading a model. [detail] is fit to show a person. */
     data class Preparing(val detail: String) : VoiceState
 
     /** No microphone, no model, or no German voice. Dobby still works by typing. */
     data class Unavailable(val reason: String) : VoiceState
 
+    /** Idle, and not listening for anything. Press to talk. */
     data object Ready : VoiceState
 
-    /** The mic is open. [partial] is Vosk's running guess, and changes several times a second. */
+    /** Hands-free: the microphone is open and the wake word is armed. */
+    data class Waiting(val phrase: String) : VoiceState
+
+    /** The mic is open for an utterance. [partial] is Vosk's running guess. */
     data class Listening(val partial: String) : VoiceState
 
     data class Speaking(val text: String) : VoiceState
@@ -43,50 +55,64 @@ sealed interface VoiceState {
  *
  * Deliberately knows nothing about Socks, commands or the registry — it is the bottom of
  * `dobby-plan.md` §2's "everything below the microphone", and the service above it is what
- * joins it to the engine. That seam is why this module can be built and reasoned about
- * without any of Phase A being involved.
+ * joins it to the engine.
  *
- * The microphone is opened per utterance rather than held open, because until the wake word
- * lands in M2 there is nothing to listen *for* — an always-open mic would be battery and
- * privacy cost with no feature attached.
+ * Two ways in, one way through. Push-to-talk calls [listen] directly; hands-free arms the wake
+ * word and emits on [wakeWords], and whoever is listening calls the same [listen]. There is no
+ * second path for the hands-free case, because a second path is how the two drift apart.
  */
 class VoicePipeline(
     context: Context,
     private val scope: CoroutineScope,
-    private val audio: AudioSource = AudioSource(),
     modelRoot: File = context.filesDir,
     private val utteranceTimeout: Duration = UTTERANCE_TIMEOUT,
 ) : VoiceIo {
     private val appContext = context.applicationContext
+    private val audio = AudioSource(scope)
     private val models = VoskModelStore(modelRoot)
+    private val wakeWordModels = WakeWordModelStore(modelRoot)
     private val speaker = Speaker(appContext)
+    private val earcon = Earcon()
 
     /** One utterance at a time: the microphone is not shareable and neither is the transcript. */
     private val turn = Mutex()
 
-    init {
-        // A microphone that dies mid-utterance has nobody to throw to — the failure happens on
-        // the audio thread. It surfaces as state instead.
-        audio.onError = { _state.value = VoiceState.Unavailable("Mikrofon abgebrochen") }
-    }
-
     private var engine: VoskEngine? = null
+    private var wakeWord: WakeWordModels? = null
+    private var detector: WakeWordDetector? = null
 
     private val _state = MutableStateFlow<VoiceState>(VoiceState.Preparing("Starte…"))
     override val state: StateFlow<VoiceState> = _state.asStateFlow()
 
-    /** True once speech input is possible. Typed input works regardless. */
+    private val _wakeWords = MutableSharedFlow<Float>(extraBufferCapacity = 1)
+
+    /** Fires when the wake phrase is heard. The value is the detection score. */
+    override val wakeWords: SharedFlow<Float> = _wakeWords.asSharedFlow()
+
+    private val _handsFree = MutableStateFlow(false)
+
+    /** Whether the wake word is currently armed. */
+    override val handsFree: StateFlow<Boolean> = _handsFree.asStateFlow()
+
     override val canListen: Boolean get() = engine != null
 
+    /** The phrase the panel answers to, once the wake word models are loaded. */
+    override var wakePhrase: String? = null
+        private set
+
+    init {
+        audio.onError = { _state.value = VoiceState.Unavailable("Mikrofon abgebrochen") }
+    }
+
     /**
-     * Downloads the model if needed, loads it, and warms up the voice.
+     * Downloads what is missing, loads it, and warms up the voice.
      *
      * Never throws: a Dobby that cannot hear is still a Dobby you can type at, and that is a
-     * much better failure than a service that dies on first run behind a captive portal.
+     * much better failure than a service that dies on first run behind a captive portal. The
+     * wake word is optional in the same way — without it the panel is push-to-talk, which is
+     * exactly what it was before this milestone.
      */
     override suspend fun prepare() {
-        // Mirror the download into the UI state while it runs. The first launch of a fresh
-        // install spends a minute here, and a silent minute reads as a hang.
         val progress = scope.launch {
             models.state.collect { _state.value = VoiceState.Preparing(it.describe()) }
         }
@@ -110,12 +136,80 @@ class VoicePipeline(
             return
         }
 
+        prepareWakeWord()
+
         if (!speaker.awaitReady()) {
             // Hearing without speaking is still useful: the chat view shows every answer.
             _state.value = VoiceState.Unavailable("Keine deutsche Stimme installiert")
             return
         }
         _state.value = VoiceState.Ready
+    }
+
+    private suspend fun prepareWakeWord() {
+        _state.value = VoiceState.Preparing("Lade Weckwort…")
+        val progress = scope.launch {
+            wakeWordModels.state.collect {
+                if (it is WakeWordState.Downloading) {
+                    _state.value = VoiceState.Preparing("Lade Weckwort… ${it.percent} %")
+                }
+            }
+        }
+        val files = try {
+            wakeWordModels.ensureAvailable()
+        } finally {
+            progress.cancel()
+        }
+
+        if (files == null) return
+        wakeWord = try {
+            withContext(Dispatchers.IO) { WakeWordModels.load(files) }
+        } catch (e: RuntimeException) {
+            // ONNX Runtime reports a bad graph as a plain runtime exception. A wake word that
+            // will not load costs hands-free, not the panel.
+            null
+        }
+        wakePhrase = wakeWord?.phrase
+    }
+
+    /**
+     * Arms the wake word: the microphone stays open and every 80 ms frame is scored.
+     *
+     * Returns false when there is no wake word model, which leaves the panel on push-to-talk.
+     */
+    override fun startHandsFree(): Boolean {
+        val models = wakeWord ?: return false
+        if (detector != null) return true
+
+        val listener = WakeWordDetector(models) { score -> onWakeWord(score) }
+        detector = listener
+        return try {
+            audio.addSink(listener)
+            _handsFree.value = true
+            if (_state.value is VoiceState.Ready) _state.value = VoiceState.Waiting(models.phrase)
+            true
+        } catch (e: MicrophoneUnavailableException) {
+            detector = null
+            _state.value = VoiceState.Unavailable(e.message ?: "Mikrofon nicht verfügbar")
+            false
+        }
+    }
+
+    /** Disarms the wake word and closes the microphone if nothing else is listening. */
+    override fun stopHandsFree() {
+        val listener = detector ?: return
+        detector = null
+        audio.removeSink(listener)
+        listener.close()
+        _handsFree.value = false
+        if (_state.value is VoiceState.Waiting) _state.value = VoiceState.Ready
+    }
+
+    private fun onWakeWord(score: Float) {
+        // On the audio thread: beep now, and hand the turn to whoever is collecting. Doing the
+        // work here would block the microphone.
+        earcon.play()
+        _wakeWords.tryEmit(score)
     }
 
     /**
@@ -129,23 +223,20 @@ class VoicePipeline(
 
         val utterance = vosk.listen { partial -> _state.value = VoiceState.Listening(partial) }
         _state.value = VoiceState.Listening("")
-        audio.addSink(utterance)
 
         val transcript = try {
-            audio.start(scope)
+            audio.addSink(utterance)
             withTimeoutOrNull(utteranceTimeout) { utterance.await() } ?: utterance.flush()
         } catch (e: MicrophoneUnavailableException) {
             _state.value = VoiceState.Unavailable(e.message ?: "Mikrofon nicht verfügbar")
             return@withLock null
         } finally {
+            // Removing the sink closes the mic only if the wake word is not also holding it.
             audio.removeSink(utterance)
-            // Nothing else holds the mic yet. In M2 the wake word does, and this becomes a
-            // check of whether any sink is left rather than an unconditional stop.
-            audio.stop()
             utterance.close()
         }
 
-        _state.value = VoiceState.Ready
+        _state.value = idleState()
         transcript.ifBlank { null }
     }
 
@@ -157,15 +248,26 @@ class VoicePipeline(
         try {
             speaker.say(text)
         } finally {
-            _state.value = if (previous is VoiceState.Unavailable) previous else VoiceState.Ready
+            _state.value = if (previous is VoiceState.Unavailable) previous else idleState()
+            // Dobby has been talking into an open microphone. Whatever the detector heard of
+            // its own voice is not a wake word, and keeping it would let the tail of an answer
+            // sit in the window scoring against the next one.
+            detector?.reset()
         }
     }
 
+    private fun idleState(): VoiceState =
+        wakeWord?.takeIf { detector != null }?.let { VoiceState.Waiting(it.phrase) } ?: VoiceState.Ready
+
     override fun shutdown() {
+        stopHandsFree()
         audio.stop()
+        earcon.close()
         speaker.shutdown()
         engine?.close()
         engine = null
+        wakeWord?.close()
+        wakeWord = null
     }
 
     companion object {

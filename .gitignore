@@ -10,3 +10,6 @@ local.properties
 
 # heap dumps from a Gradle daemon that ran out of memory
 *.hprof
+
+# Claude Code local machine settings
+.claude/settings.local.json

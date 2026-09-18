@@ -32,6 +32,7 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -42,6 +43,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -65,10 +68,11 @@ fun ChatScreen(
     state: DobbyUiState,
     onListen: () -> Unit,
     onSubmit: (String) -> Unit,
+    onHandsFree: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        Header(state)
+        Header(state, onHandsFree)
         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
         Conversation(state.messages, Modifier.weight(1f))
         Composer(state, onListen, onSubmit)
@@ -76,7 +80,7 @@ fun ChatScreen(
 }
 
 @Composable
-private fun Header(state: DobbyUiState) {
+private fun Header(state: DobbyUiState, onHandsFree: (Boolean) -> Unit) {
     Column(
         Modifier
             .fillMaxWidth()
@@ -92,6 +96,17 @@ private fun Header(state: DobbyUiState) {
             )
             Spacer(Modifier.weight(1f))
             StatusPill(state)
+            // An always-open microphone needs a visible off switch. Not a setting buried in a
+            // screen: the thing is on a wall, and whoever walks past should be able to see
+            // whether it is listening and stop it without hunting.
+            if (state.wakePhrase != null) {
+                Spacer(Modifier.size(10.dp))
+                Switch(
+                    checked = state.handsFree,
+                    onCheckedChange = onHandsFree,
+                    modifier = Modifier.semantics { contentDescription = "Weckwort" },
+                )
+            }
         }
         Text(
             state.detail.ifEmpty { state.summary },
@@ -106,13 +121,14 @@ private fun StatusPill(state: DobbyUiState) {
     val label = when (state.phase) {
         Phase.PREPARING -> "startet"
         Phase.READY -> "bereit"
+        Phase.WAITING -> "wartet"
         Phase.LISTENING -> "hört zu"
         Phase.THINKING -> "denkt nach"
         Phase.SPEAKING -> "spricht"
         Phase.UNAVAILABLE -> "nicht verfügbar"
     }
     val tint = when (state.phase) {
-        Phase.LISTENING -> MaterialTheme.colorScheme.primary
+        Phase.LISTENING, Phase.WAITING -> MaterialTheme.colorScheme.primary
         Phase.UNAVAILABLE -> MaterialTheme.colorScheme.error
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }

@@ -20,6 +20,10 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     api(libs.kotlinx.coroutines.core)
     api(libs.vosk.android)
+    api(libs.onnxruntime.android)
 
     testImplementation(libs.kotlinx.coroutines.test)
+    // The desktop build of the same runtime, so the wake word's inference chain can be
+    // verified against the real model graphs on the JVM instead of only on a phone.
+    testImplementation(libs.onnxruntime.jvm)
 }

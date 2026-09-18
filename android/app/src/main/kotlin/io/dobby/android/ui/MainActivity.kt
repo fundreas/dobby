@@ -87,6 +87,7 @@ class MainActivity : ComponentActivity() {
                                 state = state,
                                 onListen = { connected.controller.listen() },
                                 onSubmit = { connected.controller.submit(it) },
+                                onHandsFree = { connected.controller.setHandsFree(it) },
                             )
                         }
                     }

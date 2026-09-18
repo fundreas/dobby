@@ -5,8 +5,11 @@ import io.dobby.core.testing.FakeSockContext
 import io.dobby.pipeline.VoiceIo
 import io.dobby.pipeline.VoiceState
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -36,6 +39,31 @@ class DobbyControllerTest {
         var prepared: Boolean = false
         var shutdownCalls: Int = 0
 
+        private val _wakeWords = MutableSharedFlow<Float>(extraBufferCapacity = 1)
+        override val wakeWords: SharedFlow<Float> = _wakeWords.asSharedFlow()
+
+        private val _handsFree = MutableStateFlow(false)
+        override val handsFree: StateFlow<Boolean> = _handsFree.asStateFlow()
+
+        override var wakePhrase: String? = "Hey Dobby"
+
+        override fun startHandsFree(): Boolean {
+            if (wakePhrase == null) return false
+            _handsFree.value = true
+            _state.value = VoiceState.Waiting(wakePhrase!!)
+            return true
+        }
+
+        override fun stopHandsFree() {
+            _handsFree.value = false
+            _state.value = VoiceState.Ready
+        }
+
+        /** Pretends someone said the wake phrase. */
+        fun sayWakeWord(score: Float = 0.9f) {
+            _wakeWords.tryEmit(score)
+        }
+
         override suspend fun prepare() {
             prepared = true
             _state.value = VoiceState.Ready
@@ -60,13 +88,23 @@ class DobbyControllerTest {
         DobbyController(backgroundScope, voice) { context }
 
     /**
-     * The UI state, after letting the flow that builds it actually run.
+     * Runs everything the controller has queued and waits for it to go quiet.
      *
-     * `state` is a `stateIn` over three flows, so it is produced by a coroutine of its own;
-     * on a test dispatcher that coroutine only runs when the scheduler is told to.
+     * The controller does its work in coroutines of its own — the `stateIn` that builds the UI
+     * state, and the collector that turns a wake word into a turn. Both live in a background
+     * scope, and `advanceUntilIdle` alone does not drive those to completion, so the two are
+     * interleaved until nothing is left. Stated once here rather than sprinkled through the
+     * tests as scheduler incantations nobody can explain.
      */
+    private fun TestScope.settle() {
+        repeat(3) {
+            testScheduler.runCurrent()
+            testScheduler.advanceUntilIdle()
+        }
+    }
+
     private fun TestScope.uiState(dobby: DobbyController): DobbyUiState {
-        testScheduler.runCurrent()
+        settle()
         return dobby.state.value
     }
 
@@ -167,12 +205,88 @@ class DobbyControllerTest {
 
         assertEquals(Phase.PREPARING, uiState(dobby).phase)
         dobby.start()
-        assertEquals(Phase.READY, uiState(dobby).phase)
+        // Armed on start: the product is a panel you talk to, so WAITING is the resting state.
+        assertEquals(Phase.WAITING, uiState(dobby).phase)
         assertTrue(uiState(dobby).canListen)
+
+        dobby.setHandsFree(false)
+        assertEquals(Phase.READY, uiState(dobby).phase)
 
         voice.canListen = false
         dobby.listen().join()
         assertTrue(!uiState(dobby).canListen, "the mic button must go dead without speech input")
+    }
+
+    @Test
+    fun `the wake word takes the same turn the button takes`() = runTest {
+        val voice = FakeVoice(heard = "wie spät ist es")
+        val context = FakeSockContext()
+        val dobby = controller(voice, context)
+        dobby.start()
+        // start() launches the wake-word collector, and a SharedFlow with no subscriber yet
+        // drops what it is given — so let it subscribe before speaking.
+        settle()
+
+        voice.sayWakeWord()
+        settle()
+
+        val messages = uiState(dobby).messages
+        assertEquals("wie spät ist es", messages.first { it.voice == Voice.USER }.text)
+        assertEquals(
+            "clock.whats_the_time · clock CONSUMED",
+            messages.last { it.voice == Voice.DOBBY }.detail,
+        )
+        assertEquals(1, voice.spoken.size)
+    }
+
+    @Test
+    fun `hearing the wake word wakes the screen`() = runTest {
+        // The panel's screen is off almost always, so being heard has to become visible. The
+        // wake lock lives in SockContext (§7.2), which is why this is the controller's job and
+        // not the pipeline's.
+        val voice = FakeVoice(heard = "wie spät ist es")
+        val context = FakeSockContext()
+        val dobby = controller(voice, context)
+        dobby.start()
+        // start() launches the wake-word collector, and a SharedFlow with no subscriber yet
+        // drops what it is given — so let it subscribe before speaking.
+        settle()
+
+        voice.sayWakeWord()
+        settle()
+
+        assertEquals(
+            WAKE_SCREEN_SECONDS,
+            context.screen.wakeRequests.first(),
+            "the wake word wakes the screen first; Clock's own request follows when it answers",
+        )
+    }
+
+    @Test
+    fun `hands-free is armed on start, and can be switched off`() = runTest {
+        val voice = FakeVoice()
+        val dobby = controller(voice)
+        dobby.start()
+
+        assertTrue(uiState(dobby).handsFree, "the panel should be listening for its name")
+        assertEquals(Phase.WAITING, uiState(dobby).phase)
+        assertEquals("Hey Dobby", uiState(dobby).wakePhrase)
+
+        dobby.setHandsFree(false)
+        assertTrue(!uiState(dobby).handsFree)
+        assertEquals(Phase.READY, uiState(dobby).phase)
+    }
+
+    @Test
+    fun `without a wake word model the panel stays on push-to-talk`() = runTest {
+        val voice = FakeVoice().apply { wakePhrase = null }
+        val dobby = controller(voice)
+        dobby.start()
+
+        assertTrue(!uiState(dobby).handsFree)
+        assertEquals(null, uiState(dobby).wakePhrase)
+        // Still fully usable by button and by typing.
+        assertTrue(uiState(dobby).canListen)
     }
 
     @Test
@@ -190,5 +304,8 @@ class DobbyControllerTest {
     private companion object {
         /** ClockSock's default; asserted rather than imported to keep this a black-box test. */
         const val ClockScreenWakeSeconds = 30
+
+        /** The controller's own screen wake on detection. */
+        const val WAKE_SCREEN_SECONDS = 30
     }
 }

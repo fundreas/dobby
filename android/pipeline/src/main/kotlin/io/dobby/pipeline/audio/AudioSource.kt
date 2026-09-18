@@ -27,21 +27,28 @@ class MicrophoneUnavailableException(message: String, cause: Throwable? = null) 
 /**
  * Owns the process's one [AudioRecord] and routes its frames to every registered [FrameSink].
  *
- * There is exactly one microphone and, in M2, there will be two things that want it at the
- * same time: the wake word and the recognizer. Android will not open the mic twice, so the
+ * There is exactly one microphone and two things that want it: the wake word, permanently, and
+ * the recognizer, for one utterance at a time. Android will not open the mic twice, so the
  * split happens here — the reader loop is the only code that touches `AudioRecord`, and
- * everything downstream is a sink. Adding the wake word later is [addSink], not a rewrite.
+ * everything downstream is a sink (`dobby-plan.md` §2, invariant 4).
  *
- * Frame length and sample rate are the wake word's (1280 samples — 80 ms — at 16 kHz) for
- * the same reason: openWakeWord's melspectrogram front-end wants multiples of 80 ms, and Vosk
- * is indifferent to chunk size. The component that cannot choose is the one that gets to.
+ * **The mic is open exactly while something is listening.** Callers add and remove sinks; they
+ * never start or stop the recorder. That is not convenience, it is the invariant: with two
+ * independent consumers whose lifetimes overlap, any explicit stop is a bug waiting for the
+ * day hands-free is on and an utterance ends — which would take the wake word down with it.
+ *
+ * Frame length and sample rate are the wake word's (1280 samples — 80 ms — at 16 kHz):
+ * openWakeWord's melspectrogram front-end wants multiples of 80 ms, and Vosk is indifferent to
+ * chunk size. The component that cannot choose is the one that gets to.
  */
 class AudioSource(
+    private val scope: CoroutineScope,
     val sampleRate: Int = SAMPLE_RATE,
     val frameLength: Int = FRAME_LENGTH,
 ) {
     /** Where a failure on the audio thread goes. Set by the owner; there is nobody to throw to. */
     var onError: (Throwable) -> Unit = {}
+
     private val sinks = CopyOnWriteArrayList<FrameSink>()
 
     @Volatile
@@ -50,25 +57,52 @@ class AudioSource(
 
     val isRunning: Boolean get() = reader?.isActive == true
 
-    fun addSink(sink: FrameSink) {
-        sinks += sink
-    }
-
-    fun removeSink(sink: FrameSink) {
-        sinks -= sink
-    }
-
     /**
-     * Opens the microphone and starts routing frames.
+     * Starts routing frames to [sink], opening the microphone if it is not already open.
      *
      * @throws MicrophoneUnavailableException if the mic cannot be opened — which on Android 12+
      * is the normal outcome when the service was not started from a foreground activity
      * (`dobby-plan.md` §7.1), not an exotic failure.
      */
-    @SuppressLint("MissingPermission")
-    fun start(scope: CoroutineScope) {
-        if (isRunning) return
+    @Synchronized
+    fun addSink(sink: FrameSink) {
+        sinks += sink
+        try {
+            if (!isRunning) open()
+        } catch (e: MicrophoneUnavailableException) {
+            sinks -= sink
+            throw e
+        }
+    }
 
+    /** Stops routing to [sink], closing the microphone once nothing is listening any more. */
+    @Synchronized
+    fun removeSink(sink: FrameSink) {
+        sinks -= sink
+        if (sinks.isEmpty()) stop()
+    }
+
+    /** Closes the microphone regardless of who is still listening. For shutdown only. */
+    @Synchronized
+    fun stop() {
+        val open = record
+        record = null
+        // stop() is what unblocks a read() already in flight, so the reader coroutine can
+        // reach its finally and release. Cancelling the job alone would not.
+        if (open != null) {
+            try {
+                if (open.recordingState == AudioRecord.RECORDSTATE_RECORDING) open.stop()
+            } catch (e: IllegalStateException) {
+                // Already released by the reader after a read error. Nothing left to stop.
+                onError(e)
+            }
+        }
+        reader?.cancel()
+        reader = null
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun open() {
         val minBuffer = AudioRecord.getMinBufferSize(sampleRate, CHANNEL, ENCODING)
         if (minBuffer <= 0) {
             throw MicrophoneUnavailableException("sample rate ${sampleRate}Hz is not supported")
@@ -126,23 +160,6 @@ class AudioSource(
                 opened.release()
             }
         }
-    }
-
-    fun stop() {
-        val open = record
-        record = null
-        // stop() is what unblocks a read() already in flight, so the reader coroutine can
-        // reach its finally and release. Cancelling the job alone would not.
-        if (open != null) {
-            try {
-                if (open.recordingState == AudioRecord.RECORDSTATE_RECORDING) open.stop()
-            } catch (e: IllegalStateException) {
-                // Already released by the reader after a read error. Nothing left to stop.
-                onError(e)
-            }
-        }
-        reader?.cancel()
-        reader = null
     }
 
     companion object {
