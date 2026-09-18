@@ -7,38 +7,68 @@ Dobby core owns no commands. Everything the user can *do* lives in a **Sock** �
 - [`dobby-plan.md`](dobby-plan.md) — the build spec for core
 - [`socks.specs/`](socks.specs/) — one spec per Sock, plus [the contract](socks.specs/README.md) and the [shared-command catalog](socks.specs/shared-commands.specs.md)
 
-## Status: Phase A complete
+## Status: Phase B complete
 
-Phase A is "Dobby in a terminal": everything below the microphone and above the Socks, as pure JVM code with no Android, no hardware and no network.
+Phase A was "Dobby in a terminal": everything below the microphone and above the Socks, as pure JVM code. Phase B puts it on the phone — you speak, Dobby answers out loud, and the screen shows what it heard and what it said.
 
 | | |
 |---|---|
-| `:core` | Sock API, template engine, normalizer, registry, dispatcher + chain. **Pure Kotlin/JVM** — the module boundary is what enforces the plan's "parsing is pure" rule. Publishes test fixtures (`FakeSockContext`) for Sock modules. |
+| `:core` | Sock API, template engine, normalizer, registry, dispatcher + chain. **Pure Kotlin/JVM** — the module boundary is what enforces the plan's "parsing is pure" rule. Publishes test fixtures (`FakeSockContext`) used by the Socks *and* by the Android app. |
 | `:socks:clock` | **Clock** — the first product Sock. One command: `clock.whats_the_time`. |
 | `:socks:help` | **Help** — spoken discovery: "Was kannst du?", "Was kann die Uhr?" |
-| `:socks:devi` | Devi, the development Sock. One command, `devi.hello`. Not a product Sock. |
-| `:cli` | The terminal harness, and the one place that knows which Socks exist. |
+| `:socks:devi` | Devi, the development Sock. Not a product Sock, and not in a release APK. |
+| `:cli` | The terminal harness. Still the fastest way to work on a template. |
+| `:android:pipeline` | **New.** Microphone in, German text out; German text in, sound out. `AudioRecord` owner + frame router, Vosk, Android TTS. Knows nothing about Socks. |
+| `:android:app` | **New.** The foreground service, the Android `SockContext`, the chat view, and the one place that knows which Socks exist. |
 
-Not yet built: audio, wake word, STT, TTS, the Android app, and the remaining Socks (including Clock's own timers). See [`dobby-plan.md`](dobby-plan.md) §8 for what Phase B adds.
+Not yet built: the wake word, the dashboard cards, the LLM tier, and the remaining Socks (including Clock's own timers). See [`dobby-plan.md`](dobby-plan.md) §8.
 
 ## Run it
 
 ```sh
-./gradlew test            # 121 tests, all JVM, ~3s
-./gradlew :cli:run -q     # the terminal harness
+./gradlew build                      # 146 tests, all JVM, no emulator
+./gradlew :cli:run -q                # the terminal harness
+./gradlew :android:app:installDebug  # the phone
 ```
 
-```
-> wie spät ist es
-  → clock.whats_the_time
-      handled by clock CONSUMED
-  🔊 Es ist halb 3.
+The Android build needs an SDK with platform 36 and `ANDROID_HOME` set (or `sdk.dir` in `local.properties`).
 
-> hello
-hello Devi
-  → devi.hello
-      handled by devi CONSUMED
+## On the phone
+
 ```
+┌──────────────────────────────────┐
+│ Dobby                    hört zu │
+│ 3 Socks · 4 Befehle · 19 Vorlagen│
+├──────────────────────────────────┤
+│                                  │
+│           ┌─────────────────────┐│
+│           │ wie spät ist es     ││
+│           └─────────────────────┘│
+│ ┌──────────────────┐             │
+│ │ Es ist halb 3.   │             │
+│ └──────────────────┘             │
+│ clock.whats_the_time ·           │
+│ clock CONSUMED                   │
+│                                  │
+├──────────────────────────────────┤
+│ [ Tippen statt sprechen ]    🎤  │
+└──────────────────────────────────┘
+```
+
+Tap the microphone and talk. The bubble fills in live with Vosk's running guess, then settles into the final transcript; Dobby's answer appears and is spoken at the same time.
+
+**The line under each answer is the point.** It is the terminal harness's `/trace` output — the resolved command, its params, and every Sock the chain offered it to with the activity each reported. Speech leaves nothing behind, so when "Stopp" silences the wrong thing — the failure [`dobby-plan.md`](dobby-plan.md) §9 calls invisible in review and obvious in daily use — this is the only place you can see it happen.
+
+**Typing works too**, and is not a debug affordance: it is how Dobby is usable while the 46 MB model downloads on first run, on a device with no German voice installed, and in a room too loud to talk in. It takes the identical path — normalize, match, dispatch, speak.
+
+### What Phase B added, and why it looks like this
+
+- **A foreground service, not an Activity.** The panel's screen is off most of the time and the Activity is not; the registry and the Socks' state have to outlive it. The Activity's only privileges are starting the service and showing the chat.
+- **The mic rule is load-bearing.** On Android 12+ a service keeps microphone access only if it was started while an Activity was in the foreground (§7.1), so the order is permission → `startForegroundService` → bind, every time. Getting it backwards makes Dobby deaf with no error anywhere, which is why the call lives in `DobbyService.startFrom` with that written on it. One tap per reboot is the accepted trade-off (§9).
+- **One `AudioRecord`, many sinks.** `AudioSource` is the only code that touches the microphone; everything downstream is a `FrameSink` fed 512-sample frames at 16 kHz — Porcupine's shape, chosen now because the wake word cannot choose later. Adding it in M2 is `addSink`, not a rewrite.
+- **The model is downloaded, not bundled.** 46 MB in the APK is 46 MB in git, in every build and every install, to save one round trip per device. The cost is that Dobby is deaf on first run until it finishes, so the download reports progress into the same status line everything else uses.
+- **Nothing in a Sock changed.** `SockContext` got its Android implementations — audio focus, the screen wake lock, SharedPreferences, logcat — and Clock and Help were rebuilt against them untouched. That was the whole bet of the Phase A interfaces, and it is the first place it could have failed.
+- **Devi cannot ship.** The app's Sock list pulls development Socks from `DevSocks`, which exists twice: the debug source set returns Devi, the release source set returns nothing and does not even have `:socks:devi` on the classpath.
 
 ## Discovery
 
@@ -66,20 +96,28 @@ Dobby can be asked what it can do, two ways.
 | `/fallthrough` | utterances Tier 1 could not match |
 | `/trace`, `/quit` | |
 
-Both read the same `Introspection` API in `:core`, so the Phase B settings screen and the generated Tier 2 prompt will answer identical questions. `:` also works as a prefix.
+Both read the same `Introspection` API in `:core`, so the terminal, the app's header line and the generated Tier 2 prompt answer identical questions. `:` also works as a prefix.
 
 ## What the tests cover
 
+All 146 tests are plain JVM tests. Nothing needs an emulator, including everything Phase B added.
+
 - `GermanNumbersTest`, `NormalizerTest` — German cardinals, and why `ein` is left alone while `eins` is not.
 - `TemplateParserTest`, `TemplateMatcherTest`, `SpecificityTest` — the DSL, backtracking, fuzzy tolerance, palette ordering.
-- **`SpecPaletteTest`** — the utterance tables from every file in `socks.specs/`, run against fixture Socks carrying the real templates. This is the collision gate: it is what fails when a new template shadows another Sock. It already asserts "spiele radio fm4" → Radio, "stopp die musik" → Spotify, "stopp" → the chain, and the whole `… aus` family.
+- **`SpecPaletteTest`** — the utterance tables from every file in `socks.specs/`, run against fixture Socks carrying the real templates. This is the collision gate: it is what fails when a new template shadows another Sock.
 - `RegistryValidationTest` — every way a Sock can be malformed.
-- `IntrospectionTest`, `HelpSockTest` — discovery, including that spoken lists are ordered by display name and that `was kannst du` and `was kann die Uhr` do not shadow each other.
+- `IntrospectionTest`, `HelpSockTest` — discovery, including that spoken lists are ordered by display name.
 - `GermanTimeTest`, `ClockSockTest` — the Clock Sock, including that German "halb 3" means 14:30 and not 15:30.
-- **`ChainDispatcherTest`** — the chain matrix: activity ranking, priority tiebreaks, `NotForMe` passing, nobody consuming, a Sock that throws, a Sock that hangs, and the two scenarios the design exists for (ringing timer over playing music; timer merely counting down).
+- **`ChainDispatcherTest`** — the chain matrix: activity ranking, priority tiebreaks, `NotForMe` passing, nobody consuming, a Sock that throws, a Sock that hangs.
+- **`DobbyControllerTest`** — *(Phase B)* the join, end to end: an utterance goes through the real registry to the real Clock Sock, and the answer is both shown and spoken, as the same sentence. Also that a Sock reaches the `SockContext` built on the Android side, that saying nothing leaves no trace, and that typing takes the identical path. Testable at all because the hardware sits behind `VoiceIo` and the context behind a factory — the Phase A trick, one layer up.
+- **`TranscriptTest`** — *(Phase B)* the chat model's awkward parts: a partial transcript becoming a final one in place, a late frame arriving after the bubble is gone, bounded scrollback for a panel that runs for weeks.
+- **`VoskJsonTest`** — *(Phase B)* the recogniser's result parsing, written by hand precisely so it is not `org.json` and can be tested off-device.
+- **`OutcomeDetailTest`** — *(Phase B)* the trace line under each answer, including the three-Sock chain case it exists for.
 
-Fixture Socks under `core/src/test` carry the real spec templates with stub handlers, so the engine is validated against the specs long before those Socks exist.
+Lint runs with `warningsAsErrors`, as the Kotlin compiler does across every module.
 
 ## Next
 
-Phase B — the Android shell: app skeleton, foreground service, `AudioRecord` owner, Vosk, TTS, and the Android `SockContext`. Clock already gives it something real to say out loud on day one; fake Socks driven from the debug dashboard cover the chain, which no real Sock exercises yet.
+**M2 — hands-free.** Porcupine on the shared `AudioSource`, an earcon, and screen-off listening. That is the last piece between Dobby and being usable without touching it, and the plumbing it needs is already in place: one more `FrameSink`, a wake-word branch in `VoicePipeline`, and a Picovoice `AccessKey` in `local.properties`.
+
+After that, §8's order stands: more Socks (M3–M4), the dashboard (M5), the LLM fallback tier (M6), hardening (M7).

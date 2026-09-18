@@ -18,10 +18,12 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 
 /**
- * The one place that knows which Socks exist.
+ * The terminal harness's Sock list.
  *
- * In Phase B this moves into the Android app, with the development Socks confined to the
- * debug source set.
+ * The app has its own in `io.dobby.android.DobbySocks`, which is the one that ships. They are
+ * separate on purpose: this one always includes Devi, because a development harness with no
+ * development Sock is pointless, while the app's puts Devi in the debug source set so it
+ * cannot reach a release build.
  */
 object DobbySocks {
     /**
@@ -128,7 +130,7 @@ private fun find(introspection: Introspection, query: String): String {
 }
 
 private fun banner(registry: SockRegistry) {
-    println("Dobby — Phase A (core only, no audio)")
+    println("Dobby — terminal harness (core only, no audio)")
     println(
         "${registry.socks.size} sock(s), ${registry.commands.size} command(s), " +
             "${registry.palette.entries.size} template(s)",

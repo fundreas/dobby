@@ -7,3 +7,6 @@ local.properties
 
 # agent container secrets
 .env.agent
+
+# heap dumps from a Gradle daemon that ran out of memory
+*.hprof

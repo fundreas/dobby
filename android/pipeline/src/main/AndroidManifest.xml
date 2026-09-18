@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Declared by the module that actually needs them, so the app manifest stays about the app. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- The STT model is downloaded on first run rather than bundled: 46 MB does not belong in an APK. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+</manifest>
