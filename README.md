@@ -65,7 +65,7 @@ Tap the microphone and talk. The bubble fills in live with Vosk's running guess,
 
 - **A foreground service, not an Activity.** The panel's screen is off most of the time and the Activity is not; the registry and the Socks' state have to outlive it. The Activity's only privileges are starting the service and showing the chat.
 - **The mic rule is load-bearing.** On Android 12+ a service keeps microphone access only if it was started while an Activity was in the foreground (§7.1), so the order is permission → `startForegroundService` → bind, every time. Getting it backwards makes Dobby deaf with no error anywhere, which is why the call lives in `DobbyService.startFrom` with that written on it. One tap per reboot is the accepted trade-off (§9).
-- **One `AudioRecord`, many sinks.** `AudioSource` is the only code that touches the microphone; everything downstream is a `FrameSink` fed 512-sample frames at 16 kHz — Porcupine's shape, chosen now because the wake word cannot choose later. Adding it in M2 is `addSink`, not a rewrite.
+- **One `AudioRecord`, many sinks.** `AudioSource` is the only code that touches the microphone; everything downstream is a `FrameSink` fed 1280-sample frames at 16 kHz — 80 ms, which is openWakeWord's shape. The component that cannot choose gets to choose: the wake word needs multiples of 80 ms, Vosk is indifferent to chunk size. Adding it in M2 is `addSink`, not a rewrite.
 - **The model is downloaded, not bundled.** 46 MB in the APK is 46 MB in git, in every build and every install, to save one round trip per device. The cost is that Dobby is deaf on first run until it finishes, so the download reports progress into the same status line everything else uses.
 - **Nothing in a Sock changed.** `SockContext` got its Android implementations — audio focus, the screen wake lock, SharedPreferences, logcat — and Clock and Help were rebuilt against them untouched. That was the whole bet of the Phase A interfaces, and it is the first place it could have failed.
 - **Devi cannot ship.** The app's Sock list pulls development Socks from `DevSocks`, which exists twice: the debug source set returns Devi, the release source set returns nothing and does not even have `:socks:devi` on the classpath.
@@ -118,6 +118,10 @@ Lint runs with `warningsAsErrors`, as the Kotlin compiler does across every modu
 
 ## Next
 
-**M2 — hands-free.** Porcupine on the shared `AudioSource`, an earcon, and screen-off listening. That is the last piece between Dobby and being usable without touching it, and the plumbing it needs is already in place: one more `FrameSink`, a wake-word branch in `VoicePipeline`, and a Picovoice `AccessKey` in `local.properties`.
+**M2 — hands-free.** [openWakeWord](https://github.com/dscripka/openWakeWord) on the shared `AudioSource`, an earcon, and screen-off listening. The last piece between Dobby and being usable without touching it, and the plumbing is already in place: one more `FrameSink` and a wake-word branch in `VoicePipeline`.
+
+"Hey Dobby" is ~200 KB on top of a shared frozen feature extractor, trained from synthetic Piper TTS audio in a Colab notebook — no recordings, no account, no key. A Raspberry Pi 3 core runs 15–20 of these in real time, so one on a Nord CE costs nothing worth measuring.
+
+The plan originally specified Porcupine; Picovoice discontinued its free tier on 2026-06-30 and disabled existing `AccessKey`s, and the SDK will not initialise without one. What replaced it is better for this project anyway: nothing to sign up for and nothing anyone can switch off. Two things to know going in — the pre-trained models are CC BY-NC-SA (fine for a panel on your own wall, a hard stop for shipping it), and a wake word trained on speech nobody ever spoke has to be *measured* in the actual room before its threshold is set. See `dobby-plan.md` §5.1 and §9.
 
 After that, §8's order stands: more Socks (M3–M4), the dashboard (M5), the LLM fallback tier (M6), hardening (M7).

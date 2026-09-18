@@ -27,7 +27,7 @@ This document is the build spec for **Dobby core**. Per-Sock behavior is specifi
  │  Mic (AudioRecord, 16 kHz mono)                                                          │
  │        │                                                                                 │
  │        ▼                                                                                 │
- │  [1] Wake word — Porcupine, on-device, always running                                    │
+ │  [1] Wake word — openWakeWord, on-device, always running                                 │
  │        │  (detection)                                                                    │
  │        ▼                                                                                 │
  │  [2] STT — Vosk, German small model, streaming, endpointing on silence                   │
@@ -55,7 +55,7 @@ This document is the build spec for **Dobby core**. Per-Sock behavior is specifi
 1. **Core knows no commands.** The pipeline contains zero references to `play_music`, `set_timer`, etc. The palette is assembled at startup from the registered Socks.
 2. **Parsing is pure.** `fun parse(text: String, palette: Palette): CommandInvocation?` — no side effects, no Android dependencies. Table-driven unit tests, including deliberately misrecognized inputs.
 3. **One dispatcher seam.** Every recognized command flows through a single `dispatch(invocation: CommandInvocation)`. This keeps the door open to later forwarding unmatched utterances to a Home Assistant instance (`POST /api/conversation/process`) as just another Sock.
-4. **Single mic owner.** One `AudioRecord` instance feeds both Porcupine and Vosk (Porcupine consumes frames until wake; then frames are routed to Vosk until endpoint). Never open two recorders. Socks never touch the mic.
+4. **Single mic owner.** One `AudioRecord` instance feeds both the wake word and Vosk (the wake word consumes frames until it fires; then frames are routed to Vosk until endpoint). Never open two recorders. Socks never touch the mic.
 5. **The LLM is a fallback, not the workhorse.** Tier 1 must fully cover every command every Sock declares.
 6. **A Sock is replaceable and removable.** Deleting a Sock from the registry removes its commands from the palette, its GBNF branches, and its dashboard card — and nothing else breaks.
 7. **Ambiguous commands are resolved at dispatch time, not at parse time.** "Stopp" means whatever is currently running. The parser produces one *shared* command; the dispatcher offers it down a chain of Socks ranked by how active they are, and the first one that claims it wins (§3.4). Core still knows nothing about what "stopp" does.
@@ -209,7 +209,9 @@ One markdown file per Sock in [`socks.specs/`](socks.specs/), authored against [
 
 - **Language/UI:** Kotlin, Jetpack Compose, single-activity. Coroutines + `StateFlow` for pipeline → UI state.
 - **minSdk 33** (device is Android 13), targetSdk = latest stable. `arm64-v8a` only.
-- **Wake word:** Porcupine Android SDK (`ai.picovoice:porcupine-android`). Free personal tier; custom wake word ("Hey Dobby") trained in the Picovoice console (German supported). Requires an `AccessKey` — put in `local.properties`, never commit.
+- **Wake word:** [openWakeWord](https://github.com/dscripka/openWakeWord) via ONNX Runtime. ~200 KB per wake word on top of a shared, frozen feature extractor; a single Raspberry Pi 3 core runs 15–20 of them in real time, so one on a Nord CE is free. Custom "Hey Dobby" is trained from **synthetic** Piper TTS audio (German voices available) in a Colab notebook — no recording sessions, no console, no account, no key, nothing that can be switched off from outside.
+  - *Licence:* code is Apache-2.0; the **pre-trained models are CC BY-NC-SA 4.0** because of their training data, and a custom model sits on top of that frozen extractor. Non-commercial is exactly what this project is, but it is a hard constraint on ever shipping Dobby.
+  - *(Was Porcupine. Picovoice discontinued its free tier on 2026-06-30 and disabled existing `AccessKey`s — and the SDK refuses to initialise without a valid one, so the plan's original choice stopped being viable rather than merely getting more expensive.)*
 - **STT:** Vosk Android (`com.alphacephei:vosk-android`), model `vosk-model-small-de-0.15` (~45 MB), bundled in assets or downloaded on first run.
 - **LLM tier:** `llama.cpp` built for arm64 Android via CMake/NDK (JNI wrapper; start from the official llama.cpp Android example). Model: **Qwen3 1.7B instruct, Q4_K_M GGUF** (~1.1 GB), downloaded on first run to app files dir (do not bundle in APK).
 - **TTS:** Android built-in `TextToSpeech`, locale `de_AT`/`de_DE`.
@@ -221,10 +223,13 @@ Sock-specific dependencies (Spotify SDKs, etc.) are declared in the Sock's own s
 
 ## 5. Input pipeline — details
 
-### 5.1 Wake word (Porcupine)
+### 5.1 Wake word (openWakeWord)
 
-- Runs permanently inside the foreground service on the shared audio stream.
+- Runs permanently inside the foreground service as one more `FrameSink` on the shared audio stream (§2 invariant 4).
+- **80 ms frames — 1280 samples at 16 kHz.** This is the number the whole audio path is cut to: openWakeWord's melspectrogram front-end wants multiples of 80 ms, longer frames trading latency for efficiency, and Vosk is indifferent to chunk size. The wake word cannot choose; Vosk can. So `AudioSource.FRAME_LENGTH` is openWakeWord's.
+- Three stages, of which only the last is per-wake-word: melspectrogram → frozen Google speech-embedding backbone → a small classifier head. Adding a second wake word later is another ~200 KB head on the same backbone, not another pipeline.
 - On detection: play a short earcon, wake screen (§7.2), switch pipeline state `LISTENING`.
+- **Verify before trusting it.** A wake word trained purely on synthetic speech is the one component here whose quality cannot be predicted from the code. Measure two things on the real device in the real room: false rejects (say "Hey Dobby" 50 times, count misses) and false accepts (leave it running through an evening of normal conversation and music, count spurious wakes). Tune the detection threshold from those numbers, not from a feeling.
 
 ### 5.2 STT (Vosk)
 
@@ -282,7 +287,7 @@ app/
     screen/        ScreenController
   pipeline/
     audio/         AudioRecord owner, frame router
-    wakeword/      Porcupine wrapper
+    wakeword/      openWakeWord wrapper (ONNX Runtime)
     stt/           Vosk wrapper, normalizer (numbers, lowercase)
     nlu/
       templates/   Tier 1: template DSL, compiler, fuzzy matcher  ← pure Kotlin, heavily unit-tested
@@ -348,8 +353,8 @@ Sock API (incl. `SockActivity` / `SharedSubscription` / `NotForMe` — declared 
 *Done when:* "Spiele Blinding Lights von The Weeknd" works from a button press, and the Spotify Sock contains every Spotify-specific line of code in the project.
 
 **M2 — Hands-free.**
-Porcupine wake word + shared AudioRecord + foreground service + earcon. Screen-off listening with `PARTIAL_WAKE_LOCK`.
-*Done when:* wake word → command works with screen off, 24 h without the service dying (after §7.4 checklist).
+openWakeWord as a second `FrameSink` on the shared `AudioSource` + earcon. Screen-off listening with `PARTIAL_WAKE_LOCK`. The foreground service, the mic owner and the frame router already exist (Phase B), so this milestone is the wake word itself and the `LISTENING` branch in `VoicePipeline` — plus training "Hey Dobby" and measuring it (§5.1).
+*Done when:* wake word → command works with screen off, false rejects and false accepts have been measured in the actual room, and 24 h passes without the service dying (after §7.4 checklist).
 
 **M3 — Clock + System Socks, and the chain.**
 Two more Socks, both dependency-free, to prove the registry composes: timers with TTS/chime, time-of-day answer, volume/mute/screen. German number-word normalizer in core. **`ChainDispatcher` goes live** with the first real chain: `shared.stop` across Spotify and Clock.
@@ -377,6 +382,8 @@ Boot notification flow, watchdog, per-Sock failure isolation and reconnect logic
 
 - **Mic after reboot:** framework-blocked without a foreground activity start → one manual tap per reboot. Accepted.
 - **English song titles through German STT:** phonetic garbage forwarded to Spotify search; works surprisingly often, not always. Upgrade path (not now): Whisper for the query slot only.
+- **The wake word is trained on speech nobody ever spoke.** openWakeWord's custom models are built from Piper TTS output plus augmentation, which is what makes "Hey Dobby" free to create — and also means its real-world accuracy is unknown until measured. A wake word that misses is a panel that ignores you; one that fires too easily is a panel that listens to the television. Mitigation is measurement, not design: §5.1 fixes what to count before the detection threshold is chosen. Fallback if synthetic training proves inadequate for a German-accented phrase: sherpa-onnx KWS (open-vocabulary, no training at all, larger model), or pick a wake word whose phonetics the synthetic voices handle well.
+- **The wake-word models are non-commercial.** openWakeWord's pre-trained feature extractor is CC BY-NC-SA 4.0, and a custom head inherits that. Irrelevant to a wall panel in one flat; a hard stop if Dobby ever becomes something you hand to other people. Accepted knowingly, recorded here so it is not rediscovered late.
 - **Phonetic STT slips on *keywords* are not covered.** Levenshtein handles a dropped or doubled letter; it cannot reach "schbiele" from "spiele" (distance 3). If the Vosk spike shows this failure mode is common, add a Kölner-Phonetik comparison alongside the edit-distance one in the keyword matcher — a contained change in `nlu/template`, and the reason that matcher is isolated and pure. Measure before building it.
 - **LLM latency (2–4 s) and RAM (~1.1 GB resident):** acceptable because Tier 2 is rare; if OxygenOS memory pressure kills the service, demote Tier 2 to lazy-load or drop to a 1B model.
 - **Palette growth:** every new Sock enlarges the Tier 1 regex table (cheap) *and* the Tier 2 system prompt (not cheap — prefill time and KV cache size grow with it). Budget: keep the generated system prompt under ~1500 tokens; past that, shard the prompt by Sock or route Tier 2 through a two-step (pick Sock → pick command).
@@ -388,4 +395,4 @@ Boot notification flow, watchdog, per-Sock failure isolation and reconnect logic
 
 ## 10. Explicit non-goals (v1)
 
-No Home Assistant / device control (the Sock seam keeps this open as a future Sock), no dynamic/third-party Sock loading or a Sock marketplace, no multi-room audio, no custom wake-word training beyond the Picovoice console, no cloud NLU, no multiple simultaneous timers, no iOS/tablet variants.
+No Home Assistant / device control (the Sock seam keeps this open as a future Sock), no dynamic/third-party Sock loading or a Sock marketplace, no multi-room audio, no wake word other than "Hey Dobby" (the architecture allows more heads on the same backbone; the product does not need them), no cloud NLU, no multiple simultaneous timers, no iOS/tablet variants.

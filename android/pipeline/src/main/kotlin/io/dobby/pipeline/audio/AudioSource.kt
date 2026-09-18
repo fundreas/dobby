@@ -30,10 +30,11 @@ class MicrophoneUnavailableException(message: String, cause: Throwable? = null) 
  * There is exactly one microphone and, in M2, there will be two things that want it at the
  * same time: the wake word and the recognizer. Android will not open the mic twice, so the
  * split happens here — the reader loop is the only code that touches `AudioRecord`, and
- * everything downstream is a sink. Adding Porcupine later is [addSink], not a rewrite.
+ * everything downstream is a sink. Adding the wake word later is [addSink], not a rewrite.
  *
- * Frame length and sample rate are Porcupine's (512 samples at 16 kHz) for the same reason:
- * the wake word cannot choose, and Vosk does not care.
+ * Frame length and sample rate are the wake word's (1280 samples — 80 ms — at 16 kHz) for
+ * the same reason: openWakeWord's melspectrogram front-end wants multiples of 80 ms, and Vosk
+ * is indifferent to chunk size. The component that cannot choose is the one that gets to.
  */
 class AudioSource(
     val sampleRate: Int = SAMPLE_RATE,
@@ -145,11 +146,17 @@ class AudioSource(
     }
 
     companion object {
-        /** What Vosk's German model expects, and the only rate Porcupine accepts. */
+        /** What Vosk's German model expects, and what openWakeWord requires. */
         const val SAMPLE_RATE: Int = 16_000
 
-        /** Porcupine's frame length. Vosk is indifferent, the wake word is not. */
-        const val FRAME_LENGTH: Int = 512
+        /**
+         * 80 ms at [SAMPLE_RATE] — openWakeWord's frame (`dobby-plan.md` §5.1).
+         *
+         * Its front-end accepts multiples of 80 ms, longer frames buying efficiency at the
+         * cost of detection latency; on a panel you speak to, latency is the thing you feel.
+         * Vosk is indifferent, so the wake word sets it.
+         */
+        const val FRAME_LENGTH: Int = 1280
 
         private const val CHANNEL = AudioFormat.CHANNEL_IN_MONO
         private const val ENCODING = AudioFormat.ENCODING_PCM_16BIT
