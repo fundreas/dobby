@@ -1,0 +1,9 @@
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+.kotlin/
+
+# agent container secrets
+.env.agent

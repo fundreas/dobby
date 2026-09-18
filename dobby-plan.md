@@ -237,8 +237,12 @@ Sock-specific dependencies (Spotify SDKs, etc.) are declared in the Sock's own s
 - Each Sock ships its templates in `CommandSpec.templates`, written in a small DSL with optional parts, alternations and named slots:
   - `(spiele|spiel) {query}( ab)?`
   - `(stell einen )?timer( auf)? {n:int} (minuten|sekunden)`
-- The registry compiles all templates from all Socks into one anchored-regex table with named groups. First match wins; templates are ordered **specific → generic**, and within equal specificity by registration order.
-- **Fuzzy keyword matching:** literal keywords match with Levenshtein distance ≤ 1–2, so STT slips ("schbiele") still hit. Slot content is captured verbatim.
+- The registry compiles all templates from all Socks into one table and matches them **token-by-token with backtracking**, anchored at both ends. *(Originally specified as anchored regexes with named groups; regexes cannot express Levenshtein tolerance, so that would need a second verification pass over every keyword position — more machinery, not less.)*
+- First match wins. Ordering is **specific → generic**, by: closed templates before ones ending in an open text slot; then more literal keywords; then fewer text slots; then registration order. The third key is load-bearing — it is what sends "mach das radio an" to Radio rather than to Spotify's `(mach|leg|spiel) {query} (an|auf)`.
+- Templates are written against the **normalized** text, so no capitals, no punctuation and **no hyphens**: the normalizer splits "U-Bahn" into two tokens, so the template must say `u bahn`.
+- **Fuzzy keyword matching:** literal keywords match within a Levenshtein tolerance of 0 (≤ 3 chars), 1 (≤ 7) or 2 (longer). Short words get zero deliberately — at distance 1 "an" also matches "aus", "am" and "in". Slot content is captured verbatim; only a constrained `{x:enum}` slot is fuzzy, at tolerance 1, which is what folds "minute" into the `minuten` enum value.
+- **Edit distance does not catch phonetic slips.** The plan's own motivating example, "schbiele" for "spiele", is distance 3 — no tolerance that catches it is safe for a six-letter word. Catching that class needs phonetic matching (Kölner Phonetik) as a second comparison; see §9.
+- **Static params:** a template may fix params by its wording (`viel lauter` → `steps=5`, `ton aus` → `state=an`). Without this, the handler would have to re-parse German that the template already disambiguated.
 - **Ambiguity is a build-time error — unless it is shared:** the registry's test suite asserts that no two Socks claim the same utterance for *different* commands. Two Socks contributing templates to the same `shared.*` id is expected and exempt. Adding a Sock that shadows another's exclusive command fails CI.
 - The resolution for a genuinely ambiguous word is therefore always the same: **promote it to a shared command** (§3.4), never re-word one Sock's templates to dodge the other.
 - ~150 lines of pure Kotlin for the matcher itself. HA's `hassil` proves the mechanism at scale.
@@ -262,6 +266,7 @@ cmd_none       ::= "{\"command\":\"none\",\"params\":{}}"
 - **Prompt caching:** persist the KV cache of the static system prompt at model load; per request, only the utterance is prefilled. Expected end-to-end on Nord CE CPU: **~2–4 s** (vs. 3–6 s uncached). Generation ~8–12 tok/s at 1.7B Q4; output is ~30 tokens. The cache must be **invalidated whenever the registry changes** (Sock added/removed/updated) — key it on a hash of the generated prompt.
 - Load the model **once** at service start, keep resident (mmap). If memory pressure proves fatal, make Tier 2 lazy-load + idle-unload — measure first.
 - **Flywheel:** log every utterance that fell through to Tier 2 together with the resolved command. Periodically promote frequent phrasings into new Tier 1 templates **in the owning Sock's spec**.
+- **Examples serve two jobs and must be marked as such.** Most `Example`s are Tier 1 regression cases — the spec's utterance tables, asserted on every registry build. Some are Tier 2 few-shots: paraphrases Tier 1 is *supposed* to miss, which is the entire reason this tier exists. The latter carry `matchedByTemplates = false` so they reach the system prompt without failing the collision gate.
 
 ---
 
@@ -372,6 +377,7 @@ Boot notification flow, watchdog, per-Sock failure isolation and reconnect logic
 
 - **Mic after reboot:** framework-blocked without a foreground activity start → one manual tap per reboot. Accepted.
 - **English song titles through German STT:** phonetic garbage forwarded to Spotify search; works surprisingly often, not always. Upgrade path (not now): Whisper for the query slot only.
+- **Phonetic STT slips on *keywords* are not covered.** Levenshtein handles a dropped or doubled letter; it cannot reach "schbiele" from "spiele" (distance 3). If the Vosk spike shows this failure mode is common, add a Kölner-Phonetik comparison alongside the edit-distance one in the keyword matcher — a contained change in `nlu/template`, and the reason that matcher is isolated and pure. Measure before building it.
 - **LLM latency (2–4 s) and RAM (~1.1 GB resident):** acceptable because Tier 2 is rare; if OxygenOS memory pressure kills the service, demote Tier 2 to lazy-load or drop to a 1B model.
 - **Palette growth:** every new Sock enlarges the Tier 1 regex table (cheap) *and* the Tier 2 system prompt (not cheap — prefill time and KV cache size grow with it). Budget: keep the generated system prompt under ~1500 tokens; past that, shard the prompt by Sock or route Tier 2 through a two-step (pick Sock → pick command).
 - **Template collisions between Socks:** mitigated structurally by shared commands (§3.4) plus the registry collision test (§5.3), but it still means Sock specs must list their utterances exhaustively.

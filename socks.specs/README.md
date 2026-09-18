@@ -70,17 +70,31 @@ Templates are German, lowercase, written against the **normalized** transcript (
 
 | Syntax | Meaning |
 |---|---|
-| `wort` | literal keyword — matched with Levenshtein ≤ 1 (≤ 2 for words ≥ 8 chars) |
-| `(a\|b)` | alternation |
-| `( ab)?` | optional group |
-| `{name}` | string slot, captured verbatim, non-greedy |
-| `{name:int}` | integer slot (post-normalization digits) |
-| `{name:enum}` | slot constrained to the `ParamSpec` enum values |
+| `wort` | literal keyword — fuzzy, tolerance 0 (≤ 3 chars), 1 (≤ 7), 2 (longer) |
+| `(a\|b)` | alternation; a branch may be several words |
+| `( ab)?` | optional group — whitespace inside it is not significant |
+| `{name}` | text slot, captured verbatim, non-greedy |
+| `{name:int}` | integer slot: digits, number words, or the article forms of "one" |
+| `{name:enum}` | slot constrained to the `ParamSpec` enum values, fuzzy at tolerance 1 |
 
 Rules:
+- **Write templates against normalized text**: lowercase, no punctuation, **no hyphens**. "U-Bahn" normalizes to two tokens, so the template says `u bahn`.
 - Order templates **specific → generic** within a Sock.
-- Slot content is never fuzzy-matched — only keywords are.
+- Slot content is never fuzzy-matched — only keywords are, plus the closed candidate set of an enum slot.
 - A template with a trailing open `{query}` slot is greedy for the rest of the utterance; put such templates last.
+- A bare `{text}` slot as an entire template is rejected — it would match every utterance. A bare `{x:enum}` is fine; its candidate set is closed. That is how "lauter" works.
+- Ordering across Socks is computed, not declared: closed before open, then more keywords, then fewer text slots, then registration order.
+
+**Static params.** A template may fix params by its wording, for cases no slot can carry:
+
+```kotlin
+templates = listOf(
+    pattern("(viel|deutlich) {direction:enum}", "steps" to 5),
+    pattern("(ton|lautstärke) aus", "state" to "an"),
+) + patterns("{direction:enum}")
+```
+
+A slot capture always beats a static param. Use this rather than re-parsing German in the handler.
 - **Exhaustiveness matters.** The registry test asserts no two Socks match the same utterance *for different commands*, so a spec that under-lists its utterances hides a collision until runtime. Templates contributed to the same `shared.*` id are exempt — that overlap is the design.
 
 ## 6. Writing a spec file
@@ -92,7 +106,7 @@ Every `<sockId>.specs.md` has these sections, in this order:
 3. **Per command** — a subsection each with:
    - params (name, type, required, default, constraints)
    - Tier 1 templates
-   - example utterances → expected invocation (this table *is* the unit test)
+   - example utterances → expected invocation (this table *is* the unit test — the registry asserts it on every build). Mark a paraphrase that Tier 1 is *meant* to miss with `matchedByTemplates = false`; it then feeds the Tier 2 prompt without failing the collision gate.
    - behavior: exactly what the handler does
    - `SockResult` on success, and the German TTS string
    - failure modes and their German TTS strings
