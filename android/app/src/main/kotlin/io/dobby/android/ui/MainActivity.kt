@@ -83,10 +83,11 @@ class MainActivity : ComponentActivity() {
 
                         else -> {
                             val state by connected.controller.state.collectAsStateWithLifecycle()
+                            val clock by connected.controller.clock.collectAsStateWithLifecycle()
                             ChatScreen(
                                 state = state,
+                                clock = clock,
                                 onListen = { connected.controller.listen() },
-                                onSubmit = { connected.controller.submit(it) },
                                 onHandsFree = { connected.controller.setHandsFree(it) },
                             )
                         }

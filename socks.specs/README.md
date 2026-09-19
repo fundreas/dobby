@@ -127,7 +127,7 @@ Keep German user-facing strings **in the spec**, verbatim. They are product copy
 |---|---|---|---|---|
 | **Help** ✅ | [help.specs.md](help.specs.md) | `overview`, `sock_commands` | — | M1 |
 | Spotify | [spotify.specs.md](spotify.specs.md) | `play_music`, `pause`, `resume`, `skip_next` | `shared.stop`, `shared.resume` | M1 |
-| Clock ⬤ | [clock.specs.md](clock.specs.md) | `set_timer`, `cancel_timer`, **`whats_the_time`** ✅ | `shared.stop` | M3 |
+| **Clock** ✅ | [clock.specs.md](clock.specs.md) | `set_timer`, `cancel_timer`, `whats_the_time` | `shared.stop` | M3 |
 | System | [system.specs.md](system.specs.md) | `volume`, `mute`, `turn_on_screen`, `turn_off_screen` | — | M3 |
 | Radio | [radio.specs.md](radio.specs.md) | `play_radio`, `stop_radio` | `shared.stop`, `shared.resume` | M4 |
 | Departures | [departures.specs.md](departures.specs.md) | `departures` | — | M4 |

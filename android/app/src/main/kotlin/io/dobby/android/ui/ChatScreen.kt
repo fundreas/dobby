@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -19,10 +18,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledIconButton
@@ -30,16 +26,12 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -47,13 +39,13 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import io.dobby.android.DobbyUiState
 import io.dobby.android.Phase
 import io.dobby.android.chat.ChatMessage
 import io.dobby.android.chat.Voice
+import io.dobby.socks.clock.ClockState
 
 /**
  * What Dobby heard and what Dobby answered.
@@ -66,16 +58,19 @@ import io.dobby.android.chat.Voice
 @Composable
 fun ChatScreen(
     state: DobbyUiState,
+    clock: ClockState,
     onListen: () -> Unit,
-    onSubmit: (String) -> Unit,
     onHandsFree: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Header(state, onHandsFree)
+        // The Clock Sock owns the panel's clock, so the panel asks it rather than the system
+        // (`clock.specs.md` §7). It is also where a running timer becomes visible.
+        ClockCard(clock)
         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
         Conversation(state.messages, Modifier.weight(1f))
-        Composer(state, onListen, onSubmit)
+        Composer(state, onListen)
     }
 }
 
@@ -238,59 +233,37 @@ private fun Bubble(message: ChatMessage) {
 }
 
 @Composable
-private fun Composer(state: DobbyUiState, onListen: () -> Unit, onSubmit: (String) -> Unit) {
-    var typed by remember { mutableStateOf("") }
+private fun Composer(state: DobbyUiState, onListen: () -> Unit) {
     val busy = state.phase == Phase.LISTENING || state.phase == Phase.THINKING
-
-    fun send() {
-        val text = typed.trim()
-        if (text.isEmpty()) return
-        typed = ""
-        onSubmit(text)
-    }
+    val armed = state.phase == Phase.LISTENING
 
     Row(
         Modifier
             .fillMaxWidth()
             .navigationBarsPadding()
-            .imePadding()
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+            .padding(horizontal = 12.dp, vertical = 16.dp),
+        horizontalArrangement = Arrangement.Center,
     ) {
-        OutlinedTextField(
-            value = typed,
-            onValueChange = { typed = it },
-            modifier = Modifier.weight(1f),
-            placeholder = { Text("Tippen statt sprechen") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-            keyboardActions = KeyboardActions(onSend = { send() }),
-        )
-
-        if (typed.isNotBlank()) {
-            FilledIconButton(onClick = ::send, enabled = !busy) {
-                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Senden")
-            }
-        } else {
-            FilledIconButton(
-                onClick = onListen,
-                enabled = state.canListen && !busy,
-                colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = if (state.phase == Phase.LISTENING) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.surfaceVariant
-                    },
-                    contentColor = if (state.phase == Phase.LISTENING) {
-                        Color.Black
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
-                ),
-            ) {
-                Icon(Icons.Filled.Mic, contentDescription = "Zuhören")
-            }
+        // One control, sized to be hit from across a room rather than from a thumb's reach —
+        // the panel is on a wall, and this is the only thing on it you touch.
+        FilledIconButton(
+            onClick = onListen,
+            modifier = Modifier.size(72.dp),
+            enabled = state.canListen && !busy,
+            colors = IconButtonDefaults.filledIconButtonColors(
+                containerColor = if (armed) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant
+                },
+                contentColor = if (armed) Color.Black else MaterialTheme.colorScheme.onSurface,
+            ),
+        ) {
+            Icon(
+                Icons.Filled.Mic,
+                contentDescription = "Zuhören",
+                modifier = Modifier.size(32.dp),
+            )
         }
     }
 }

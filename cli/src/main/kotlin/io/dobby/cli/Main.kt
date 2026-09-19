@@ -36,7 +36,9 @@ object DobbySocks {
     fun create(out: (String) -> Unit = ::println): Wiring {
         var directory: Introspection? = null
         val socks = listOf(
-            ClockSock(),
+            // The terminal has no SoundPool, so the chime prints itself. A timer is then just
+            // as testable here as on the panel — which is the whole point of the interface.
+            ClockSock(chime = { sound -> out("  🔔 ${sound.configValue}") }),
             DeviSock(out),
             HelpSock { directory },
         )

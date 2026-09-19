@@ -58,6 +58,16 @@ class FakePlaybackCoordinator : PlaybackCoordinator {
     override var holder: String? = null
         private set
 
+    /**
+     * Who is ducking the channel right now, or null.
+     *
+     * Transient focus does not displace [holder] — that is the entire difference between
+     * ducking and stopping, and "the music came back to full volume" is an assertion a test
+     * has to be able to make.
+     */
+    var duckedBy: String? = null
+        private set
+
     /** Set false to exercise the "focus denied" path. */
     var grantFocus: Boolean = true
 
@@ -71,11 +81,14 @@ class FakePlaybackCoordinator : PlaybackCoordinator {
 
     override suspend fun requestTransientFocus(sockId: String): Boolean {
         transientRequests += sockId
-        return grantFocus
+        if (!grantFocus) return false
+        duckedBy = sockId
+        return true
     }
 
     override suspend fun releaseFocus(sockId: String) {
         if (holder == sockId) holder = null
+        if (duckedBy == sockId) duckedBy = null
     }
 }
 

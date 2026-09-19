@@ -106,6 +106,11 @@ object SpecFixtures {
         handler = { SockResult.Silent },
     )
 
+    /**
+     * Clock is built (`io.dobby.socks.clock.ClockSock`), but `:core` cannot depend on a Sock —
+     * so its templates are mirrored here, verbatim, to keep it in the cross-Sock collision
+     * matrix. If the two drift apart, this file is the one that is wrong.
+     */
     fun clock(): Sock = FixtureSock(
         id = "clock",
         commands = listOf(
@@ -117,28 +122,30 @@ object SpecFixtures {
                 ),
                 templates = patterns(
                     "(stell|stelle|setz|setze|mach) (mir)? (einen|nen)? timer (auf|für)? {amount:int} {unit:enum}",
+                    "(stell|stelle|setz|setze) (mir)? (einen|nen)? wecker (auf|für)? {amount:int} {unit:enum}",
                     "(erinner|erinnere) mich in {amount:int} {unit:enum}",
                     "timer (auf|für)? {amount:int} {unit:enum}",
                     "{amount:int} {unit:enum} timer",
                 ),
-                description = "Stellt einen Timer.",
+                description = "Stellt einen Timer für eine bestimmte Dauer.",
             ),
             ExclusiveCommandSpec(
                 id = "clock.cancel_timer",
                 templates = patterns(
                     "timer (stopp|stop|stoppen|abbrechen|aus|löschen|beenden|abschalten)",
                     "(stopp|stoppe|brich|breche|lösch|lösche|beende) (den)? timer (ab)?",
-                    "(stopp|stoppe) (dem|den)? (alarm|wecker|klingeln)",
+                    "(stopp|stoppe|aus mit) (dem|den|das)? (alarm|wecker|klingeln)",
                 ),
                 description = "Bricht den laufenden Timer ab.",
             ),
             ExclusiveCommandSpec(
                 id = "clock.whats_the_time",
                 templates = patterns(
-                    "wie (spät|viel uhr) ist es",
+                    "wie (spät|viel uhr) ist (es|es jetzt)",
                     "wie spät",
-                    "(uhrzeit|die uhrzeit)",
+                    "(wie viel uhr|uhrzeit|die uhrzeit)",
                     "sag (mir)? (die)? uhrzeit",
+                    "was ist die uhrzeit",
                 ),
                 description = "Sagt die aktuelle Uhrzeit.",
             ),
@@ -147,7 +154,7 @@ object SpecFixtures {
             SharedSubscription(
                 SharedCommands.STOP,
                 priority = 100,
-                extraTemplates = patterns("ich hab's gehört", "(ja ja|ist gut)"),
+                extraTemplates = patterns("(ich hab's gehört|ich habs gehört)", "(ja ja|ist gut)"),
             ),
         ),
         handler = { SockResult.Silent },

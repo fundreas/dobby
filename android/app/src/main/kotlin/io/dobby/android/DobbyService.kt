@@ -42,6 +42,9 @@ class DobbyService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var wakeLock: PowerManager.WakeLock? = null
 
+    /** Owned here, not by the Sock: whoever creates a `SoundPool` is the one who releases it. */
+    private var clockHardware: ClockHardware? = null
+
     lateinit var controller: DobbyController
         private set
 
@@ -67,11 +70,20 @@ class DobbyService : Service() {
             return
         }
 
-        startForeground(
-            NOTIFICATION_ID,
-            notification(),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
-        )
+        // A microphone foreground service may not be startable from the background — which is
+        // exactly where the timer backstop starts it from (clock.specs.md §10). Refusal is a
+        // logged miss, not a crash: this service is START_STICKY, so a crash is a restart loop.
+        try {
+            startForeground(
+                NOTIFICATION_ID,
+                notification(),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "could not go foreground — stopping instead of crash-looping", e)
+            stopSelf()
+            return
+        }
 
         // CPU on, screen off — legitimate here: the panel is wall-mounted and permanently
         // powered (§7.1). It is released in onDestroy and nowhere else.
@@ -79,9 +91,13 @@ class DobbyService : Service() {
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "dobby:service")
             .apply { acquire() }
 
-        controller = DobbyController(scope, VoicePipeline(this, scope)) { announce ->
-            AndroidSockContext(this, scope, announce)
-        }
+        clockHardware = ClockHardware(this)
+        controller = DobbyController(
+            scope = scope,
+            pipeline = VoicePipeline(this, scope),
+            sockContext = { announce -> AndroidSockContext(this, scope, announce) },
+            hardware = clockHardware,
+        )
         scope.launch { controller.start() }
     }
 
@@ -100,6 +116,8 @@ class DobbyService : Service() {
     override fun onDestroy() {
         // onCreate may have bailed out before the controller existed.
         if (::controller.isInitialized) runBlocking { controller.stop() }
+        clockHardware?.release()
+        clockHardware = null
         scope.cancel()
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null

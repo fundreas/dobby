@@ -1,10 +1,11 @@
 # Sock: Clock
 
-> **Implementation status.** `whats_the_time` is built and shipping in `:socks:clock`.
-> `set_timer`, `cancel_timer` and the `shared.stop` subscription are specified below but **not
-> implemented**, and the Sock deliberately does not declare them — a command that is declared
-> but unhandled is worse than one that is absent, because the palette advertises it and the
-> Tier 2 prompt teaches the LLM to emit it.
+> **Implementation status.** Built in full: `set_timer`, `cancel_timer`, `whats_the_time` and
+> the `shared.stop` subscription all ship in `:socks:clock`, with `AlarmManager` behind
+> [`TimerAlarm`](../socks/clock/src/main/kotlin/io/dobby/socks/clock/TimerAlarm.kt) and
+> `SoundPool` behind [`ChimePlayer`](../socks/clock/src/main/kotlin/io/dobby/socks/clock/Chime.kt),
+> so the whole timer lifecycle is tested on a plain JVM against a virtual clock. The dashboard
+> card (§7) renders the exposed state on the panel. Still open: everything in §12.
 
 ## 1. Identity
 
@@ -94,7 +95,7 @@ The `{unit:enum}` slot matches the enum values plus their singular forms (`sekun
 
 | Case | Result | German TTS |
 |---|---|---|
-| New timer set | `Spoken` | "Timer läuft: {amount} {unit}." (e.g. "Timer läuft: 10 Minuten.") |
+| New timer set | `Spoken` | "Timer läuft: {amount} {unit}." (e.g. "Timer läuft: 10 Minuten.") — `{unit}` is spoken in the singular when `amount` is 1: "Timer läuft: 1 Minute." |
 | Replaced a running timer | `Spoken` | "Alter Timer ersetzt. Timer läuft: {amount} {unit}." |
 | `amount` out of range (0 or > 12 h after conversion) | `Failed` | "Diese Dauer kann ich nicht stellen." |
 | Exact-alarm permission missing | `Spoken` + status `Degraded` | "Timer läuft: {amount} {unit}. Achtung, er ist nicht garantiert genau." |
@@ -110,7 +111,7 @@ Expiry announcement is **not** a `SockResult` — it is asynchronous, via `ctx.a
 ```
 timer (stopp|stop|stoppen|abbrechen|aus|löschen|beenden|abschalten)
 (stopp|stoppe|brich|breche|lösch|lösche|beende) (den )?timer( ab)?
-(stopp|stoppe|aus mit) (dem )?(alarm|wecker|klingeln)
+(stopp|stoppe|aus mit) (dem |den |das )?(alarm|wecker|klingeln)
 ```
 
 > Bare `stopp` is **not** claimed — it routes to `shared.stop`, which this Sock wins while the chime is ringing (§5). The word `timer`, `alarm`, `wecker` or `klingeln` is required here, because this command must also work while a timer is merely counting down and music is playing.
@@ -233,10 +234,14 @@ Contributed to `shared.stop`, not owned: `ich hab's gehört`, `ja ja`, `ist gut`
 | `clock.chime_interval_s` | int | `3` | Settings (advanced) |
 | `clock.show_seconds` | bool | `false` | Settings |
 
+The Sock also writes two keys nobody sets by hand: `clock.pending_timer_ends_at` and
+`clock.pending_timer_total_ms`. They are the running timer's deadline, written so a restarted
+process can pick it up (§10), and cleared the moment the timer is cancelled or heard.
+
 ## 10. Failure & degradation
 
 - No exact-alarm permission → `Degraded("Timer nicht garantiert genau")`; the coroutine still runs, only the backstop is weaker. Commands stay available.
-- Process death while a timer runs → the `AlarmManager` backstop fires and restarts the service to announce. **Verify this on the actual device under OxygenOS** — its background restrictions are the real risk here, not the Android API (see plan §7.4).
+- Process death while a timer runs → the `AlarmManager` backstop fires and restarts the service to announce. The deadline is in config, so the restarted Sock resumes a timer that is still running and rings one that came due while nobody was home; a deadline more than an hour old is dropped instead, because a chime an hour late is not news. **Verify this on the actual device under OxygenOS** — its background restrictions are the real risk here, not the Android API (see plan §7.4). A refused foreground-service start is logged and the service stops, rather than crash-looping a `START_STICKY` service.
 - Never `Unavailable`.
 
 ## 11. Testing
@@ -256,6 +261,6 @@ Contributed to `shared.stop`, not owned: `ich hab's gehört`, `ja ja`, `ist gut`
 
 - **Multiple simultaneous timers** and named timers ("Nudeltimer") — the data model allows it, the commands do not expose it.
 - **Alarms at a wall-clock time** ("Wecker auf 7 Uhr") — a genuinely different command (`set_alarm`) with a different param shape. Deferred; §7 documents the current dead end.
-- Timers surviving a reboot.
+- Timers surviving a reboot. A timer does now survive a *process* death (§10), because it must; a reboot clears the alarm and stops the service, and nothing re-arms it.
 - Stopwatch, countdown to a date, world clocks.
 - Date questions ("Welcher Tag ist heute?") — trivial to add, deliberately not in v1's command list.

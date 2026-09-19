@@ -3,29 +3,46 @@ package io.dobby.socks.clock
 import io.dobby.core.sock.CommandInvocation
 import io.dobby.core.sock.Example
 import io.dobby.core.sock.ExclusiveCommandSpec
+import io.dobby.core.sock.ParamSpec
+import io.dobby.core.sock.ParamType
+import io.dobby.core.sock.SharedCommands
+import io.dobby.core.sock.SharedSubscription
 import io.dobby.core.sock.Sock
+import io.dobby.core.sock.SockActivity
 import io.dobby.core.sock.SockContext
 import io.dobby.core.sock.SockResult
+import io.dobby.core.sock.SockStatus
 import io.dobby.core.sock.patterns
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import java.time.Clock
+import java.time.LocalDateTime
 import java.time.LocalTime
+import kotlin.coroutines.coroutineContext
 
 /**
- * Clock — time of day.
+ * Clock — kitchen timer and time of day.
  *
- * The first product Sock. It needs no network, no account and no audio, which makes it the
- * cheapest possible proof that the registry, palette and dispatcher compose with something
- * real rather than only with fixtures.
+ * The first product Sock, and still the cheapest proof that the registry, the palette, the
+ * dispatcher and the shared-command chain compose with something real: no network, no account,
+ * no SDK. Specified in `socks.specs/clock.specs.md`.
  *
- * Specified in `socks.specs/clock.specs.md`. That spec also defines `set_timer` and
- * `cancel_timer` and a `shared.stop` subscription; those are **not implemented yet**, and
- * this Sock deliberately does not declare them — a command that is declared but unhandled is
- * worse than one that is absent, because the palette would advertise it.
+ * Everything the device provides sits behind an interface — [TimerAlarm] for `AlarmManager`,
+ * [ChimePlayer] for `SoundPool`, and `SockContext` for screen, audio focus, config and speech —
+ * so the whole timer lifecycle is tested on a plain JVM with a virtual clock.
  *
  * @param clock injected so tests are deterministic; on the device this stays the default.
  */
 class ClockSock(
     private val clock: Clock = Clock.systemDefaultZone(),
+    private val alarm: TimerAlarm = TimerAlarm.None,
+    chime: ChimePlayer = ChimePlayer.SILENT,
     private val screenWakeSeconds: Int = DEFAULT_SCREEN_WAKE_SECONDS,
 ) : Sock {
 
@@ -34,22 +51,81 @@ class ClockSock(
     override val displayName: String = "Uhr"
 
     /**
-     * Held from [onStart] so [handle] can reach the screen.
+     * Held from [onStart] so [handle] can reach the screen, the audio focus and the scope.
      *
      * Not passed into `handle` by design: a Sock's context is service-lifetime, while an
      * invocation is a single utterance.
      */
     private var context: SockContext? = null
 
+    private val timers = TimerEngine(clock, alarm, chime, id, screenWakeSeconds)
+
+    private val _status = MutableStateFlow<SockStatus>(SockStatus.Ready)
+
+    /** Never `Unavailable`: a clock with no permissions is still a clock (§10). */
+    override val status: StateFlow<SockStatus> = _status.asStateFlow()
+
+    private val _state = MutableStateFlow(ClockState(LocalDateTime.now(clock)))
+
+    /** What the wall panel draws (§7). Also the timer state the chain reads. */
+    val state: StateFlow<ClockState> = _state.asStateFlow()
+
+    private var ticker: Job? = null
+    private var mirror: Job? = null
+
     override val commands: List<ExclusiveCommandSpec> = listOf(
+        ExclusiveCommandSpec(
+            id = SET_TIMER,
+            params = listOf(
+                ParamSpec("amount", ParamType.Integer),
+                ParamSpec("unit", ParamType.Enumeration(TimerUnit.SPOKEN)),
+            ),
+            templates = patterns(
+                "(stell|stelle|setz|setze|mach) (mir)? (einen|nen)? timer (auf|für)? {amount:int} {unit:enum}",
+                "(stell|stelle|setz|setze) (mir)? (einen|nen)? wecker (auf|für)? {amount:int} {unit:enum}",
+                "(erinner|erinnere) mich in {amount:int} {unit:enum}",
+                "timer (auf|für)? {amount:int} {unit:enum}",
+                "{amount:int} {unit:enum} timer",
+            ),
+            description = "Stellt einen Timer für eine bestimmte Dauer.",
+            examples = listOf(
+                // The normalizer has already turned "zehn" into "10" before templates run.
+                Example("timer zehn minuten", mapOf("amount" to 10, "unit" to "minuten")),
+                Example("stell einen timer auf 5 minuten", mapOf("amount" to 5, "unit" to "minuten")),
+                Example("stelle mir einen timer für 90 sekunden", mapOf("amount" to 90, "unit" to "sekunden")),
+                Example("3 minuten timer", mapOf("amount" to 3, "unit" to "minuten")),
+                Example("timer eine minute", mapOf("amount" to 1, "unit" to "minuten")),
+                Example("setz einen wecker auf 2 stunden", mapOf("amount" to 2, "unit" to "stunden")),
+                Example("erinner mich in 20 minuten", mapOf("amount" to 20, "unit" to "minuten")),
+                // Paraphrases Tier 1 is meant to miss — few-shots for the LLM tier (M6).
+                Example("gib mir in einer viertelstunde bescheid", matchedByTemplates = false),
+                Example("weck mich in zwanzig minuten", matchedByTemplates = false),
+            ),
+        ),
+        ExclusiveCommandSpec(
+            id = CANCEL_TIMER,
+            templates = patterns(
+                "timer (stopp|stop|stoppen|abbrechen|aus|löschen|beenden|abschalten)",
+                "(stopp|stoppe|brich|breche|lösch|lösche|beende) (den)? timer (ab)?",
+                "(stopp|stoppe|aus mit) (dem|den|das)? (alarm|wecker|klingeln)",
+            ),
+            description = "Bricht den laufenden Timer ab.",
+            examples = listOf(
+                Example("timer stopp"),
+                Example("timer abbrechen"),
+                Example("stopp den timer"),
+                Example("brich den timer ab"),
+                Example("stopp den alarm"),
+            ),
+        ),
         ExclusiveCommandSpec(
             id = WHATS_THE_TIME,
             templates = patterns(
-                "wie (spät|viel uhr) ist es",
+                "wie (spät|viel uhr) ist (es|es jetzt)",
                 "wie spät",
-                "was ist die uhrzeit",
+                "(wie viel uhr|uhrzeit|die uhrzeit)",
                 "sag (mir)? (die)? uhrzeit",
-                "(uhrzeit|die uhrzeit)",
+                "was ist die uhrzeit",
             ),
             description = "Sagt die aktuelle Uhrzeit.",
             examples = listOf(
@@ -65,13 +141,58 @@ class ClockSock(
         ),
     )
 
+    /**
+     * Priority 100, the highest in the catalog: a ringing alarm is the most salient thing in the
+     * room, so "stopp" means *that* first — and only while it is actually ringing (§5).
+     */
+    override val shared: List<SharedSubscription> = listOf(
+        SharedSubscription(
+            SharedCommands.STOP,
+            priority = STOP_PRIORITY,
+            // Only meaningful while something is ringing, which is exactly what the chain tests.
+            extraTemplates = patterns("(ich hab's gehört|ich habs gehört)", "(ja ja|ist gut)"),
+            extraExamples = listOf(Example("ich hab's gehört"), Example("ja ja")),
+        ),
+    )
+
     override suspend fun onStart(ctx: SockContext) {
         context = ctx
+        refreshStatus()
+        // A timer whose process was killed is picked up here — the coroutine countdown lives in
+        // memory, and a kitchen timer that silently does not go off is the one failure that
+        // matters (§10).
+        timers.restore(ctx)
+        mirror = ctx.scope.launch {
+            timers.timer.collect { timer -> _state.update { it.copy(timer = timer) } }
+        }
+        ticker = ctx.scope.launch { tick(ClockConfig(ctx.config)) }
     }
 
     override suspend fun onStop() {
+        context?.let { timers.shutdown(it) }
+        ticker?.cancel()
+        mirror?.cancel()
+        ticker = null
+        mirror = null
+        // The mirror is gone, so the last transition is copied over by hand rather than left
+        // to a coroutine that is being cancelled in the same breath.
+        _state.update { it.copy(timer = null) }
         context = null
     }
+
+    /**
+     * `ACTIVE` only while the chime is ringing — never for a counting-down timer.
+     *
+     * "Stopp" with a 10-minute timer running and music playing means *pause the music*.
+     * Cancelling a running timer is destructive and hard to undo, so it must be addressed
+     * explicitly ("timer stopp"). A pure state read, as the contract requires.
+     */
+    override fun activityFor(invocation: CommandInvocation): SockActivity =
+        if (invocation.commandId == SharedCommands.STOP.id && timers.isRinging) {
+            SockActivity.ACTIVE
+        } else {
+            SockActivity.INACTIVE
+        }
 
     override suspend fun handle(invocation: CommandInvocation): SockResult =
         when (invocation.commandId) {
@@ -82,13 +203,109 @@ class ClockSock(
                 SockResult.Spoken(GermanTime.speak(LocalTime.now(clock)))
             }
 
+            SET_TIMER -> setTimer(invocation)
+
+            CANCEL_TIMER -> cancelTimer()
+
+            SharedCommands.STOP.id -> stopChime()
+
             // Unreachable in practice: the dispatcher only routes commands this Sock owns.
             // Reported as a bug rather than silently swallowed.
             else -> SockResult.NotForMe
         }
 
+    private suspend fun setTimer(invocation: CommandInvocation): SockResult {
+        val amount = invocation.intOrNull("amount") ?: return SockResult.Failed(BAD_DURATION)
+        val unit = TimerUnit.of(invocation.textOrNull("unit").orEmpty())
+            ?: return SockResult.Failed(BAD_DURATION)
+        val durationMs = amount.toLong() * unit.seconds * MILLIS_PER_SECOND
+        if (amount !in MIN_AMOUNT..MAX_AMOUNT || durationMs !in MILLIS_PER_SECOND..MAX_DURATION_MS) {
+            return SockResult.Failed(BAD_DURATION)
+        }
+
+        val replaced = timers.start(started(), durationMs)
+        refreshStatus()
+        return SockResult.Spoken(
+            buildString {
+                if (replaced) append("Alter Timer ersetzt. ")
+                append("Timer läuft: ${GermanTime.duration(amount, unit)}.")
+                // The timer still runs off the coroutine; only the backstop is weaker (§10).
+                if (!alarm.canScheduleExact) append(" Achtung, er ist nicht garantiert genau.")
+            },
+        )
+    }
+
+    /**
+     * Two jobs behind one command, because that is what the user means in both situations:
+     * silence a chime that is sounding, or call off a timer that is still counting.
+     */
+    private suspend fun cancelTimer(): SockResult = when (timers.cancel(started())) {
+        // The silence is its own feedback.
+        CancelOutcome.SILENCED -> SockResult.Silent
+        CancelOutcome.CANCELLED -> SockResult.Spoken("Timer abgebrochen.")
+        CancelOutcome.NOTHING -> SockResult.Spoken("Es läuft gerade kein Timer.")
+    }
+
+    /**
+     * `shared.stop`.
+     *
+     * The `isRinging` check comes first and does no I/O: a Sock that reported `INACTIVE` must
+     * pass the command on without touching anything (`socks.specs/README.md` §4).
+     */
+    private suspend fun stopChime(): SockResult {
+        if (!timers.isRinging) return SockResult.NotForMe
+        timers.cancel(started())
+        return SockResult.Silent
+    }
+
+    /** The dashboard's clock, ticking no faster than it has to (§7). */
+    private suspend fun tick(config: ClockConfig) {
+        while (coroutineContext.isActive) {
+            _state.update { it.copy(now = LocalDateTime.now(clock)) }
+            val perSecond = config.showSeconds || timers.timer.value != null
+            val period = if (perSecond) MILLIS_PER_SECOND else MILLIS_PER_MINUTE
+            // Aligned to the boundary, so the displayed minute changes when the minute does.
+            delay(period - clock.millis() % period)
+        }
+    }
+
+    private fun refreshStatus() {
+        _status.value = if (alarm.canScheduleExact) {
+            SockStatus.Ready
+        } else {
+            SockStatus.Degraded("Timer nicht garantiert genau")
+        }
+    }
+
+    /**
+     * The context a timer needs.
+     *
+     * `whats_the_time` degrades gracefully without one; a timer cannot — it needs a scope to
+     * count in. The dispatcher never calls `handle` on a Sock it did not start, so this is a
+     * programming error, and core turns the exception into "Das hat gerade nicht geklappt."
+     */
+    private fun started(): SockContext =
+        checkNotNull(context) { "clock: timer command before onStart()" }
+
     companion object {
+        const val SET_TIMER: String = "clock.set_timer"
+        const val CANCEL_TIMER: String = "clock.cancel_timer"
         const val WHATS_THE_TIME: String = "clock.whats_the_time"
+
         const val DEFAULT_SCREEN_WAKE_SECONDS: Int = 30
+
+        /** Highest in the catalog — see [shared]. */
+        const val STOP_PRIORITY: Int = 100
+
+        /** German copy, verbatim from the spec (§3). */
+        const val BAD_DURATION: String = "Diese Dauer kann ich nicht stellen."
+
+        private const val MIN_AMOUNT = 1
+        private const val MAX_AMOUNT = 600
+        private const val MILLIS_PER_SECOND = 1000L
+        private const val MILLIS_PER_MINUTE = 60_000L
+
+        /** 12 hours. Past that it is an alarm, not a kitchen timer — and `set_alarm` is v2 (§12). */
+        private const val MAX_DURATION_MS = 12 * 60 * 60 * 1000L
     }
 }

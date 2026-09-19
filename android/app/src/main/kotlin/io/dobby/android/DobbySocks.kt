@@ -23,15 +23,30 @@ object DobbySocks {
      * registry. Help is the one Sock that needs to see the palette it is itself part of, so it
      * is bound immediately after the registry is built.
      */
-    class Wiring(val socks: List<Sock>, val bindDirectory: (Introspection) -> Unit)
+    class Wiring(
+        val socks: List<Sock>,
+        /** Kept by name because the panel draws its clock and its timer (`clock.specs.md` §7). */
+        val clock: ClockSock,
+        val bindDirectory: (Introspection) -> Unit,
+    )
 
-    fun create(out: (String) -> Unit): Wiring {
+    /**
+     * @param hardware `AlarmManager` and `SoundPool` for the Clock Sock. Null off-device — the
+     *   timer then runs off its coroutine alone and chimes silently, which is exactly what a
+     *   unit test wants and what the terminal harness gets.
+     */
+    fun create(out: (String) -> Unit, hardware: ClockHardware? = null): Wiring {
         var directory: Introspection? = null
+        val clock = if (hardware == null) {
+            ClockSock()
+        } else {
+            ClockSock(alarm = hardware.alarm, chime = hardware.chime)
+        }
         val socks = buildList {
-            add(ClockSock())
+            add(clock)
             add(HelpSock { directory })
             addAll(DevSocks.create(out))
         }
-        return Wiring(socks) { directory = it }
+        return Wiring(socks, clock) { directory = it }
     }
 }

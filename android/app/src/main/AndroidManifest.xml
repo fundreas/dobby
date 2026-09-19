@@ -9,6 +9,11 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- dobby-plan.md §7.1: CPU stays awake with the screen off. The panel is mains-powered. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- clock.specs.md §3: the AlarmManager backstop behind a running timer. A kitchen timer is
+         USE_EXACT_ALARM-class use, so it is granted at install; SCHEDULE_EXACT_ALARM is declared
+         alongside it for the user-revocable path, and the Clock Sock degrades if it is denied. -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
 
@@ -30,6 +35,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- clock.specs.md §10: the timer backstop. In the manifest and not registered at
+             runtime, because the case it exists for is the one where the process is gone. -->
+        <receiver
+            android:name=".TimerAlarmReceiver"
+            android:exported="false" />
 
         <service
             android:name=".DobbyService"

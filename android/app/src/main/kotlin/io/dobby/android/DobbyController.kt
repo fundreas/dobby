@@ -11,6 +11,7 @@ import io.dobby.core.registry.Introspection
 import io.dobby.core.registry.SockRegistry
 import io.dobby.core.sock.SockContext
 import io.dobby.core.sock.SockResult
+import io.dobby.socks.clock.ClockState
 import io.dobby.pipeline.VoiceIo
 import io.dobby.pipeline.VoiceState
 import kotlinx.coroutines.CoroutineScope
@@ -67,6 +68,11 @@ class DobbyController(
      * both of which live here. Injected rather than constructed so a test can hand over
      * core's own `FakeSockContext`.
      */
+    /**
+     * The Clock Sock's `AlarmManager` and `SoundPool`. Null in tests and in any build where the
+     * device half does not exist; the timer then still counts, it just chimes into the void.
+     */
+    hardware: ClockHardware? = null,
     sockContext: (announce: suspend (String) -> Unit) -> SockContext,
 ) {
     private val transcript = Transcript()
@@ -78,7 +84,10 @@ class DobbyController(
 
     private val health = SockHealth()
 
-    private val wiring = DobbySocks.create { text -> transcript.note(text) }
+    private val wiring = DobbySocks.create({ text -> transcript.note(text) }, hardware)
+
+    /** The panel's clock and timer countdown, straight from the Sock that owns them. */
+    val clock: StateFlow<ClockState> get() = wiring.clock.state
 
     private val registry: SockRegistry?
     private val engine: DobbyEngine?

@@ -1,5 +1,6 @@
 package io.dobby.socks.clock
 
+import java.time.LocalDate
 import java.time.LocalTime
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -64,5 +65,34 @@ class GermanTimeTest {
             val spoken = GermanTime.speak(LocalTime.ofSecondOfDay(minuteOfDay * 60L))
             assert(spoken.startsWith("Es ist ") && spoken.endsWith(".")) { spoken }
         }
+    }
+
+    @Test
+    fun `a duration is spoken with the right number`() {
+        assertEquals("10 Minuten", GermanTime.duration(10, TimerUnit.MINUTEN))
+        assertEquals("1 Minute", GermanTime.duration(1, TimerUnit.MINUTEN))
+        assertEquals("90 Sekunden", GermanTime.duration(90, TimerUnit.SEKUNDEN))
+        assertEquals("1 Sekunde", GermanTime.duration(1, TimerUnit.SEKUNDEN))
+        assertEquals("2 Stunden", GermanTime.duration(2, TimerUnit.STUNDEN))
+        assertEquals("1 Stunde", GermanTime.duration(1, TimerUnit.STUNDEN))
+    }
+
+    @Test
+    fun `the dashboard date line is German long format`() {
+        assertEquals("Donnerstag, 18. September", GermanTime.date(LocalDate.of(2025, 9, 18)))
+        assertEquals("Montag, 1. Dezember", GermanTime.date(LocalDate.of(2025, 12, 1)))
+    }
+
+    @Test
+    fun `the countdown reads as a clock face`() {
+        assertEquals("10:00", GermanTime.countdown(600_000))
+        // Rounded up: a display showing 00:00 for a full second before it rings is a bug.
+        assertEquals("10:00", GermanTime.countdown(599_001))
+        assertEquals("09:59", GermanTime.countdown(599_000))
+        assertEquals("00:01", GermanTime.countdown(1))
+        assertEquals("00:00", GermanTime.countdown(0))
+        assertEquals("00:00", GermanTime.countdown(-5))
+        assertEquals("1:00:00", GermanTime.countdown(3_600_000))
+        assertEquals("2:03:04", GermanTime.countdown((2 * 3600 + 3 * 60 + 4) * 1000L))
     }
 }

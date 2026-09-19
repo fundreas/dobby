@@ -3,7 +3,9 @@ package io.dobby.socks.clock
 import io.dobby.core.DobbyEngine
 import io.dobby.core.registry.SockRegistry
 import io.dobby.core.sock.CommandInvocation
+import io.dobby.core.sock.SharedCommands
 import io.dobby.core.sock.SockResult
+import io.dobby.core.sock.SockStatus
 import io.dobby.core.testing.FakeSockContext
 import kotlinx.coroutines.test.runTest
 import java.time.Clock
@@ -73,11 +75,21 @@ class ClockSockTest {
     }
 
     @Test
-    fun `declares only what it implements`() {
+    fun `declares exactly the commands the spec lists`() {
         val sock = ClockSock()
-        assertEquals(listOf(ClockSock.WHATS_THE_TIME), sock.commands.map { it.id })
-        // set_timer, cancel_timer and the shared.stop subscription are specified but not built.
-        assertEquals(emptyList(), sock.shared)
+        assertEquals(
+            listOf(ClockSock.SET_TIMER, ClockSock.CANCEL_TIMER, ClockSock.WHATS_THE_TIME),
+            sock.commands.map { it.id },
+        )
+        // One chain, at the catalog's highest priority: a ringing alarm outranks the radio (§5).
+        assertEquals(listOf(SharedCommands.STOP.id), sock.shared.map { it.command.id })
+        assertEquals(listOf(ClockSock.STOP_PRIORITY), sock.shared.map { it.priority })
+    }
+
+    @Test
+    fun `is never Unavailable`() {
+        // A clock with no permissions is still a clock (§10).
+        assertEquals(SockStatus.Ready, ClockSock().status.value)
     }
 }
 
@@ -119,9 +131,19 @@ class ClockEngineTest {
 
     @Test
     fun `does not answer questions it was not asked`() = runTest {
-        for (utterance in listOf("wie warm ist es", "wann fährt der nächste bus", "stopp")) {
+        for (utterance in listOf("wie warm ist es", "wann fährt der nächste bus")) {
             val outcome = engine.handle(utterance)
             assertTrue(outcome.invocation == null, "\"$utterance\" wrongly reached ${outcome.invocation?.commandId}")
         }
+    }
+
+    @Test
+    fun `bare stopp goes to the chain, not to the Clock`() = runTest {
+        // Clock subscribes to shared.stop, so the utterance is understood — and then passed on,
+        // because nothing is ringing.
+        val outcome = engine.handle("stopp")
+
+        assertEquals(SharedCommands.STOP.id, outcome.invocation?.commandId)
+        assertEquals(SharedCommands.STOP.unconsumedResponse, outcome.result)
     }
 }
