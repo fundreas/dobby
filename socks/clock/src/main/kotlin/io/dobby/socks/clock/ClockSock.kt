@@ -125,8 +125,24 @@ class ClockSock(
                 Example("stell einen timer auf zehn", mapOf("amount" to 10)),
                 Example("timer 5", mapOf("amount" to 5)),
                 // Paraphrases Tier 1 is meant to miss — few-shots for the LLM tier (M6).
-                Example("gib mir in einer viertelstunde bescheid", matchedByTemplates = false),
-                Example("weck mich in zwanzig minuten", matchedByTemplates = false),
+                //
+                // Params are filled, unlike a Tier 1 example where they are optional: these are
+                // rendered into the system prompt as worked examples, and a few-shot that shows
+                // the model an empty params object teaches it to emit one.
+                //
+                // Written in *normalized* German — "20", not "zwanzig". Tier 2 is handed the
+                // same string Tier 1 saw, which the normalizer has already been through, so a
+                // few-shot in raw German teaches a surface form the model will never be shown.
+                Example(
+                    "gib mir in einer viertelstunde bescheid",
+                    mapOf("amount" to 15, "unit" to "minuten"),
+                    matchedByTemplates = false,
+                ),
+                Example(
+                    "weck mich in 20 minuten",
+                    mapOf("amount" to 20, "unit" to "minuten"),
+                    matchedByTemplates = false,
+                ),
             ),
         ),
         ExclusiveCommandSpec(

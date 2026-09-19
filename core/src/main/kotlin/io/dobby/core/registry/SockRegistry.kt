@@ -57,28 +57,64 @@ class SockRegistry private constructor(
      * This is the collision gate: if a Sock's own example resolves to somebody else's command,
      * two Socks are fighting over an utterance and one of them has to move — or the command
      * has to become shared.
+     *
+     * It gates three things, because an [io.dobby.core.sock.Example] does three jobs:
+     *
+     * 1. A Tier 1 example must resolve to its own command, with its own params.
+     * 2. A Tier 2 few-shot (`matchedByTemplates = false`) must *not* resolve. Tier 1 being
+     *    unable to reach it is the entire reason it is in the system prompt, so one that Tier 1
+     *    can reach means either the flag is wrong or somebody added a template that covers it —
+     *    and in both cases the prompt is now teaching the model to duplicate Tier 1's work.
+     * 3. [SharedSubscription.extraExamples] are checked at all, which until now they were not.
+     *    They are the phrasings one Sock adds to somebody else's chain, which is precisely where
+     *    a collision is easiest to create and hardest to notice.
      */
     fun checkExamples(): List<String> {
         val problems = mutableListOf<String>()
         for (command in commands.values) {
-            for (example in command.examples) {
-                // Tier 2 paraphrases are exempt by construction: Tier 1 not matching them is
-                // exactly why they exist.
-                if (!example.matchedByTemplates) continue
-                val tokens = Normalizer.tokenize(example.utterance)
-                val match = palette.match(tokens)
-                when {
-                    match == null ->
-                        problems += "${command.id}: example \"${example.utterance}\" matches no template"
+            problems += check(command.id, command.examples)
+        }
+        for (sock in socks) {
+            for (subscription in sock.shared) {
+                problems += check(
+                    subscription.command.id,
+                    subscription.extraExamples,
+                    from = "${sock.id} extraExamples",
+                )
+            }
+        }
+        return problems
+    }
 
-                    match.invocation.commandId != command.id ->
-                        problems += "${command.id}: example \"${example.utterance}\" resolves to " +
-                            "${match.invocation.commandId} via \"${match.entry.template.source}\""
-
-                    example.params.isNotEmpty() && match.invocation.params != example.params ->
-                        problems += "${command.id}: example \"${example.utterance}\" produced " +
-                            "${match.invocation.params}, expected ${example.params}"
+    private fun check(
+        commandId: String,
+        examples: List<io.dobby.core.sock.Example>,
+        from: String = commandId,
+    ): List<String> {
+        val problems = mutableListOf<String>()
+        for (example in examples) {
+            val match = palette.match(Normalizer.tokenize(example.utterance))
+            if (!example.matchedByTemplates) {
+                // A few-shot Tier 1 can already match is not a few-shot. It is a template that
+                // exists, described to the model as though it did not.
+                if (match != null) {
+                    problems += "$from: Tier 2 example \"${example.utterance}\" is matched by " +
+                        "Tier 1 via \"${match.entry.template.source}\" → ${match.invocation.commandId}; " +
+                        "drop matchedByTemplates = false, or drop the example"
                 }
+                continue
+            }
+            when {
+                match == null ->
+                    problems += "$from: example \"${example.utterance}\" matches no template"
+
+                match.invocation.commandId != commandId ->
+                    problems += "$from: example \"${example.utterance}\" resolves to " +
+                        "${match.invocation.commandId} via \"${match.entry.template.source}\""
+
+                example.params.isNotEmpty() && match.invocation.params != example.params ->
+                    problems += "$from: example \"${example.utterance}\" produced " +
+                        "${match.invocation.params}, expected ${example.params}"
             }
         }
         return problems

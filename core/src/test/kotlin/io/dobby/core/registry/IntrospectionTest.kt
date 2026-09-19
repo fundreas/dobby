@@ -158,4 +158,56 @@ class IntrospectionTest {
             Introspection(lonely).command("shared.stop")!!.subscribers.map { it.sockId to it.priority },
         )
     }
+
+    /**
+     * [Introspection.promptExamples] is the Tier 2 view, and it is the inverse of the spoken one.
+     */
+    @Test
+    fun `prompt examples put the paraphrases first and keep their params`() {
+        val sock = io.dobby.core.FixtureSock(
+            id = "kitchen",
+            commands = listOf(
+                io.dobby.core.sock.ExclusiveCommandSpec(
+                    id = "kitchen.bake",
+                    params = listOf(io.dobby.core.sock.ParamSpec("minutes", io.dobby.core.sock.ParamType.Integer)),
+                    templates = io.dobby.core.sock.patterns("backe {minutes:int} minuten"),
+                    description = "Bäckt.",
+                    examples = listOf(
+                        io.dobby.core.sock.Example("backe 20 minuten", mapOf("minutes" to 20)),
+                        io.dobby.core.sock.Example(
+                            "schieb das brot für 20 minuten rein",
+                            mapOf("minutes" to 20),
+                            matchedByTemplates = false,
+                        ),
+                    ),
+                ),
+            ),
+            shared = listOf(
+                io.dobby.core.sock.SharedSubscription(
+                    io.dobby.core.sock.SharedCommands.STOP,
+                    extraExamples = listOf(io.dobby.core.sock.Example("ofen aus")),
+                ),
+            ),
+        )
+        val directory = Introspection(SockRegistry.buildOrThrow(listOf(sock)))
+
+        val examples = directory.promptExamples("kitchen.bake")
+        assertEquals(
+            listOf("schieb das brot für 20 minuten rein", "backe 20 minuten"),
+            examples.map { it.utterance },
+            "the paraphrase must come first — it is the case templates cannot reach",
+        )
+        assertEquals(mapOf("minutes" to 20), examples.first().params, "a few-shot without params is not one")
+
+        // The spoken view still hides the paraphrase and still drops the params.
+        assertEquals(listOf("backe 20 minuten"), directory.command("kitchen.bake")!!.examples)
+
+        // extraExamples reach the prompt, which until now nothing read at all: the catalog's
+        // own paraphrases first, then this Sock's contribution, then the catalog's Tier 1 ones.
+        assertEquals(
+            listOf("hör bitte auf damit", "mach das mal aus", "ofen aus", "stopp", "pause"),
+            directory.promptExamples("shared.stop").map { it.utterance },
+        )
+        assertEquals(emptyList(), directory.promptExamples("kitchen.nope"))
+    }
 }

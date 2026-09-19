@@ -3,6 +3,7 @@ package io.dobby.core.registry
 import io.dobby.core.dispatch.SockHealth
 import io.dobby.core.nlu.template.KeywordMatcher
 import io.dobby.core.sock.CommandSpec
+import io.dobby.core.sock.Example
 import io.dobby.core.sock.ExclusiveCommandSpec
 import io.dobby.core.sock.ParamSpec
 import io.dobby.core.sock.ParamType
@@ -53,6 +54,36 @@ class Introspection(
         return commands().filter {
             needle in it.id.lowercase() || needle in it.description.lowercase()
         }
+    }
+
+    /**
+     * The examples a Tier 2 system prompt may show the model, best first.
+     *
+     * Deliberately not [CommandInfo.examples], which is the *spoken help* view: that one filters
+     * to `matchedByTemplates` and drops [Example.params], and both decisions are exactly
+     * inverted here.
+     *
+     * - A Tier 2 paraphrase comes first, because a few-shot's whole job is to demonstrate the
+     *   case templates cannot reach. Showing the model an utterance Tier 1 already handles
+     *   teaches it to duplicate work it will never be asked to do.
+     * - Then [SharedSubscription.extraExamples] — the phrasings one Sock adds to a chain, which
+     *   are read by nothing at all today.
+     * - Then the Tier 1 examples, which are still worth showing when a command has no
+     *   paraphrase of its own.
+     * - Params are kept, because a few-shot without them is a worked example with the work
+     *   left out.
+     *
+     * Which examples an audience may see is Introspection's policy question, which is why this
+     * lives here rather than in the generator that consumes it.
+     */
+    fun promptExamples(commandId: String): List<Example> {
+        val command = registry.commands[commandId] ?: return emptyList()
+        val extra = registry.socks
+            .flatMap { it.shared }
+            .filter { it.command.id == commandId }
+            .flatMap { it.extraExamples }
+        val (paraphrases, tier1) = command.examples.partition { !it.matchedByTemplates }
+        return (paraphrases + extra + tier1).distinctBy { it.utterance }
     }
 
     /**
