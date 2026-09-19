@@ -2,6 +2,7 @@ package io.dobby.core.registry
 
 import io.dobby.core.nlu.GermanNumbers
 import io.dobby.core.nlu.template.CompiledTemplate
+import io.dobby.core.nlu.template.KeywordMatcher
 import io.dobby.core.nlu.template.Specificity
 import io.dobby.core.nlu.template.TemplateSyntaxException
 import io.dobby.core.nlu.template.compileTemplate
@@ -29,8 +30,12 @@ data class PaletteMatch(val invocation: CommandInvocation, val entry: PaletteEnt
  *
  * First match wins, so the ordering is the whole ballgame: `spiele radio {station}` must be
  * tried before `spiele {query}`.
+ *
+ * @param phonetic whether keywords may also be matched by their Kölner code. On by default;
+ *   the tests turn it off to A/B a palette against the pre-M6 behaviour, and a spec utterance
+ *   that resolves differently with it on is a bug in the guards, not a new feature.
  */
-class Palette(entries: List<PaletteEntry>) {
+class Palette(entries: List<PaletteEntry>, phonetic: Boolean = true) {
 
     val entries: List<PaletteEntry> = entries.sortedWith(
         Comparator { a, b ->
@@ -38,6 +43,33 @@ class Palette(entries: List<PaletteEntry>) {
             if (bySpecificity != 0) bySpecificity else a.order.compareTo(b.order)
         },
     )
+
+    /**
+     * The phonetic tier, built from every literal in the whole palette.
+     *
+     * Palette-wide rather than per template, because the question a code has to answer is "could
+     * this have been any *other* command", and that is not a question one template can see.
+     */
+    val keywords: KeywordMatcher =
+        if (phonetic) KeywordMatcher.over(this.entries.flatMap { it.template.literals }) else KeywordMatcher.STRICT
+
+    /**
+     * Templates matched strictly, whatever the palette-wide tier says.
+     *
+     * A template whose cheapest path is one literal word and no slots has no anchor: nothing
+     * else in the utterance has to agree with it, so a single phonetic near-miss is the whole
+     * match. `aus` is already too short to be phonetic, but `weitermachen` is not, and neither
+     * is anything a future Sock declares — so the exclusion is structural rather than a list.
+     */
+    private fun matcherFor(entry: PaletteEntry): KeywordMatcher =
+        if (entry.template.specificity.literalWords == 1 && entry.template.slots.isEmpty()) {
+            KeywordMatcher.STRICT
+        } else {
+            keywords
+        }
+
+    /** True if [entry] is matched with [KeywordMatcher.STRICT] regardless of the palette tier. */
+    fun isStrict(entry: PaletteEntry): Boolean = matcherFor(entry) === KeywordMatcher.STRICT
 
     /**
      * Resolves normalized tokens to an invocation.
@@ -48,7 +80,7 @@ class Palette(entries: List<PaletteEntry>) {
     fun match(tokens: List<String>): PaletteMatch? {
         if (tokens.isEmpty()) return null
         for (entry in entries) {
-            val bindings = entry.template.match(tokens) { slot ->
+            val bindings = entry.template.match(tokens, matcherFor(entry)) { slot ->
                 enumValuesFor(entry.command, slot)
             } ?: continue
             val params = ParamCoercion.coerce(entry.command, bindings, entry.staticParams) ?: continue

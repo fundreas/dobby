@@ -26,6 +26,15 @@ class CompiledTemplate(val source: String, val root: Node.Seq) {
 
     val slots: List<Node.Slot> = collectSlots(root)
 
+    /**
+     * Every literal keyword in the template, in source order.
+     *
+     * The palette's phonetic tier is built from these, across every template it holds: a
+     * keyword's code is only safe to act on once it has been compared to every other keyword
+     * anybody could have said instead ([KeywordMatcher.over]).
+     */
+    val literals: List<String> = collectLiterals(root)
+
     val specificity: Specificity = Specificity(
         endsOpen = endsOpen(root),
         literalWords = minWords(root),
@@ -35,11 +44,18 @@ class CompiledTemplate(val source: String, val root: Node.Seq) {
     /**
      * Matches the whole token list, anchored at both ends.
      *
+     * @param keywords how a literal is compared to a spoken token. Defaults to
+     *   [KeywordMatcher.STRICT], the pre-M6 behaviour, so a caller with no palette behind it —
+     *   a test, a follow-up template — keeps exact-plus-Levenshtein and nothing more.
      * @param enumValues allowed values for an `{x:enum}` slot, by slot name.
      * @return raw slot bindings, or null if the template does not match.
      */
-    fun match(tokens: List<String>, enumValues: (String) -> List<String>?): Map<String, String>? =
-        walk(root, tokens, State(0, emptyMap()), enumValues)
+    fun match(
+        tokens: List<String>,
+        keywords: KeywordMatcher = KeywordMatcher.STRICT,
+        enumValues: (String) -> List<String>?,
+    ): Map<String, String>? =
+        walk(root, tokens, State(0, emptyMap()), keywords, enumValues)
             .firstOrNull { it.position == tokens.size }
             ?.bindings
 
@@ -51,10 +67,11 @@ class CompiledTemplate(val source: String, val root: Node.Seq) {
         node: Node,
         tokens: List<String>,
         state: State,
+        keywords: KeywordMatcher,
         enums: (String) -> List<String>?,
     ): Sequence<State> = when (node) {
         is Node.Word ->
-            if (state.position < tokens.size && Levenshtein.fuzzyEquals(tokens[state.position], node.text)) {
+            if (state.position < tokens.size && keywords.matches(tokens[state.position], node.text)) {
                 sequenceOf(state.copy(position = state.position + 1))
             } else {
                 emptySequence()
@@ -62,14 +79,14 @@ class CompiledTemplate(val source: String, val root: Node.Seq) {
 
         is Node.Seq ->
             node.nodes.fold(sequenceOf(state)) { states, next ->
-                states.flatMap { walk(next, tokens, it, enums) }
+                states.flatMap { walk(next, tokens, it, keywords, enums) }
             }
 
-        is Node.Alt -> node.options.asSequence().flatMap { walk(it, tokens, state, enums) }
+        is Node.Alt -> node.options.asSequence().flatMap { walk(it, tokens, state, keywords, enums) }
 
         // Try consuming first: in "spiele {query}( ab)?" the trailing "ab" should be the optional,
         // not part of the query.
-        is Node.Opt -> walk(node.node, tokens, state, enums) + sequenceOf(state)
+        is Node.Opt -> walk(node.node, tokens, state, keywords, enums) + sequenceOf(state)
 
         is Node.Slot -> matchSlot(node, tokens, state, enums)
     }
@@ -115,6 +132,14 @@ class CompiledTemplate(val source: String, val root: Node.Seq) {
     }
 
     private companion object {
+        fun collectLiterals(node: Node): List<String> = when (node) {
+            is Node.Word -> listOf(node.text)
+            is Node.Slot -> emptyList()
+            is Node.Seq -> node.nodes.flatMap { collectLiterals(it) }
+            is Node.Alt -> node.options.flatMap { collectLiterals(it) }
+            is Node.Opt -> collectLiterals(node.node)
+        }
+
         fun collectSlots(node: Node): List<Node.Slot> = when (node) {
             is Node.Slot -> listOf(node)
             is Node.Word -> emptyList()

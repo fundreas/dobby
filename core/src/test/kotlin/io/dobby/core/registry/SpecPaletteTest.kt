@@ -17,6 +17,37 @@ class SpecPaletteTest {
 
     private val registry = SockRegistry.buildOrThrow(SpecFixtures.all())
 
+    private companion object {
+        /**
+         * Every utterance the spec tables promise, in one list, for the A/B above.
+         *
+         * Duplicated from the assertions rather than extracted from them: the A/B has to run
+         * over the *whole* set in one pass with a second palette, and a list is the only shape
+         * that allows it. A phrasing added to a test above and not to here is not a failure —
+         * the assertion above still covers it — it is simply not in the A/B.
+         */
+        val SPEC_UTTERANCES: List<String> = listOf(
+            "Spiele Blinding Lights von The Weeknd", "Spiel was von Queen",
+            "Spiele den Song Bohemian Rhapsody", "Musik an", "Nächster Song", "überspringen",
+            "stopp die Musik", "Musik aus", "spiel die Musik weiter", "stopp", "pause", "aus",
+            "mach das aus", "weiter", "mach weiter", "weiter zum nächsten",
+            "spiele Radio FM4", "radio Ö3", "mach das Radio an", "radio an",
+            "schalt den Sender Ö1 ein", "radio aus", "mach das Radio aus", "stopp das Radio",
+            "Timer zehn Minuten", "stell einen Timer auf 5 Minuten",
+            "stelle mir einen Timer für 90 Sekunden", "3 Minuten Timer", "Timer eine Minute",
+            "erinner mich in 20 Minuten", "Wie spät ist es", "Uhrzeit", "Was ist die Zeit?",
+            "sag mir die Zeit", "What's the time?", "what time is it", "Zeit", "seit", "weit",
+            "zeig", "Timer stopp", "Timer abbrechen", "stopp den Timer", "brich den Timer ab",
+            "stopp den Alarm", "ich hab's gehört", "lauter", "leiser", "mach lauter",
+            "viel lauter", "ein bisschen leiser", "Lautstärke hoch", "dreh die Musik leiser",
+            "ton aus", "ton an", "stumm", "ruhe", "musik aus", "bildschirm aus",
+            "mach den Bildschirm aus", "bildschirm an", "mach den Bildschirm an", "dashboard",
+            "gute Nacht", "Wann fährt der nächste Bus", "Wann kommt die nächste Bim",
+            "Abfahrten", "Fahrplan", "Wann fährt der nächste 14A", "Wann kommt der U6",
+            "wie wird das wetter morgen", "ruf meine mutter an", "erzähl mir einen witz",
+        )
+    }
+
     private fun resolve(utterance: String): PaletteMatch {
         val match = registry.palette.match(Normalizer.tokenize(utterance))
         assertNotNull(match, "\"$utterance\" matched no template")
@@ -195,12 +226,75 @@ class SpecPaletteTest {
         assertResolves("Wann kommt der U6", "departures.departures", mapOf("line" to "u6"))
     }
 
+    /**
+     * The A/B: every spec utterance resolves identically with phonetics on and off.
+     *
+     * This is the gate on the whole of M6 part A. The phonetic tier is a *recovery* mechanism —
+     * it exists to give a misheard word a second chance — and a recovery mechanism that changes
+     * what a correctly heard sentence does is not a recovery mechanism, it is a regression. If
+     * this test fails, the guards in [io.dobby.core.nlu.template.KeywordMatcher] are too loose;
+     * the fix is to narrow them, never to update the expectation here.
+     */
+    @Test
+    fun `phonetics changes nothing about an utterance Tier 1 already heard`() {
+        val strict = SockRegistry.buildOrThrow(SpecFixtures.all()).palette.entries
+            .let { Palette(it, phonetic = false) }
+
+        for (utterance in SPEC_UTTERANCES) {
+            val tokens = Normalizer.tokenize(utterance)
+            val before = strict.match(tokens)
+            val after = registry.palette.match(tokens)
+            assertEquals(
+                before?.invocation,
+                after?.invocation,
+                "\"$utterance\" resolves differently with phonetics on",
+            )
+            assertEquals(
+                before?.entry?.template?.source,
+                after?.entry?.template?.source,
+                "\"$utterance\" takes a different template with phonetics on",
+            )
+        }
+    }
+
+    @Test
+    fun `a garbled keyword is recovered, which is the point of the tier`() {
+        // What the milestone bought: three edits from "spiele", and no tolerance that reaches
+        // it would be safe. With an anchor around it, the code is.
+        assertNull(
+            Palette(registry.palette.entries, phonetic = false)
+                .match(Normalizer.tokenize("schbiele etwas von Queen")),
+        )
+        assertResolves("schbiele etwas von Queen", "spotify.play_music", mapOf("query" to "queen"))
+        assertResolves("mach den bildshirm aus", "system.turn_off_screen")
+    }
+
+    @Test
+    fun `a single-literal template is never reached phonetically`() {
+        // "aus" is too short to be phonetic at all; "überspringen" is not, and a bare template
+        // is exactly where a near-miss has nothing to disagree with it.
+        for (entry in registry.palette.entries.filter { registry.palette.isStrict(it) }) {
+            assertTrue(
+                registry.palette.isStrict(entry),
+                "\"${entry.template.source}\" is a single-literal template and must be strict",
+            )
+        }
+        assertNull(registry.palette.match(Normalizer.tokenize("überschbringen")))
+    }
+
     @Test
     fun `unknown utterances match nothing rather than something wrong`() {
         for (utterance in listOf(
             "wie wird das wetter morgen",
             "ruf meine mutter an",
             "erzähl mir einen witz",
+            // Words the phonetic tier is the reason to re-check: each shares a Kölner code
+            // with a keyword and is a different German word.
+            "die spüle ist voll",
+            "der tumor ist weg",
+            "seit monaten nicht",
+            "hol die leiter",
+            "das ist ein guter löser",
         )) {
             val match = registry.palette.match(Normalizer.tokenize(utterance))
             assertTrue(match == null, "\"$utterance\" wrongly matched ${match?.invocation?.commandId}")

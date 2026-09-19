@@ -113,6 +113,7 @@ fun main(args: Array<String>) = runBlocking {
                     println(if (argument.isEmpty()) discovery.commands() else discovery.commands(argument))
 
                 "palette" -> println(discovery.palette())
+                "keywords", "keyword", "phonetics" -> println(discovery.keywords())
                 "find", "search" -> println(find(introspection, argument))
                 "fallthrough" ->
                     println(fallthrough.ifEmpty { listOf("(none)") }.joinToString("\n") { "  $it" })
@@ -157,6 +158,7 @@ private fun help() = """
     |  /commands <sock>     one sock in detail: params, phrasings, templates
     |  /find <text>         commands matching a word
     |  /palette             every template, in the order the matcher tries them
+    |  /keywords            every keyword, its phonetic code, and whether it is trusted
     |  /fallthrough         utterances Tier 1 could not match
     |  /trace               toggle normalizer and template output
     |  /quit                exit

@@ -2,6 +2,7 @@ package io.dobby.cli
 
 import io.dobby.core.registry.CommandInfo
 import io.dobby.core.registry.CommandKind
+import io.dobby.core.nlu.template.KeywordMatcher
 import io.dobby.core.registry.Introspection
 import io.dobby.core.registry.SockInfo
 import io.dobby.core.sock.SockStatus
@@ -93,6 +94,54 @@ class Discovery(private val introspection: Introspection) {
             }
         }
     }.trimEnd()
+
+    /**
+     * `/keywords` — every template literal, its Kölner code, and whether phonetics trusts it.
+     *
+     * Reach for this when a new Sock stops something matching. The phonetic tier retires
+     * keywords *automatically* when a collision appears, both sides of it, so the cause of
+     * "schbiele stopped working" is usually a word somebody else added last week.
+     */
+    fun keywords(): String = buildString {
+        val all = introspection.keywords()
+        val phonetic = all.count { it.phonetic }
+        appendLine("${all.size} literal(s), $phonetic matched phonetically:")
+        appendLine()
+        var currentTrust: KeywordMatcher.Trust? = null
+        for (info in all) {
+            if (info.trust != currentTrust) {
+                currentTrust = info.trust
+                appendLine("  ${reasonOf(currentTrust)}")
+            }
+            val strict = when {
+                info.strictTemplates == 0 -> ""
+                info.strictTemplates == info.templates -> "  [single-literal: strict]"
+                else -> "  [strict in ${info.strictTemplates}/${info.templates} templates]"
+            }
+            appendLine(
+                "    ${info.keyword.padEnd(18)} ${info.code.padEnd(10)} " +
+                    "${info.commandIds.joinToString(", ")}$strict",
+            )
+        }
+        append("  a keyword is phonetic only if nothing else in the palette — or in ordinary German — shares its code")
+    }.trimEnd()
+
+    private fun reasonOf(trust: KeywordMatcher.Trust): String = when (trust) {
+        KeywordMatcher.Trust.PHONETIC -> "phonetic — a garble of this word still matches"
+        KeywordMatcher.Trust.TOO_SHORT ->
+            "not phonetic: under ${KeywordMatcher.MIN_LENGTH} characters"
+
+        KeywordMatcher.Trust.CODE_TOO_SHORT ->
+            "not phonetic: code under ${KeywordMatcher.MIN_CODE_LENGTH} digits (mostly vowels)"
+
+        KeywordMatcher.Trust.CONTESTED ->
+            "not phonetic: another palette keyword has the same code (both sides retired)"
+
+        KeywordMatcher.Trust.CORPUS ->
+            "not phonetic: an ordinary German word has the same code (KeywordMatcher.RETIRED_BY_CORPUS)"
+
+        KeywordMatcher.Trust.STRICT_MATCHER -> "phonetics off"
+    }
 
     private fun chainOf(command: CommandInfo): String =
         "chain: " + command.subscribers.joinToString(" → ") { "${it.sockId}(${it.priority})" }

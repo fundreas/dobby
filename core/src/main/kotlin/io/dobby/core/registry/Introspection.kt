@@ -1,6 +1,7 @@
 package io.dobby.core.registry
 
 import io.dobby.core.dispatch.SockHealth
+import io.dobby.core.nlu.template.KeywordMatcher
 import io.dobby.core.sock.CommandSpec
 import io.dobby.core.sock.ExclusiveCommandSpec
 import io.dobby.core.sock.ParamSpec
@@ -54,6 +55,38 @@ class Introspection(
         }
     }
 
+    /**
+     * Every literal keyword in the palette, and what the phonetic tier makes of it.
+     *
+     * The tool you reach for when a new Sock stops something matching. A keyword that was
+     * recovering garbles yesterday and is `CONTESTED` today has been retired by something
+     * somebody else added — which is the tier working as designed, and completely invisible
+     * without this listing.
+     */
+    fun keywords(): List<KeywordInfo> {
+        val palette = registry.palette
+        val entriesByLiteral = mutableMapOf<String, MutableList<PaletteEntry>>()
+        for (entry in palette.entries) {
+            for (literal in entry.template.literals.distinct()) {
+                entriesByLiteral.getOrPut(literal) { mutableListOf() } += entry
+            }
+        }
+        return entriesByLiteral.map { (literal, entries) ->
+            val verdict = palette.keywords.explain(literal)
+            KeywordInfo(
+                keyword = literal,
+                code = verdict.code,
+                trust = verdict.trust,
+                templates = entries.size,
+                // A template with one literal and no slots is matched strictly however trusted
+                // the keyword is elsewhere — so a keyword can be phonetic in one place and not
+                // in another, and the listing has to say which.
+                strictTemplates = entries.count { palette.isStrict(it) },
+                commandIds = entries.map { it.command.id }.distinct().sorted(),
+            )
+        }.sortedWith(compareBy({ it.trust }, { it.keyword }))
+    }
+
     private fun describe(sockId: String): SockInfo? {
         val sock = registry.socks.firstOrNull { it.id == sockId } ?: return null
         return SockInfo(
@@ -100,6 +133,21 @@ class Introspection(
 }
 
 enum class CommandKind { EXCLUSIVE, SHARED }
+
+/** One template literal, and whether the phonetic tier trusts it. See [Introspection.keywords]. */
+data class KeywordInfo(
+    val keyword: String,
+    /** Kölner Phonetik code, possibly empty. */
+    val code: String,
+    val trust: KeywordMatcher.Trust,
+    /** How many palette templates contain this literal. */
+    val templates: Int,
+    /** How many of those are matched with [KeywordMatcher.STRICT] whatever [trust] says. */
+    val strictTemplates: Int,
+    val commandIds: List<String>,
+) {
+    val phonetic: Boolean get() = trust == KeywordMatcher.Trust.PHONETIC && strictTemplates < templates
+}
 
 data class ParamInfo(
     val name: String,
