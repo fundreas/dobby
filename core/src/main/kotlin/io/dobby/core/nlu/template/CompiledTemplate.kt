@@ -122,6 +122,12 @@ class CompiledTemplate(val source: String, val root: Node.Seq) {
                     // A constrained slot may be fuzzy: the candidate set is closed, so "minute"
                     // still reaches the "minuten" enum value without risking a false positive.
                     ?: allowed.firstOrNull { Levenshtein.atMost(token, it.lowercase(), 1) }
+                    // …and for the same reason it may be phonetic. The candidate set is the
+                    // guard the palette needs [KeywordMatcher] for: `sekunden`, `minuten` and
+                    // `stunden` are 84626, 6626 and 82626, so "schtunden" can only mean one of
+                    // them. `singleOrNull` is the whole safety argument — two candidates with
+                    // one code is an ambiguity, and an ambiguous unit is worse than a reprompt.
+                    ?: allowed.singleOrNull { soundsLike(token, it.lowercase()) }
             }
             if (hit == null) {
                 emptySequence()
@@ -132,6 +138,21 @@ class CompiledTemplate(val source: String, val root: Node.Seq) {
     }
 
     private companion object {
+        /**
+         * Whether a spoken token is a garble of one closed-set candidate.
+         *
+         * The same test [KeywordMatcher] applies to a keyword, minus the palette-wide contested
+         * check, which the caller replaces with `singleOrNull` over the candidate set.
+         */
+        fun soundsLike(token: String, candidate: String): Boolean {
+            if (token.length < KeywordMatcher.MIN_LENGTH || candidate.length < KeywordMatcher.MIN_LENGTH) {
+                return false
+            }
+            val code = Phonetics.koelner(candidate)
+            if (code.length < KeywordMatcher.MIN_CODE_LENGTH || Phonetics.koelner(token) != code) return false
+            return Phonetics.skeleton(token) != Phonetics.skeleton(candidate)
+        }
+
         fun collectLiterals(node: Node): List<String> = when (node) {
             is Node.Word -> listOf(node.text)
             is Node.Slot -> emptyList()

@@ -139,6 +139,33 @@ class TemplateMatcherTest {
         // The slot takes whatever is there; only keywords are forgiving.
         assertEquals(mapOf("q" to "xyzzy"), match("spiele {q}", "spiele xyzzy"))
     }
+
+    @Test
+    fun `an enum slot is reached phonetically, but only when the answer is unambiguous`() {
+        val template = compileTemplate("timer {unit:enum}")
+        val units = listOf("sekunden", "minuten", "stunden")
+        fun match(utterance: String) =
+            template.match(utterance.split(" ")) { units }?.get("unit")
+
+        // Exact, then Levenshtein, then the code. The real units are distinct by code —
+        // 84626 / 6626 / 82626 — so a closed candidate set is its own contested check.
+        assertEquals("minuten", match("timer minuten"))
+        assertEquals("minuten", match("timer minute"))
+        // Two edits away, which Levenshtein will not have: this is the phonetic tier working.
+        assertEquals("stunden", match("timer schtunden"))
+        assertEquals("sekunden", match("timer schekunden"))
+
+        // A vowel-only neighbour is a different word, not a garble: "monaten" is not "minuten".
+        assertNull(match("timer monaten"))
+
+        // Two candidates sharing a code is an ambiguity, and an ambiguous unit is worse than
+        // asking again. The pair is synthetic — the real enums have distinct codes — because
+        // the guard has to hold for the enum somebody declares next, not only for these three.
+        val ambiguous = compileTemplate("timer {unit:enum}")
+        assertNull(
+            ambiguous.match("timer zdunden".split(" ")) { listOf("stunden", "schtunden") },
+        )
+    }
 }
 
 class SpecificityTest {
