@@ -27,6 +27,7 @@ Phase A was "Dobby in a terminal": everything below the microphone and above the
 |---|---|
 | `:core` | Sock API, template engine, normalizer, registry, dispatcher + chain. **Pure Kotlin/JVM** — the module boundary is what enforces the plan's "parsing is pure" rule. Publishes test fixtures (`FakeSockContext`) used by the Socks *and* by the Android app. |
 | `:socks:clock` | **Clock** — the first product Sock, now complete: kitchen timers with an `AlarmManager` backstop and a `SoundPool` chime, the time of day in Austrian German, and the panel's clock card. Subscribes to `shared.stop`, which it wins only while the chime is ringing. |
+| `:socks:calculator` | **Calculator** — arithmetic out loud. Every answer reads its question back ("8 mal 2 ist 16"), and the result is kept for ten minutes so the next utterance can be the next step: "250 mal 4" → "und davon die Hälfte" → "wie oft passt 150 rein". |
 | `:socks:help` | **Help** — spoken discovery: "Was kannst du?", "Was kann die Uhr?" |
 | `:socks:winky` | Winky, the development Sock. Not a product Sock, and not in a release APK. |
 | `:cli` | The terminal harness. Still the fastest way to work on a template. |
@@ -34,7 +35,7 @@ Phase A was "Dobby in a terminal": everything below the microphone and above the
 | `:android:pipeline` | Microphone in, German text out; German text in, sound out. `AudioRecord` owner + frame router, openWakeWord, Silero VAD + Parakeet STT, Android TTS. Knows nothing about Socks. |
 | `:android:app` | The foreground service, the Android `SockContext`, the chat view, and the one place that knows which Socks exist. |
 
-Not yet built: the LLM tier, the remaining Socks (Spotify, Radio, System, Departures), and the rest of the dashboard — Clock brought the first card with it. See [`dobby-plan.md`](dobby-plan.md) §8.
+Not yet built: the LLM tier, the remaining Socks (Spotify, Radio, System, Departures), and the rest of the dashboard — Clock brought the first card with it, Calculator the second. See [`dobby-plan.md`](dobby-plan.md) §8.
 
 ## Run it
 

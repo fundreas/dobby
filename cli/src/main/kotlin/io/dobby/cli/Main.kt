@@ -16,6 +16,7 @@ import io.dobby.core.registry.RegistryValidationException
 import io.dobby.core.registry.SockRegistry
 import io.dobby.core.sock.Sock
 import io.dobby.core.sock.SockResult
+import io.dobby.socks.calculator.CalculatorSock
 import io.dobby.socks.clock.ClockSock
 import io.dobby.socks.winky.WinkySock
 import io.dobby.socks.help.HelpSock
@@ -46,6 +47,7 @@ object DobbySocks {
             // The terminal has no SoundPool, so the chime prints itself. A timer is then just
             // as testable here as on the panel — which is the whole point of the interface.
             ClockSock(chime = { sound -> out("  🔔 ${sound.configValue}") }),
+            CalculatorSock(),
             WinkySock(),
             HelpSock { directory },
         )

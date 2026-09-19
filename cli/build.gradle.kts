@@ -7,6 +7,7 @@ dependencies {
     implementation(project(":core"))
     implementation(project(":socks:winky"))
     implementation(project(":socks:clock"))
+    implementation(project(":socks:calculator"))
     implementation(project(":socks:help"))
 }
 
