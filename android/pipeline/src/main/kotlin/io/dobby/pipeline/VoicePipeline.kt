@@ -270,9 +270,11 @@ class VoicePipeline(
     }
 
     private fun onWakeWord(score: Float) {
-        // On the audio thread: beep now, and hand the turn to whoever is collecting. Doing the
-        // work here would block the microphone.
+        // On the audio thread: acknowledge now, and hand the turn to whoever is collecting.
+        // Doing the work here would block the microphone. Both acknowledgements return
+        // immediately — the beep for the room, the tick for whoever is standing at the panel.
         earcon.play()
+        haptics.listening()
         _wakeWords.tryEmit(score)
     }
 
