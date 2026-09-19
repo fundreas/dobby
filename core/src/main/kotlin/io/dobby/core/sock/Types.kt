@@ -39,6 +39,29 @@ sealed interface SockResult {
     data class Failed(val userMessage: String, val cause: Throwable? = null) : SockResult
 
     /**
+     * Asked the user something and is waiting for the answer.
+     *
+     * Spoken exactly like [Spoken], but core keeps the microphone open and routes the next
+     * utterance back to this Sock via [follow].
+     */
+    data class Asked(val text: String, val follow: FollowUp) : SockResult
+
+    /**
+     * Handled, and the conversation with it: core stops listening rather than waiting for more.
+     *
+     * The mirror of [Asked]. Every other result leaves the microphone open for a few seconds,
+     * because the overwhelmingly common thing after one instruction is a second one — "wie spät
+     * ist es", then "stell einen Timer auf zehn Minuten" — and making somebody say the wake
+     * word between them is the difference between talking to a panel and operating it.
+     *
+     * This is for the commands where that is wrong. "Gute Nacht" and "danke, das war's" are
+     * finished sentences: holding the microphone open after them is a panel that did not take
+     * the hint, listening to a room that has stopped addressing it. [text] is spoken first if
+     * there is any; null closes the turn without a word.
+     */
+    data class Ended(val text: String? = null) : SockResult
+
+    /**
      * "Nothing to do for me here" — pass to the next Sock in the chain.
      *
      * Only legal for a `shared.*` command. Returning it for an exclusive command is a
@@ -46,6 +69,22 @@ sealed interface SockResult {
      */
     data object NotForMe : SockResult
 }
+
+/**
+ * How the answer to an [SockResult.Asked] comes back.
+ *
+ * The templates are compiled at ask time into a scoped palette that lives only for the rest
+ * of the turn. They are never registered, so they cannot collide with anything global — which
+ * is why a bare `{text}` slot, rejected everywhere else, is legal here.
+ */
+data class FollowUp(
+    /** Where the answer lands. Must be a command id owned by the asking Sock. */
+    val commandId: String,
+    val templates: List<TemplatePattern>,
+    val params: List<ParamSpec> = emptyList(),
+    /** Opaque handle on whatever half-built state the Sock is holding. */
+    val token: String,
+)
 
 /** The type of a command parameter. */
 sealed interface ParamType {
@@ -153,6 +192,8 @@ data class SharedSubscription(
 data class CommandInvocation(
     val commandId: String,
     val params: Map<String, Any> = emptyMap(),
+    /** The [FollowUp.token] this invocation answers, or null for a fresh command. */
+    val answering: String? = null,
 ) {
     val isShared: Boolean get() = commandId.startsWith(SHARED_PREFIX)
 

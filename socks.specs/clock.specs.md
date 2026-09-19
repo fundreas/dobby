@@ -5,7 +5,9 @@
 > [`TimerAlarm`](../socks/clock/src/main/kotlin/io/dobby/socks/clock/TimerAlarm.kt) and
 > `SoundPool` behind [`ChimePlayer`](../socks/clock/src/main/kotlin/io/dobby/socks/clock/Chime.kt),
 > so the whole timer lifecycle is tested on a plain JVM against a virtual clock. The dashboard
-> card (§7) renders the exposed state on the panel. Still open: everything in §12.
+> card (§7) renders the exposed state on the panel. `set_timer` also asks for a missing unit,
+> which is the first user of the follow-up contract ([README §5](README.md#5-follow-up-questions)).
+> Still open: everything in §12.
 
 ## 1. Identity
 
@@ -25,7 +27,7 @@
 
 | Command id | Params | Description (German, feeds Tier 2) |
 |---|---|---|
-| `clock.set_timer` | `amount: int`, `unit: enum` | Stellt einen Timer für eine bestimmte Dauer. |
+| `clock.set_timer` | `amount: int`, `unit: enum` *(optional — asked for when missing, §3)* | Stellt einen Timer für eine bestimmte Dauer. |
 | `clock.cancel_timer` | — | Bricht den laufenden Timer ab — **explizit adressiert** ("Timer stopp"). |
 | `clock.whats_the_time` | — | Sagt die aktuelle Uhrzeit. |
 
@@ -48,7 +50,9 @@ This Sock is `ACTIVE` on `shared.stop` **only while the chime is actually ringin
 | Name | Type | Required | Default | Constraints |
 |---|---|---|---|---|
 | `amount` | int | yes | — | 1 … 600 |
-| `unit` | enum | yes | — | `sekunden` \| `minuten` \| `stunden` |
+| `unit` | enum | **no** | — | `sekunden` \| `minuten` \| `stunden` |
+
+`unit` is optional because "Stell einen Timer auf zehn" is a sentence German people really say. A missing unit is not a parse failure — the Sock asks for it (§3, *Follow-up*).
 
 `duration_s = amount × {sekunden: 1, minuten: 60, stunden: 3600}`, clamped to **1 s … 12 h**.
 
@@ -64,6 +68,14 @@ timer( auf| für)? {amount:int} {unit:enum}
 (erinner|erinnere) mich in {amount:int} {unit:enum}
 ```
 
+Plus the unit-less forms, which sit **last** — they are strictly less specific, and a palette that reached them first would ask "10 was?" about "timer 10 minuten":
+
+```
+(stell|stelle|setz|setze|mach) (mir )?(einen |nen )?timer( auf| für)? {amount:int}
+(stell|stelle|setz|setze) (mir )?(einen |nen )?wecker( auf| für)? {amount:int}
+timer( auf| für)? {amount:int}
+```
+
 The `{unit:enum}` slot matches the enum values plus their singular forms (`sekunde`, `minute`, `stunde`) — singular/plural folding happens in the enum matcher, not in five extra templates.
 
 ### Utterances → invocation
@@ -77,6 +89,34 @@ The `{unit:enum}` slot matches the enum values plus their singular forms (`sekun
 | timer eine minute | `set_timer(amount=1, unit=minuten)` |
 | setz einen wecker auf 2 stunden | `set_timer(amount=2, unit=stunden)` |
 | erinner mich in 20 minuten | `set_timer(amount=20, unit=minuten)` |
+| stell einen timer auf zehn *(normalized: `stell einen timer auf 10`)* | `set_timer(amount=10)` → asks |
+| timer 5 | `set_timer(amount=5)` → asks |
+| timer auf 90 | `set_timer(amount=90)` → asks |
+| setz einen wecker auf 2 | `set_timer(amount=2)` → asks |
+
+### Follow-up: the missing unit
+
+An invocation with an `amount` and no `unit` cannot be executed and must not be refused either — ten *what* is the only thing missing, and asking is one short sentence. The Sock answers with `Asked` ([README §5](README.md#5-follow-up-questions)):
+
+| | |
+|---|---|
+| **Question (German TTS)** | "{amount} was — Sekunden, Minuten oder Stunden?" (e.g. "10 was — Sekunden, Minuten oder Stunden?") |
+| **Follow-up command** | `clock.set_timer` |
+| **Follow-up templates** | `{unit:enum}` · `(in\|auf\|für) {unit:enum}` |
+| **Token holds** | the spoken `amount`, and nothing else |
+
+The answer arrives as a second `handle()` call with `answering = token`. The Sock reads the stashed amount and sets the timer exactly as if both had been said at once — including the singular rule, so "eins" then "Minute" says "Timer läuft: 1 Minute."
+
+| Utterance | Then | Result |
+|---|---|---|
+| stell einen timer auf zehn | minuten | `Spoken("Timer läuft: 10 Minuten.")`, timer at 600 s |
+| timer 5 | in minuten | `Spoken("Timer läuft: 5 Minuten.")`, timer at 300 s |
+| stell einen timer auf eins | minute | `Spoken("Timer läuft: 1 Minute.")`, timer at 60 s |
+| timer 20 | stunden | `Failed("Diese Dauer kann ich nicht stellen.")` — past the 12 h cap |
+| stell einen timer auf zehn | stopp | goes to `shared.stop`; the amount is dropped and **no timer is set** |
+| stell einen timer auf zehn | *(silence)* | the turn ends, the amount is dropped, no timer is set |
+
+The turn ending, or any other command being spoken instead, reaches the Sock as `onAskCancelled(token)`; it drops the stashed amount there. An answer whose token the Sock no longer holds is `Failed("Diese Dauer kann ich nicht stellen.")` — a kitchen timer must not guess at a duration it cannot reconstruct.
 
 ### Behavior
 
@@ -223,7 +263,8 @@ Exclusively claimed: `timer …`, `wecker …`, `wie spät …`, `wie viel uhr �
 
 Contributed to `shared.stop`, not owned: `ich hab's gehört`, `ja ja`, `ist gut` (plus the catalog's bare `stopp` / `pause` / `aus`).
 
-- ⚠️ `stell einen wecker auf 7 uhr` (an alarm at a wall-clock time) currently matches **nothing** — `7 uhr` is not `{amount}{unit}`. It falls through to Tier 2 and then to `none`. See §11.
+- `timer …` now also claims an amount with no unit (`timer 10`, `stell einen timer auf zehn`), which is answered with a question rather than a template miss.
+- ⚠️ `stell einen wecker auf 7 uhr` (an alarm at a wall-clock time) currently matches **nothing** — `7 uhr` is not `{amount}{unit}`, and `uhr` is not a unit the follow-up offers either. It falls through to Tier 2 and then to `none`. See §12.
 
 ## 9. Config
 
@@ -253,6 +294,7 @@ process can pick it up (§10), and cleared the moment the timer is cancelled or 
   - timer counting down + Spotify playing → Clock returns `NotForMe`, Spotify pauses, **the timer still runs afterwards**.
 - `activityFor` returns `ACTIVE` only for `isRinging`, asserted against a counting-down state.
 - Duration conversion incl. clamping and rejection.
+- **The follow-up, end to end, through `DobbyEngine`:** "stell einen timer auf zehn" → question → "minuten" → a timer at 600 s; the same path with "stopp" instead of an answer, asserting that the chain gets it and no timer is set; the turn ending instead of an answer; an answer with no stashed amount. Plus the ordering assertion that a phrasing naming its unit never falls through to a unit-less template.
 - Time phrasing: a table covering every branch, with 14:30 → "halb 3" explicitly asserted.
 - Timer lifecycle with a virtual clock: set, replace, cancel before expiry, expiry, cancel while ringing, chime auto-stop at max duration.
 - Pure-JVM only; `AlarmManager` sits behind a small interface with a fake.

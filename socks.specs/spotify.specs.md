@@ -253,7 +253,7 @@ Contributed to chains, **not** owned: `stopp`, `stop`, `halt`, `pause`, `pausier
 ## 12. Open questions / out of scope (v1)
 
 - `skip_previous`, seek, shuffle/repeat toggles, volume (owned by the System Sock), playlist management, liking a track.
-- Choosing between multiple search hits by asking back ("Meinst du …?") — needs a dialogue turn in core, which does not exist.
+- Choosing between multiple search hits by asking back ("Meinst du …?"). **Unblocked:** the dialogue turn now exists — a Sock returns `SockResult.Asked` with a scoped follow-up palette and core routes the next utterance back to it ([README §5](README.md#5-follow-up-questions)); the Clock Sock's missing timer unit is the first user of it. What is still outstanding here is Spotify-side: holding the candidate hits under the follow-up token, and the German copy for a two- and a three-way choice. Not a core change any more.
 - Playing to a different Spotify Connect device.
 - **Stale `PlayerState` after a silent App Remote death** (§6): the Sock may claim a chain command it cannot execute. Fix would be a cheap liveness flag updated by the subscription's error callback — worth doing if it shows up in practice, not worth a Binder call per utterance.
 - *(Resolved: bare `stopp` routing. It is now `shared.stop`, decided per-invocation by activity ranking — see [shared-commands.specs.md](shared-commands.specs.md).)*

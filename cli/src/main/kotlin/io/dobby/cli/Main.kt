@@ -87,7 +87,9 @@ fun main(args: Array<String>) = runBlocking {
     banner(registry)
 
     while (true) {
-        print("> ")
+        // A question Dobby asked is holding the floor: the next line answers it, exactly as
+        // the next utterance would on the panel. The prompt says so, because nothing else does.
+        print(if (engine.awaitingAnswer) "? " else "> ")
         val line = readlnOrNull()?.trim() ?: break
         if (line.isEmpty()) continue
 
@@ -168,7 +170,14 @@ private fun render(outcome: EngineOutcome, verbose: Boolean) {
 
     when (val result = outcome.result) {
         is SockResult.Spoken -> println("  🔊 ${result.text}")
+        // The floor is Dobby's until the next line: core is holding the question open and will
+        // route whatever is typed next back to the Sock that asked it.
+        is SockResult.Asked -> println("  ❓ ${result.text}")
         is SockResult.Failed -> println("  ✖ ${result.userMessage}")
+        // On the panel this is where the microphone closes and the wake word comes back. In a
+        // terminal there is nothing to close, so it reads as an ordinary answer with a full
+        // stop after it — which is exactly what it is.
+        is SockResult.Ended -> result.text?.let { println("  🔊 $it") }
         SockResult.Silent -> Unit
         SockResult.Deferred -> Unit
         SockResult.NotForMe -> println("  ✖ nobody handled this")

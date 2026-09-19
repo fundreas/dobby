@@ -3,6 +3,8 @@ package io.dobby.core.registry
 import io.dobby.core.nlu.GermanNumbers
 import io.dobby.core.nlu.template.CompiledTemplate
 import io.dobby.core.nlu.template.Specificity
+import io.dobby.core.nlu.template.TemplateSyntaxException
+import io.dobby.core.nlu.template.compileTemplate
 import io.dobby.core.sock.CommandInvocation
 import io.dobby.core.sock.CommandSpec
 import io.dobby.core.sock.ParamSpec
@@ -57,6 +59,41 @@ class Palette(entries: List<PaletteEntry>) {
 
     private fun enumValuesFor(command: CommandSpec, slot: String): List<String>? =
         (command.params.firstOrNull { it.name == slot }?.type as? ParamType.Enumeration)?.values
+}
+
+/**
+ * A palette compiled outside the registry, for the lifetime of a single dialogue turn.
+ *
+ * [palette] is null when any template failed to compile — all or nothing, because a question
+ * that can only hear half of its own answers is worse than one that holds no floor at all.
+ */
+data class ScopedPaletteBuild(val palette: Palette?, val errors: List<String>)
+
+/**
+ * Compiles the templates of an unregistered command into a palette of its own.
+ *
+ * This is the follow-up palette behind [io.dobby.core.sock.SockResult.Asked]. It deliberately
+ * skips the registry's bare-`{text}` rejection: that rule exists because a global template
+ * matching every utterance would swallow the whole palette, and these templates are tried only
+ * while a question is open, against the one utterance that answers it. "Meinst du den Song oder
+ * das Album?" wants to hear whatever comes back, not a closed candidate set.
+ */
+fun compileScopedPalette(command: CommandSpec): ScopedPaletteBuild {
+    val errors = mutableListOf<String>()
+    val entries = mutableListOf<PaletteEntry>()
+    if (command.templates.isEmpty()) {
+        errors += "'${command.id}' offers no templates and could never hear an answer"
+    }
+    for ((order, template) in command.templates.withIndex()) {
+        val compiled = try {
+            compileTemplate(template.pattern)
+        } catch (e: TemplateSyntaxException) {
+            errors += "'${command.id}': ${e.message}"
+            continue
+        }
+        entries += PaletteEntry(command, compiled, template.params, null, order)
+    }
+    return ScopedPaletteBuild(if (errors.isEmpty()) Palette(entries) else null, errors)
 }
 
 /** Turns raw slot strings into typed params, applying defaults for absent optionals. */

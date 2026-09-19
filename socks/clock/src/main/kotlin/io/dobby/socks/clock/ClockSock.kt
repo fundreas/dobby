@@ -3,6 +3,7 @@ package io.dobby.socks.clock
 import io.dobby.core.sock.CommandInvocation
 import io.dobby.core.sock.Example
 import io.dobby.core.sock.ExclusiveCommandSpec
+import io.dobby.core.sock.FollowUp
 import io.dobby.core.sock.ParamSpec
 import io.dobby.core.sock.ParamType
 import io.dobby.core.sock.SharedCommands
@@ -24,6 +25,8 @@ import kotlinx.coroutines.launch
 import java.time.Clock
 import java.time.LocalDateTime
 import java.time.LocalTime
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.coroutineContext
 
 /**
@@ -73,12 +76,27 @@ class ClockSock(
     private var ticker: Job? = null
     private var mirror: Job? = null
 
+    /**
+     * Amounts spoken without a unit, waiting for the follow-up that names one.
+     *
+     * This is the whole of "the Sock holding partial state": there is no waiting instance and
+     * nothing blocks, because `handle()` runs under core's timeout and returning
+     * [SockResult.Asked] is how a Sock waits. Concurrent by type rather than by need — core
+     * dispatches one utterance at a time, and a map that is wrong under a race would be a very
+     * quiet bug.
+     */
+    private val askedAmounts = ConcurrentHashMap<String, Int>()
+
+    private val askCounter = AtomicLong()
+
     override val commands: List<ExclusiveCommandSpec> = listOf(
         ExclusiveCommandSpec(
             id = SET_TIMER,
             params = listOf(
                 ParamSpec("amount", ParamType.Integer),
-                ParamSpec("unit", ParamType.Enumeration(TimerUnit.SPOKEN)),
+                // Optional, because "stell einen timer auf zehn" is a sentence German people
+                // really say. A missing unit is not a parse failure, it is a question (§3).
+                ParamSpec("unit", ParamType.Enumeration(TimerUnit.SPOKEN), required = false),
             ),
             templates = patterns(
                 "(stell|stelle|setz|setze|mach) (mir)? (einen|nen)? timer (auf|für)? {amount:int} {unit:enum}",
@@ -86,6 +104,11 @@ class ClockSock(
                 "(erinner|erinnere) mich in {amount:int} {unit:enum}",
                 "timer (auf|für)? {amount:int} {unit:enum}",
                 "{amount:int} {unit:enum} timer",
+                // Unit-less forms, last: they are strictly less specific than the ones above,
+                // and the palette only reaches them once no fuller phrasing fits.
+                "(stell|stelle|setz|setze|mach) (mir)? (einen|nen)? timer (auf|für)? {amount:int}",
+                "(stell|stelle|setz|setze) (mir)? (einen|nen)? wecker (auf|für)? {amount:int}",
+                "timer (auf|für)? {amount:int}",
             ),
             description = "Stellt einen Timer für eine bestimmte Dauer.",
             examples = listOf(
@@ -97,6 +120,10 @@ class ClockSock(
                 Example("timer eine minute", mapOf("amount" to 1, "unit" to "minuten")),
                 Example("setz einen wecker auf 2 stunden", mapOf("amount" to 2, "unit" to "stunden")),
                 Example("erinner mich in 20 minuten", mapOf("amount" to 20, "unit" to "minuten")),
+                // No unit: matched, then asked about. Before this template the utterance
+                // resolved to nothing at all, which is the one answer that helps nobody.
+                Example("stell einen timer auf zehn", mapOf("amount" to 10)),
+                Example("timer 5", mapOf("amount" to 5)),
                 // Paraphrases Tier 1 is meant to miss — few-shots for the LLM tier (M6).
                 Example("gib mir in einer viertelstunde bescheid", matchedByTemplates = false),
                 Example("weck mich in zwanzig minuten", matchedByTemplates = false),
@@ -214,10 +241,28 @@ class ClockSock(
             else -> SockResult.NotForMe
         }
 
+    /**
+     * `clock.set_timer`, in one or in two utterances.
+     *
+     * "Stell einen Timer auf zehn" carries an amount and no unit, so it cannot be executed and
+     * must not be refused either — ten *what* is the only thing missing, and asking is one
+     * short sentence. The amount is stashed under the follow-up token and the same handler runs
+     * again with the answer, so the two-utterance path and the one-utterance path converge
+     * before anything touches the timer.
+     */
     private suspend fun setTimer(invocation: CommandInvocation): SockResult {
-        val amount = invocation.intOrNull("amount") ?: return SockResult.Failed(BAD_DURATION)
-        val unit = TimerUnit.of(invocation.textOrNull("unit").orEmpty())
-            ?: return SockResult.Failed(BAD_DURATION)
+        val answering = invocation.answering
+        val amount = if (answering != null) {
+            // Core routes an answer straight back here, but the state it answers is ours. A
+            // token we no longer hold means the turn moved on without us; there is nothing
+            // left to set and nothing sensible to say about a duration we cannot reconstruct.
+            askedAmounts.remove(answering) ?: return SockResult.Failed(BAD_DURATION)
+        } else {
+            invocation.intOrNull("amount") ?: return SockResult.Failed(BAD_DURATION)
+        }
+        val spoken = invocation.textOrNull("unit")
+            ?: return askForUnit(amount)
+        val unit = TimerUnit.of(spoken) ?: return SockResult.Failed(BAD_DURATION)
         val durationMs = amount.toLong() * unit.seconds * MILLIS_PER_SECOND
         if (amount !in MIN_AMOUNT..MAX_AMOUNT || durationMs !in MILLIS_PER_SECOND..MAX_DURATION_MS) {
             return SockResult.Failed(BAD_DURATION)
@@ -233,6 +278,33 @@ class ClockSock(
                 if (!alarm.canScheduleExact) append(" Achtung, er ist nicht garantiert genau.")
             },
         )
+    }
+
+    /**
+     * "10 was — Sekunden, Minuten oder Stunden?"
+     *
+     * The scoped palette hears the unit on its own ("minuten") and with the preposition the
+     * question invites ("in minuten"). Both are bare enough that they would be reckless in the
+     * global palette and are perfectly safe here, where they are only ever tried against the
+     * one utterance that answers this question.
+     */
+    private fun askForUnit(amount: Int): SockResult {
+        val token = "unit-${askCounter.incrementAndGet()}"
+        askedAmounts[token] = amount
+        return SockResult.Asked(
+            text = "$amount was — Sekunden, Minuten oder Stunden?",
+            follow = FollowUp(
+                commandId = SET_TIMER,
+                templates = patterns("{unit:enum}", "(in|auf|für) {unit:enum}"),
+                params = listOf(ParamSpec("unit", ParamType.Enumeration(TimerUnit.SPOKEN))),
+                token = token,
+            ),
+        )
+    }
+
+    /** The turn ended, or the user said something else entirely. Drop the half-built timer. */
+    override suspend fun onAskCancelled(token: String) {
+        askedAmounts.remove(token)
     }
 
     /**

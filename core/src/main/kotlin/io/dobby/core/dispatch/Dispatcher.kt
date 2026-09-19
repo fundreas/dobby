@@ -62,12 +62,6 @@ data class DispatchOutcome(
     val consumedBy: String? get() = trace.firstOrNull { it.outcome == StepOutcome.CONSUMED }?.sockId
 }
 
-private object NoopLog : SockLog {
-    override fun debug(message: String) = Unit
-
-    override fun warn(message: String, cause: Throwable?) = Unit
-}
-
 /**
  * Routes an invocation to the Sock that should run it.
  *
@@ -80,7 +74,7 @@ class Dispatcher(
     private val registry: SockRegistry,
     val health: SockHealth = SockHealth(),
     private val timeout: Duration = DEFAULT_TIMEOUT,
-    private val log: SockLog = NoopLog,
+    private val log: SockLog = SockLog.NONE,
 ) {
     suspend fun dispatch(invocation: CommandInvocation): DispatchOutcome =
         if (invocation.isShared) dispatchChain(invocation) else dispatchExclusive(invocation)
@@ -91,14 +85,35 @@ class Dispatcher(
                 SockResult.Failed("Das kenne ich nicht."),
                 listOf(ChainStep("?", null, StepOutcome.FAILED, "no owner")),
             )
+        return deliver(owner, invocation, note = null)
+    }
 
-        return when (val attempt = run(owner, invocation)) {
+    /**
+     * Hands an answer straight to the Sock that asked the question.
+     *
+     * Deliberately past [SockRegistry.ownerOf] and past the chain: the answer belongs to
+     * whoever asked, not to whoever the command id would ordinarily resolve to. A Sock may
+     * legitimately route an answer onto a command it shares an id with nobody, or onto one it
+     * only reaches this way, and re-resolving the owner here would send "minuten" to a Sock
+     * that has no idea what question it is answering.
+     */
+    suspend fun dispatchAnswer(asker: Sock, invocation: CommandInvocation): DispatchOutcome =
+        deliver(asker, invocation, note = invocation.answering?.let { "answering $it" })
+
+    /**
+     * One Sock, one command, one timeout — the shape both the exclusive path and an answer take.
+     *
+     * [note] rides along into the trace so that "who ran this, and why them" stays readable
+     * when the reason was a question rather than the palette.
+     */
+    private suspend fun deliver(owner: Sock, invocation: CommandInvocation, note: String?): DispatchOutcome =
+        when (val attempt = run(owner, invocation)) {
             is Attempt.Threw -> {
                 health.degrade(owner.id, attempt.cause.toString())
                 log.warn("${owner.id} threw handling ${invocation.commandId}", attempt.cause)
                 DispatchOutcome(
                     SockResult.Failed("Das hat gerade nicht geklappt.", attempt.cause),
-                    listOf(step(owner, null, StepOutcome.FAILED, attempt.cause.toString())),
+                    listOf(step(owner, null, StepOutcome.FAILED, detail(note, attempt.cause.toString()))),
                 )
             }
 
@@ -107,7 +122,7 @@ class Dispatcher(
                 log.warn("${owner.id} timed out handling ${invocation.commandId}")
                 DispatchOutcome(
                     SockResult.Failed("Das hat zu lange gedauert."),
-                    listOf(step(owner, null, StepOutcome.TIMED_OUT)),
+                    listOf(step(owner, null, StepOutcome.TIMED_OUT, note)),
                 )
             }
 
@@ -118,16 +133,18 @@ class Dispatcher(
                     log.warn("${owner.id} returned NotForMe for exclusive ${invocation.commandId}")
                     DispatchOutcome(
                         SockResult.Failed("Das kann ich gerade nicht."),
-                        listOf(step(owner, null, StepOutcome.FAILED, "NotForMe")),
+                        listOf(step(owner, null, StepOutcome.FAILED, detail(note, "NotForMe"))),
                     )
                 } else {
                     DispatchOutcome(
                         attempt.result,
-                        listOf(step(owner, null, StepOutcome.CONSUMED)),
+                        listOf(step(owner, null, StepOutcome.CONSUMED, note)),
                     )
                 }
         }
-    }
+
+    private fun detail(note: String?, reason: String): String =
+        if (note == null) reason else "$note: $reason"
 
     private suspend fun dispatchChain(invocation: CommandInvocation): DispatchOutcome {
         val chain = registry.chainFor(invocation.commandId)

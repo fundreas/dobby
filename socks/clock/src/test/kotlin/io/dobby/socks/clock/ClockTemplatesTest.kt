@@ -40,6 +40,26 @@ class ClockTemplatesTest {
     }
 
     @Test
+    fun `an amount with no unit still matches - it becomes a question, not a dead end`() {
+        // Before these templates "stell einen timer auf zehn" resolved to nothing at all. The
+        // unit is missing, not the intent, and the handler asks for it (§3).
+        assertResolves("stell einen Timer auf zehn", ClockSock.SET_TIMER, mapOf("amount" to 10))
+        assertResolves("Timer 5", ClockSock.SET_TIMER, mapOf("amount" to 5))
+        assertResolves("Timer auf 90", ClockSock.SET_TIMER, mapOf("amount" to 90))
+        assertResolves("setz einen Wecker auf 2", ClockSock.SET_TIMER, mapOf("amount" to 2))
+    }
+
+    @Test
+    fun `a phrasing that names its unit is never demoted to the unit-less one`() {
+        // The unit-less templates sit last for a reason: they are strictly less specific, and
+        // a palette that reached them first would ask "10 was?" about "timer 10 minuten".
+        for (utterance in listOf("Timer 10 Minuten", "stell einen Timer auf 5 Minuten", "Timer auf 2 Stunden")) {
+            val params = resolve(utterance)?.params
+            assertEquals(2, params?.size, "$utterance lost its unit: $params")
+        }
+    }
+
+    @Test
     fun `the singular of a unit reaches the plural enum value`() {
         // Folded in by the enum matcher's closed candidate set, not by five more templates (§3).
         assertResolves("Timer 1 Minute", ClockSock.SET_TIMER, timer(1, "minuten"))

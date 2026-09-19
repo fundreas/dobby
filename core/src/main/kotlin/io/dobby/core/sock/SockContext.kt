@@ -63,4 +63,13 @@ interface SockLog {
     fun debug(message: String)
 
     fun warn(message: String, cause: Throwable? = null)
+
+    companion object {
+        /** Discards everything. The default wherever core takes a log it can do without. */
+        val NONE: SockLog = object : SockLog {
+            override fun debug(message: String) = Unit
+
+            override fun warn(message: String, cause: Throwable?) = Unit
+        }
+    }
 }

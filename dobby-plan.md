@@ -82,6 +82,9 @@ interface Sock {
 
     suspend fun handle(invocation: CommandInvocation): SockResult
 
+    /** A question this Sock asked will not be answered. Free what Asked reserved. §3.4a */
+    suspend fun onAskCancelled(token: String) {}
+
     val status: StateFlow<SockStatus>    // Ready | Degraded(reason) | Unavailable(reason)
     val dashboard: DashboardCard?        // optional Compose contribution
 }
@@ -99,8 +102,8 @@ data class CommandSpec(
 )
 ```
 
-- `CommandInvocation` = `commandId: String` + `params: Map<String, Any>`, already type-coerced and validated against `ParamSpec` before it reaches the Sock.
-- `SockResult` = `Spoken(text)` | `Silent` | `Deferred` (Sock will speak later, e.g. timer expiry) | `Failed(userMessage, cause)` | **`NotForMe`** (chain only, §3.4). Core turns it into TTS + UI state. **A Sock never calls TTS directly for command acknowledgement** — it returns a result. It may push asynchronous announcements via `ctx.announce(text)`.
+- `CommandInvocation` = `commandId: String` + `params: Map<String, Any>` + `answering: String?` (the follow-up token this utterance answers, §3.4a), already type-coerced and validated against `ParamSpec` before it reaches the Sock.
+- `SockResult` = `Spoken(text)` | `Silent` | `Deferred` (Sock will speak later, e.g. timer expiry) | `Failed(userMessage, cause)` | **`Asked(text, follow)`** (a question that holds the floor, §3.4a) | **`NotForMe`** (chain only, §3.4). Core turns it into TTS + UI state. **A Sock never calls TTS directly for command acknowledgement** — it returns a result. It may push asynchronous announcements via `ctx.announce(text)`.
 - Returning `NotForMe` for an **exclusive** command is a programming error: logged loudly, treated as `Failed`.
 
 ### 3.2 SockContext — everything a Sock is allowed to touch
@@ -184,6 +187,21 @@ dispatch(invocation):
 
 The shared catalog and the per-Sock subscriptions are specified in [`socks.specs/shared-commands.specs.md`](socks.specs/shared-commands.specs.md).
 
+### 3.4a Follow-up questions — one Sock holding the floor
+
+§3.4 resolves "who should act". This resolves "what did they actually say": "Stell einen Timer auf zehn" — ten what? A Sock that is missing one thing returns `SockResult.Asked(text, FollowUp(commandId, templates, params, token))` instead of a statement.
+
+Core speaks the question like any other answer, keeps the microphone open, and compiles the follow-up templates into a **scoped palette** that exists for the rest of the turn and is never registered. The next utterance is matched against that palette first; a hit is delivered to the **asking Sock directly** — past `ownerOf`, past the chain — as a second `handle()` call carrying `answering = token`.
+
+- The asking Sock **never blocks**. There is no waiting instance: it keeps its half-built state under the token and is called again.
+- A miss on the scoped palette falls through to the global one, which abandons the question (`onAskCancelled(token)`) and runs the command. Without that escape hatch a person stuck inside "Meinst du …?" could not say "stopp".
+- A miss on both leaves the question standing and answers not-understood as usual.
+- The pending ask lives in `DobbyEngine`, not in the Android controller, so the terminal harness and the typed path get a dialogue turn for free — a whole conversation is testable with no device.
+- **It is scoped to the turn, never to wall-clock time.** `endTurn()` cancels it. A question surviving into the next turn would let the wake word plus "ja" three minutes later fire whatever was half-built.
+- Two bounds: `MAX_CLARIFY_ROUNDS` still counts unmatched utterances, and `MAX_ASK_DEPTH` (2) bounds questions that follow answers, so a buggy Sock cannot interrogate the room.
+
+Contract and copy rules: [`socks.specs/README.md` §5](socks.specs/README.md).
+
 ### 3.5 Registry & startup
 
 1. Socks are declared in one list (`DobbySocks.all`) — no reflection, no dynamic loading in v1.
@@ -236,7 +254,8 @@ Sock-specific dependencies (Spotify SDKs, etc.) are declared in the Sock's own s
 - Three stages, of which only the last is per-wake-word: melspectrogram → frozen Google speech-embedding backbone → a small classifier head. Adding a second wake word later is another ~200 KB head on the same backbone, not another pipeline.
 - On detection: **acknowledge**, wake screen (§7.2), switch pipeline state `LISTENING` — and **take the detector off the audio stream** until the turn ends (§2 invariant 4). Command audio is not wake-word audio, and a detector left running through the utterance and through Dobby's spoken answer is one threshold away from a panel that wakes itself.
 - **How it acknowledges is a setting, because it cannot be a default.** Between the wake word firing and the panel having anything to show there is a second in which the only honest question is "did it hear me?", and it has to be answered before then. *How* is not a question code can settle: a kitchen at midday wants a sound, a bedroom at half past five in the morning is exactly where a sound is the reason a thing gets unplugged. So `ListenCue` offers three: **Vibrieren** (one 80 ms pulse at full amplitude — the default, silent to the room and unmistakable through the bracket), **Ton** (an 80 ms pip; the only one that carries across a room), **Nichts** (the screen coming on is the acknowledgement). Chosen in settings, stored by name, read on the audio thread at the moment of detection.
-- **Five seconds to start talking.** The microphone does not stay open for the ten-second cap waiting for a voice that is not coming: a wake word that fired at the television is the common case, not the rare one. No speech inside the window and the turn ends, the wake word goes back on the stream, and the panel is asleep again — the same window, and the same ending, as the not-understood retry in §5.2. It is a deadline on *starting*, so a slow sentence is never cut off by it.
+- **Five seconds to start talking.** The microphone does not stay open for the ten-second cap waiting for a voice that is not coming: a wake word that fired at the television is the common case, not the rare one. No speech inside the window and the turn ends, the wake word goes back on the stream, and the panel is asleep again. It is a deadline on *starting*, so a slow sentence is never cut off by it.
+- **One wake word, as many instructions as the conversation needs.** The window reopens after *everything Dobby handled*, not just after a question or a buzz: "wie spät ist es", then "stell einen Timer auf zehn Minuten", without saying the name again. That is the difference between talking to a panel and operating it, and it costs nothing — the turn still ends the moment the room goes quiet for five seconds. Three things end one early: **silence**, **`SockResult.Ended`** — a Sock saying that what it just answered was a finished sentence, "Gute Nacht", so holding the microphone open would be a panel that did not take the hint — and **three utterances nothing could match**, which is also what ends a turn that a television rather than a person is feeding. A question asked back (`SockResult.Asked`, §3) widens the window to eight seconds until it is answered, because the pause before a reply is somebody reading the choice back to themselves.
 - **Verify before trusting it.** A wake word trained purely on synthetic speech is the one component here whose quality cannot be predicted from the code. Measure two things on the real device in the real room: false rejects (say "Hey Dobby" 50 times, count misses) and false accepts (leave it running through an evening of normal conversation and music, count spurious wakes). Tune the detection threshold from those numbers, not from a feeling.
 
 ### 5.2 STT (sherpa-onnx + Parakeet, VAD-endpointed)

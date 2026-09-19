@@ -17,7 +17,7 @@ This file defines what a Sock is and how to write its spec. One spec file per So
 | **shared** | optional `SharedSubscription`s — participation in a dispatch chain (§4) |
 | **handler** | `suspend fun handle(invocation): SockResult` |
 | **activity** | `fun activityFor(invocation): SockActivity` — ranks it in the chain (§4) |
-| **lifecycle** | optional `onStart(ctx)` / `onStop()` |
+| **lifecycle** | optional `onStart(ctx)` / `onStop()`, plus `onAskCancelled(token)` — a question of its own that will never be answered (§5) |
 | **status** | `Ready` \| `Degraded(reason)` \| `Unavailable(reason)` — surfaced in settings UI |
 | **dashboard** | optional Compose card for the wall panel |
 | **config** | optional settings, stored namespaced under the Sock id |
@@ -29,7 +29,7 @@ This file defines what a Sock is and how to write its spec. One spec file per So
 - Hold screen wake locks. Ask `ctx.screen` instead.
 - Start sustained audio playback without requesting focus from `ctx.playback`.
 - Reach into another Sock. Cross-Sock effects happen only through `PlaybackCoordinator` / `ScreenController`.
-- Block. `handle()` runs under a timeout; long work belongs in `ctx.coroutineScope` with a `Deferred` result.
+- Block. `handle()` runs under a timeout; long work belongs in `ctx.coroutineScope` with a `Deferred` result. **This includes waiting for an answer to a question**: a Sock that asks something returns `Asked` and keeps its half-built state under the token (§5). Core calls `handle()` a second time with the answer. There is no waiting instance and nothing to block on.
 
 If a Sock needs something not on `SockContext`, that is a core change and a plan change — not a local workaround.
 
@@ -64,7 +64,59 @@ Rules for a subscribing Sock:
 
 The catalog and every subscription is specified in [shared-commands.specs.md](shared-commands.specs.md).
 
-## 5. Template DSL (Tier 1)
+## 5. Follow-up questions
+
+Some utterances are not ambiguous about *who* should act (§4) but about *what was said*. "Stell einen Timer auf zehn" — ten what? "Spiele Stairway to Heaven" — the song or the live version? A Sock in that position has one thing it needs and no way to guess it.
+
+Such a Sock answers with a **question** instead of a statement:
+
+```kotlin
+SockResult.Asked(
+    text = "10 was — Sekunden, Minuten oder Stunden?",
+    follow = FollowUp(
+        commandId = "clock.set_timer",          // must be a command of the asking Sock
+        templates = patterns("{unit:enum}", "(in|auf|für) {unit:enum}"),
+        params = listOf(ParamSpec("unit", ParamType.Enumeration(TimerUnit.SPOKEN))),
+        token = "unit-7",                        // opaque handle on the half-built state
+    ),
+)
+```
+
+`Asked` is spoken exactly like `Spoken`. What is different is what core does afterwards: it keeps the microphone open and compiles `templates` into a **scoped palette** that exists for the rest of the turn and is never registered.
+
+### The answer is a second `handle()` call
+
+The asking Sock does **not** block waiting for input (§2). It returns, keeping whatever it had half-built under `token`, and core invokes it again:
+
+```kotlin
+CommandInvocation(commandId = "clock.set_timer", params = {unit: "minuten"}, answering = "unit-7")
+```
+
+`answering` is the token, or null for a fresh command. The Sock looks up what it stashed and finishes the job exactly as if everything had been said at once. An answer may itself be an `Asked` — a second question — bounded by `MAX_ASK_DEPTH` (2).
+
+The answer is routed **straight back to the Sock that asked**, past the owner lookup and past the chain. An answer belongs to whoever asked it, not to whoever the command id would ordinarily resolve to.
+
+### How the next utterance is resolved
+
+1. **Scoped palette first.** A hit becomes the answer.
+2. **Global palette second.** A hit is an ordinary command: the question is abandoned, `onAskCancelled(token)` fires, and the command runs. This is not optional — without it somebody stuck inside "Meinst du …?" could say nothing, not "stopp" and not "lauter", that got them out of it, and the panel would be a trap.
+3. **Neither.** The question stands, the utterance is not-understood as usual, and the retry loop gives them another go at it.
+
+### Scoped, so the rules are different
+
+Inside a scoped palette a bare `{text}` slot is legal, although §6 rejects it everywhere else. That rule exists because a *global* template matching every utterance swallows the whole palette; these templates are tried only while a question is open, against the one utterance that answers it. "Wie soll der Timer heißen?" wants to hear whatever comes back.
+
+Nothing is registered, so a follow-up template can never collide with a global one and is never part of the Tier 1 collision gate (§6).
+
+### The lifetime is the turn, never the wall clock
+
+A pending question dies when the turn ends — on silence, on a Sock ending the conversation, or on the clarify bound. It must never survive into the next turn: the wake word plus "ja" three minutes later would otherwise fire whatever was half-built when the conversation was abandoned, which is exactly the class of surprise a wall panel in a kitchen must not have.
+
+Whenever a question will not be answered, its Sock is told: `onAskCancelled(token)`, exactly once, so it can free what it reserved. It must not speak and must not block.
+
+A question that cannot hold the floor — templates that do not compile, a `commandId` belonging to another Sock, `MAX_ASK_DEPTH` exceeded — is logged, cancelled, and **still spoken**, as a plain `Spoken`. The person hears the question and can say the whole thing again; what they do not get is the open microphone.
+
+## 6. Template DSL (Tier 1)
 
 Templates are German, lowercase, written against the **normalized** transcript (lowercased, punctuation stripped, whitespace collapsed, German number words → digits).
 
@@ -98,7 +150,7 @@ A slot capture always beats a static param. Use this rather than re-parsing Germ
 
 **Exhaustiveness matters.** The registry test asserts no two Socks match the same utterance *for different commands*, so a spec that under-lists its utterances hides a collision until runtime. Templates contributed to the same `shared.*` id are exempt — that overlap is the design.
 
-## 6. Writing a spec file
+## 7. Writing a spec file
 
 Every `<sockId>.specs.md` has these sections, in this order:
 
@@ -121,7 +173,7 @@ Every `<sockId>.specs.md` has these sections, in this order:
 
 Keep German user-facing strings **in the spec**, verbatim. They are product copy, not implementation detail.
 
-## 7. Current Socks
+## 8. Current Socks
 
 | Sock | Spec | Exclusive commands | Chains | Milestone |
 |---|---|---|---|---|

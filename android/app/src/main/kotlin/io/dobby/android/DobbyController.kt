@@ -10,6 +10,7 @@ import io.dobby.core.dispatch.SockHealth
 import io.dobby.core.registry.Introspection
 import io.dobby.core.registry.SockRegistry
 import io.dobby.core.sock.SockContext
+import io.dobby.core.sock.SockLog
 import io.dobby.core.sock.SockResult
 import io.dobby.pipeline.ListenCue
 import io.dobby.pipeline.wakeword.WakeWordOption
@@ -127,6 +128,13 @@ class DobbyController(
                 // utterance Tier 1 could not match, in logcat, ready to be promoted into a
                 // template in the owning Sock's spec.
                 onFallthrough = { Log.i(TAG, "fallthrough: $it") },
+                log = object : SockLog {
+                    override fun debug(message: String) = Unit
+
+                    override fun warn(message: String, cause: Throwable?) {
+                        Log.w(TAG, message, cause)
+                    }
+                },
             )
             summary = "${registry.socks.size} Socks · ${registry.commands.size} Befehle · " +
                 "${registry.palette.entries.size} Vorlagen"
@@ -256,33 +264,65 @@ class DobbyController(
      * for the ten-second hard cap is ten seconds of a panel listening to a room that is not
      * talking to it. Nothing said in the window: the turn ends and the wake word comes back.
      *
-     * A turn is also not always one utterance. An utterance Tier 1 could not match is answered
-     * with two buzzes and the microphone stays open for the same window — which is what
-     * somebody who has just been buzzed at does anyway: say it again, differently, without
-     * waiting to be invited.
+     * A turn is also not one utterance. After anything Dobby actually handled the microphone
+     * stays open for another window, because the common thing after one instruction is a second
+     * one — "wie spät ist es", then "stell einen Timer auf zehn Minuten" — and making somebody
+     * say the wake word between them is the difference between talking to a panel and operating
+     * it. Three things end a turn instead: silence, a Sock that returns [SockResult.Ended]
+     * because what it just said was a finished sentence, and [MAX_CLARIFY_ROUNDS] utterances
+     * nothing could match.
+     *
+     * An utterance Tier 1 could not match is answered with two buzzes and the same open
+     * microphone — which is what somebody who has just been buzzed at does anyway: say it
+     * again, differently, without waiting to be invited.
      *
      * [VoiceIo.endTurn] closes the turn in a `finally`, because the wake word stays off the
      * microphone until it is called and a turn that throws must not leave it off forever.
      */
     fun listen(): Job = scope.launch {
         turn.withLock {
+            // A question left open by the typed path belongs to that exchange, not to this
+            // one. Somebody walking up and saying the wake word has not agreed to answer it.
+            engine?.endTurn()
             try {
                 var attempts = 0
+                var window = SPEECH_WINDOW
                 while (true) {
                     transcript.beginListening()
-                    val heard = pipeline.listen(SPEECH_WINDOW)
+                    val heard = pipeline.listen(window)
                     if (heard.isNullOrBlank()) {
                         transcript.abandonListening()
                         return@withLock
                     }
                     transcript.heard(heard)
-                    if (respondTo(heard)) return@withLock
+                    when (respondTo(heard)) {
+                        // Handled, and the floor stays open for whatever comes next. Back to
+                        // the ordinary window: nothing is pending, so this is somebody starting
+                        // a sentence again rather than answering a question.
+                        TurnOutcome.CONTINUE -> window = SPEECH_WINDOW
 
-                    // A television is a speaker that never runs out of unmatched sentences, and
-                    // without a bound it would hold the microphone open all evening.
-                    if (++attempts >= MAX_CLARIFY_ROUNDS) return@withLock
+                        // A question was asked, so the rest of the turn is somebody thinking
+                        // about it. The wider window stays until it is answered: an unmatched
+                        // answer leaves the question standing, and a person who is still being
+                        // asked something has not been given less time to reply.
+                        TurnOutcome.AWAITING_ANSWER -> window = ANSWER_WINDOW
+
+                        // A television is a speaker that never runs out of unmatched sentences,
+                        // and without a bound it would hold the microphone open all evening.
+                        // It is also what ends a turn the room has stopped taking part in:
+                        // continuous listening renews on speech nobody can place at most twice.
+                        TurnOutcome.RETRY -> if (++attempts >= MAX_CLARIFY_ROUNDS) return@withLock
+
+                        // The Sock said the conversation is over. Taking it at its word is the
+                        // whole point of the result existing.
+                        TurnOutcome.CLOSED -> return@withLock
+                    }
                 }
             } finally {
+                // Both, in this order and in a finally: a question that outlived its turn would
+                // be answered by whatever the next wake word picked up (`socks.specs/README.md`
+                // §5), and the wake word stays off the microphone until endTurn() puts it back.
+                engine?.endTurn()
                 pipeline.endTurn()
             }
         }
@@ -294,6 +334,12 @@ class DobbyController(
      * Not a debug affordance: it is how Dobby is usable while the model downloads, on a device
      * with no German voice, and in a room too loud to talk in. It goes through the identical
      * path — normalize, match, dispatch, speak.
+     *
+     * A question asked here holds the floor for the *next typed line* rather than for a window
+     * of time: there is no microphone open and no wake word to come back to, so there is no
+     * turn boundary to hang an expiry on. [listen] clears it before opening the microphone, so
+     * a question left dangling in the text box can never be answered by whatever somebody says
+     * out loud an hour later.
      */
     fun submit(text: String): Job = scope.launch {
         if (text.isBlank()) return@launch
@@ -303,15 +349,29 @@ class DobbyController(
         }
     }
 
+    /** What one utterance did to the turn it was spoken in. */
+    private enum class TurnOutcome {
+        /** Handled. The microphone stays open for the next instruction. */
+        CONTINUE,
+
+        /** Not understood. The microphone stays open for another go at the same thing. */
+        RETRY,
+
+        /** Dobby asked something back, and core is holding the floor for the reply. */
+        AWAITING_ANSWER,
+
+        /** A Sock ended the conversation. Back to the wake word, now. */
+        CLOSED,
+    }
+
     /**
-     * Dispatches one utterance and delivers the answer. Returns whether it was understood —
-     * which is what decides if the turn is over or if the microphone stays open for another go.
+     * Dispatches one utterance and delivers the answer, and says what that did to the turn.
      *
      * "Understood" means Tier 1 matched a command, not that the command succeeded. A timer that
      * fails to start is an answer worth speaking; an utterance nothing claimed is not.
      */
-    private suspend fun respondTo(utterance: String): Boolean {
-        val dobby = engine ?: return true
+    private suspend fun respondTo(utterance: String): TurnOutcome {
+        val dobby = engine ?: return TurnOutcome.CLOSED
         thinking.value = true
         val outcome = try {
             dobby.handle(utterance)
@@ -326,13 +386,22 @@ class DobbyController(
             pipeline.buzz()
             val text = (outcome.result as? SockResult.Spoken)?.text ?: DobbyEngine.NOT_UNDERSTOOD
             transcript.said(text, failed = true)
-            return false
+            return TurnOutcome.RETRY
         }
 
         when (val result = outcome.result) {
             is SockResult.Spoken -> {
                 transcript.said(result.text, outcome.detailLine())
                 pipeline.say(result.text)
+            }
+
+            // say() suspends until the sentence has finished playing, so the microphone is
+            // reopened by the loop above only once Dobby has stopped talking — otherwise the
+            // first thing it would hear answering its question is itself.
+            is SockResult.Asked -> {
+                transcript.said(result.text, outcome.detailLine())
+                pipeline.say(result.text)
+                return TurnOutcome.AWAITING_ANSWER
             }
 
             is SockResult.Failed -> {
@@ -348,9 +417,22 @@ class DobbyController(
             // The Sock will speak later, through announce().
             SockResult.Deferred -> outcome.detailLine()?.let { transcript.note(it) }
 
+            // The one result that closes the microphone. Spoken first if there is anything to
+            // say — "Gute Nacht" is still an answer, it is just the last one.
+            is SockResult.Ended -> {
+                val text = result.text
+                if (text == null) {
+                    outcome.detailLine()?.let { transcript.note(it) }
+                } else {
+                    transcript.said(text, outcome.detailLine())
+                    pipeline.say(text)
+                }
+                return TurnOutcome.CLOSED
+            }
+
             SockResult.NotForMe -> transcript.said("Das kann ich gerade nicht.", outcome.detailLine(), failed = true)
         }
-        return true
+        return TurnOutcome.CONTINUE
     }
 
     private fun phaseOf(voice: VoiceState, isThinking: Boolean): Phase = when {
@@ -394,6 +476,17 @@ class DobbyController(
          * sentence is never cut off by it.
          */
         val SPEECH_WINDOW: Duration = 5.seconds
+
+        /**
+         * The same deadline, for somebody who was just asked a question.
+         *
+         * [SPEECH_WINDOW] is tuned for "start talking after a wake word", where the person
+         * already knows what they came to say. "Zehn was — Sekunden, Minuten oder Stunden?"
+         * is the opposite situation: the panel interrupted with a choice, and the pause
+         * before the reply is the person reading it back to themselves. Cutting that off
+         * after five seconds turns a question into a dead end, so an answer gets longer.
+         */
+        val ANSWER_WINDOW: Duration = 8.seconds
 
         /**
          * How many unmatched utterances one turn will sit through: the first, and two retries.

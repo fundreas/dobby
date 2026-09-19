@@ -24,6 +24,9 @@ class FixtureSock(
 
     val handled: MutableList<String> = mutableListOf()
 
+    /** Every token core told this Sock it would never get an answer for. */
+    val cancelled: MutableList<String> = mutableListOf()
+
     /** Set by tests that assert the no-I/O contract for INACTIVE Socks. */
     var performedIo: Boolean = false
         private set
@@ -33,6 +36,10 @@ class FixtureSock(
     override suspend fun handle(invocation: CommandInvocation): SockResult {
         handled += invocation.commandId
         return handler(invocation)
+    }
+
+    override suspend fun onAskCancelled(token: String) {
+        cancelled += token
     }
 
     fun markIo() {

@@ -247,4 +247,95 @@ class ChainDispatcherTest {
 
         assertTrue(outcome.result is SockResult.Failed)
     }
+
+    // ---- answers ----------------------------------------------------------------------------
+
+    @Test
+    fun `an answer reaches the Sock that asked, not the Sock that owns the id`() = runTest {
+        // Two Socks, and the command id belongs to the one that did not ask. Ordinary dispatch
+        // would resolve the owner and deliver the answer to a Sock with no idea what question
+        // it is answering — so the answer path skips ownerOf entirely.
+        val owner = FixtureSock(
+            id = "radio",
+            commands = listOf(ExclusiveCommandSpec("radio.play", patterns("radio"), "test")),
+            handler = { SockResult.Spoken("owner") },
+        )
+        val asker = FixtureSock(
+            id = "spotify",
+            commands = listOf(ExclusiveCommandSpec("spotify.play_music", patterns("musik"), "test")),
+            handler = { SockResult.Spoken("asker") },
+        )
+        val dispatcher = dispatcher(owner, asker)
+
+        val outcome = dispatcher.dispatchAnswer(
+            asker,
+            CommandInvocation("radio.play", answering = "tok-1"),
+        )
+
+        assertEquals(SockResult.Spoken("asker"), outcome.result)
+        assertEquals("spotify", outcome.consumedBy)
+        assertEquals(emptyList(), owner.handled)
+        assertEquals("answering tok-1", outcome.trace.single().detail)
+    }
+
+    @Test
+    fun `an answer onto a shared id does not walk the chain`() = runTest {
+        // Even a `shared.*` id goes straight back to the asker. The chain decides who a
+        // *command* belongs to; an answer already has an addressee.
+        val asker = FixtureSock(
+            id = "clock",
+            shared = listOf(SharedSubscription(SharedCommands.STOP, priority = 1)),
+            activity = { SockActivity.INACTIVE },
+            handler = { SockResult.Spoken("asker") },
+        )
+        val other = subscriber("radio", priority = 100, activity = SockActivity.ACTIVE)
+
+        val outcome = dispatcher(other, asker)
+            .dispatchAnswer(asker, stop.copy(answering = "tok-1"))
+
+        assertEquals("clock", outcome.consumedBy)
+        assertEquals(emptyList(), other.handled, "the chain was never offered the answer")
+    }
+
+    @Test
+    fun `an asker that throws degrades exactly like any other handler`() = runTest {
+        val asker = FixtureSock(
+            id = "spotify",
+            commands = listOf(ExclusiveCommandSpec("spotify.play_music", patterns("musik"), "test")),
+            handler = { error("app remote exploded") },
+        )
+        val dispatcher = dispatcher(asker)
+
+        val outcome = dispatcher.dispatchAnswer(
+            asker,
+            CommandInvocation("spotify.play_music", answering = "tok-1"),
+        )
+
+        assertTrue(outcome.result is SockResult.Failed)
+        assertEquals(StepOutcome.FAILED, outcome.trace.single().outcome)
+        assertTrue(outcome.trace.single().detail!!.startsWith("answering tok-1: "))
+        assertTrue(dispatcher.health.reasonFor("spotify")!!.contains("app remote exploded"))
+    }
+
+    @Test
+    fun `an asker that hangs times out under the same deadline`() = runTest {
+        val asker = FixtureSock(
+            id = "spotify",
+            commands = listOf(ExclusiveCommandSpec("spotify.play_music", patterns("musik"), "test")),
+            handler = {
+                delay(60.seconds)
+                SockResult.Silent
+            },
+        )
+        val dispatcher = Dispatcher(SockRegistry.buildOrThrow(listOf(asker)), timeout = 5.seconds)
+
+        val outcome = dispatcher.dispatchAnswer(
+            asker,
+            CommandInvocation("spotify.play_music", answering = "tok-1"),
+        )
+
+        assertEquals(StepOutcome.TIMED_OUT, outcome.trace.single().outcome)
+        assertEquals("answering tok-1", outcome.trace.single().detail)
+        assertEquals("Zeitüberschreitung", dispatcher.health.reasonFor("spotify"))
+    }
 }

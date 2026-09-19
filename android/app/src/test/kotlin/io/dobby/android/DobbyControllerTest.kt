@@ -33,7 +33,13 @@ import kotlin.time.Duration.Companion.seconds
 class DobbyControllerTest {
 
     private class FakeVoice(vararg utterances: String?) : VoiceIo {
-        /** What the microphone returns, one per call to [listen]; the last one repeats. */
+        /**
+         * What the microphone returns, one per call to [listen].
+         *
+         * A used-up script is silence, not the last line on repeat: a turn stays open after
+         * anything Dobby handled, so a room that has stopped talking has to be expressible or
+         * no test of that would ever finish. Repetition is written out where a test wants it.
+         */
         private val script = utterances.toMutableList()
 
         var heard: String?
@@ -55,6 +61,14 @@ class DobbyControllerTest {
 
         /** One entry per [listen], holding the deadline it was given for speech to start. */
         val windows: MutableList<Duration> = mutableListOf()
+
+        /**
+         * One entry per [listen]: everything already spoken when the microphone opened.
+         *
+         * The only way to assert the ordering that keeps Dobby from hearing itself — a
+         * question has to be out of the speaker before the mic comes back.
+         */
+        val spokenBeforeListen: MutableList<List<String>> = mutableListOf()
 
         override var listenCue: ListenCue = ListenCue.DEFAULT
 
@@ -117,11 +131,12 @@ class DobbyControllerTest {
         override suspend fun listen(openFor: Duration): String? {
             turnOpen = true
             windows += openFor
+            spokenBeforeListen += spoken.toList()
             _state.value = VoiceState.Listening(speaking = false)
             _state.value = VoiceState.Listening(speaking = true)
             _state.value = VoiceState.Transcribing
             _state.value = VoiceState.Ready
-            return if (script.size > 1) script.removeAt(0) else script.firstOrNull()
+            return if (script.isEmpty()) null else script.removeAt(0)
         }
 
         override fun endTurn() {
@@ -259,7 +274,7 @@ class DobbyControllerTest {
     @Test
     fun `the panel gives up rather than hold the microphone open all evening`() = runTest {
         // A television is a speaker that never runs out of unmatched sentences.
-        val voice = FakeVoice("mach mir ein sandwich")
+        val voice = FakeVoice("mach mir ein sandwich", "mach mir ein sandwich", "mach mir ein sandwich")
         val dobby = controller(voice)
         dobby.start()
 
@@ -268,6 +283,87 @@ class DobbyControllerTest {
         assertEquals(3, voice.buzzes)
         assertEquals(listOf(5.seconds, 5.seconds, 5.seconds), voice.windows)
         assertEquals(emptyList(), voice.spoken)
+        assertEquals(listOf(true), voice.turnsEnded)
+    }
+
+    @Test
+    fun `a question is spoken before the microphone reopens, and the answer lands`() = runTest {
+        // "Stell einen Timer auf zehn" is missing only its unit. Clock asks; core keeps the
+        // floor; the next utterance goes straight back to Clock. One turn, two utterances.
+        val voice = FakeVoice("stell einen Timer auf zehn", "Minuten")
+        val dobby = controller(voice)
+        dobby.start()
+
+        dobby.listen().join()
+
+        assertEquals(
+            listOf("10 was — Sekunden, Minuten oder Stunden?", "Timer läuft: 10 Minuten."),
+            voice.spoken,
+        )
+        // say() suspends until the sentence has finished playing, so the question is out of the
+        // speaker before the microphone is open again — otherwise Dobby answers itself.
+        assertEquals(listOf("10 was — Sekunden, Minuten oder Stunden?"), voice.spokenBeforeListen[1])
+
+        // Five seconds to start talking after the wake word; eight to answer a question,
+        // because the pause before a reply is the person reading the choice back to themselves;
+        // and five again once the answer has landed and nothing is pending any more.
+        assertEquals(listOf(5.seconds, 8.seconds, 5.seconds), voice.windows)
+        assertEquals(0, voice.buzzes)
+        // Both utterances belong to one turn — the wake word goes back on the stream once.
+        assertEquals(listOf(true), voice.turnsEnded)
+    }
+
+    @Test
+    fun `nobody answering the question ends the turn instead of leaving it open`() = runTest {
+        val voice = FakeVoice("stell einen Timer auf zehn")
+        val dobby = controller(voice)
+        dobby.start()
+
+        dobby.listen().join()
+
+        assertEquals(listOf("10 was — Sekunden, Minuten oder Stunden?"), voice.spoken)
+        assertEquals(listOf(5.seconds, 8.seconds), voice.windows)
+        assertEquals(listOf(true), voice.turnsEnded)
+
+        // The question died with the turn: the next one starts from nothing, and "Minuten" on
+        // its own is not a command Dobby knows.
+        voice.heard = "Minuten"
+        dobby.listen().join()
+        assertEquals(1, voice.buzzes)
+    }
+
+    @Test
+    fun `an answer nobody could place leaves the question standing, and costs a clarify round`() =
+        runTest {
+            val voice = FakeVoice("stell einen Timer auf zehn", "mach mir ein Sandwich", "Minuten")
+            val dobby = controller(voice)
+            dobby.start()
+
+            dobby.listen().join()
+
+            assertEquals(1, voice.buzzes, "the unmatched answer is buzzed at like any other")
+            assertEquals(
+                listOf("10 was — Sekunden, Minuten oder Stunden?", "Timer läuft: 10 Minuten."),
+                voice.spoken,
+                "the question survived, so the third utterance still answered it",
+            )
+            // The wider window stays while the question does, and goes back to the ordinary
+            // one for the utterance after the answer.
+            assertEquals(listOf(5.seconds, 8.seconds, 8.seconds, 5.seconds), voice.windows)
+        }
+
+    @Test
+    fun `saying something else escapes the question`() = runTest {
+        // A panel that can only be answered is a trap. "Wie spät ist es" gets through, and the
+        // half-built timer goes with it.
+        val voice = FakeVoice("stell einen Timer auf zehn", "wie spät ist es")
+        val dobby = controller(voice)
+        dobby.start()
+
+        dobby.listen().join()
+
+        val answer = uiState(dobby).messages.last { it.voice == Voice.DOBBY }
+        assertTrue(answer.text.startsWith("Es ist"), "the escape was answered: ${answer.text}")
         assertEquals(listOf(true), voice.turnsEnded)
     }
 

@@ -32,7 +32,7 @@ class TemplateSyntaxException(source: String, message: String) :
     IllegalArgumentException("invalid template \"$source\": $message")
 
 /**
- * Parses the template DSL documented in `socks.specs/README.md` §5.
+ * Parses the template DSL documented in `socks.specs/README.md` §6.
  *
  * ```
  * seq   := item*

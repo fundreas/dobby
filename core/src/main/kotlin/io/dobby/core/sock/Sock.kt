@@ -49,4 +49,10 @@ interface Sock {
      * [SockActivity.INACTIVE].
      */
     suspend fun handle(invocation: CommandInvocation): SockResult
+
+    /**
+     * A pending question will not be answered: the turn ended, or the user said something else.
+     * Free whatever [SockResult.Asked] reserved. Must not speak and must not block.
+     */
+    suspend fun onAskCancelled(token: String) {}
 }
