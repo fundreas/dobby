@@ -54,6 +54,6 @@ class DeviSock(
 
     companion object {
         const val HELLO: String = "devi.hello"
-        const val GREETING: String = "hello Devi"
+        const val GREETING: String = "Hallo, Meister"
     }
 }

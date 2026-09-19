@@ -230,7 +230,7 @@ class DobbyControllerTest {
 
         val note = uiState(dobby).messages.firstOrNull { it.voice == Voice.SYSTEM }
         assertNotNull(note, "the development Sock's output should be visible")
-        assertEquals("hello Devi", note.text)
+        assertEquals("Hallo, Meister", note.text)
     }
 
     @Test

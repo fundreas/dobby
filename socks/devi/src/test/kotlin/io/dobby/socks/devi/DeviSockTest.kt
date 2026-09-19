@@ -18,7 +18,7 @@ class DeviSockTest {
     fun `hello prints the greeting`() = runTest {
         val result = devi.handle(CommandInvocation(DeviSock.HELLO))
 
-        assertEquals(listOf("hello Devi"), printed)
+        assertEquals(listOf("Hallo, Meister"), printed)
         // Silent, not Spoken: the printing is the feedback.
         assertEquals(SockResult.Silent, result)
     }
@@ -46,7 +46,7 @@ class DeviEngineTest {
 
         assertEquals("hello", outcome.normalized)
         assertEquals(DeviSock.HELLO, outcome.invocation?.commandId)
-        assertEquals(listOf("hello Devi"), printed)
+        assertEquals(listOf("Hallo, Meister"), printed)
         assertEquals(SockResult.Silent, outcome.result)
     }
 
@@ -55,13 +55,13 @@ class DeviEngineTest {
         for (utterance in listOf("hello", "Hallo Devi", "hello devi", "Hi Devi")) {
             engine.handle(utterance)
         }
-        assertEquals(List(4) { "hello Devi" }, printed)
+        assertEquals(List(4) { "Hallo, Meister" }, printed)
     }
 
     @Test
     fun `tolerates an STT slip in the keyword`() = runTest {
         engine.handle("hallo devi")
-        assertEquals(listOf("hello Devi"), printed)
+        assertEquals(listOf("Hallo, Meister"), printed)
     }
 
     @Test
