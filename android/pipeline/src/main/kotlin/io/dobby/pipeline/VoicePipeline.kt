@@ -83,6 +83,8 @@ class VoicePipeline(
     private val scope: CoroutineScope,
     /** The wake phrase id chosen in settings, or null for the catalogue default. */
     private var selectedWakeWord: String? = null,
+    /** How the wake word is acknowledged, as chosen in settings. */
+    initialCue: ListenCue = ListenCue.DEFAULT,
     modelRoot: File = context.filesDir,
     private val utteranceTimeout: Duration = UTTERANCE_TIMEOUT,
 ) : VoiceIo {
@@ -208,6 +210,8 @@ class VoicePipeline(
 
     override val selectedWakeWordId: String? get() = selectedWakeWord
 
+    override var listenCue: ListenCue = initialCue
+
     /**
      * Switches the phrase the panel answers to, downloading the new head if this is its first use.
      *
@@ -271,10 +275,13 @@ class VoicePipeline(
 
     private fun onWakeWord(score: Float) {
         // On the audio thread: acknowledge now, and hand the turn to whoever is collecting.
-        // Doing the work here would block the microphone. Both acknowledgements return
-        // immediately — the beep for the room, the tick for whoever is standing at the panel.
-        earcon.play()
-        haptics.listening()
+        // Doing the work here would block the microphone. Whichever cue is chosen returns
+        // immediately; NONE is a real choice and not a missing branch.
+        when (listenCue) {
+            ListenCue.VIBRATE -> haptics.listening()
+            ListenCue.TONE -> earcon.play()
+            ListenCue.NONE -> Unit
+        }
         _wakeWords.tryEmit(score)
     }
 
@@ -292,13 +299,13 @@ class VoicePipeline(
      * which is one detection threshold away from the panel waking itself in a loop.
      *
      * [openFor] is the fourth way to end early: a deadline on the *start* of speech rather than
-     * on its end, for the follow-up window nobody asked for (see [VoiceIo.listen]). Once a voice
-     * is heard it stops applying and the utterance ends the way every other one does.
+     * on its end (see [VoiceIo.listen]). Once a voice is heard it stops applying and the
+     * utterance ends the way every other one does.
      *
      * Returns null when nothing was said, the mic is unavailable, or the recogniser heard only
      * noise — all three are the same thing to the caller: no turn to take.
      */
-    override suspend fun listen(openFor: Duration?): String? = turn.withLock {
+    override suspend fun listen(openFor: Duration): String? = turn.withLock {
         val recognizer = this.recognizer ?: return@withLock null
         val detector = vad ?: return@withLock null
 
@@ -314,7 +321,7 @@ class VoicePipeline(
             detachWakeWord()
             // A window that expires leaves `heardSpeech` false, which the check below already
             // treats as "no turn to take" — so there is one way out of a silent room, not two.
-            if (openFor != null && withTimeoutOrNull(openFor) { capture.awaitSpeech() } != true) {
+            if (withTimeoutOrNull(openFor) { capture.awaitSpeech() } != true) {
                 capture.flush()
             } else {
                 withTimeoutOrNull(utteranceTimeout) { capture.await() } ?: capture.flush()

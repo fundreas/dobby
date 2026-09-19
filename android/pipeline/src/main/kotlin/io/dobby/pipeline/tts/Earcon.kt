@@ -18,10 +18,10 @@ class Earcon(private val volumePercent: Int = DEFAULT_VOLUME) : Closeable {
 
     private var generator: ToneGenerator? = null
 
-    /** Plays the beep. Returns immediately; the tone finishes on its own. */
+    /** Plays the pip. Returns immediately; the tone finishes on its own. */
     fun play() {
         val tone = generator ?: create() ?: return
-        tone.startTone(ToneGenerator.TONE_PROP_BEEP, DURATION_MS)
+        tone.startTone(ToneGenerator.TONE_CDMA_PIP, DURATION_MS)
     }
 
     private fun create(): ToneGenerator? = try {
@@ -40,7 +40,16 @@ class Earcon(private val volumePercent: Int = DEFAULT_VOLUME) : Closeable {
     }
 
     private companion object {
-        const val DEFAULT_VOLUME = 60
-        const val DURATION_MS = 120
+        const val DEFAULT_VOLUME = 70
+
+        /**
+         * A blip, not a beep.
+         *
+         * `TONE_PROP_BEEP` at 120 ms is the sound a microwave makes and it reads as an *alert* —
+         * something has happened, attend to it. What this has to say is much smaller: the
+         * microphone is open, carry on talking. A short pip says that and then gets out of the
+         * way of the sentence following it.
+         */
+        const val DURATION_MS = 80
     }
 }

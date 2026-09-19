@@ -2,6 +2,7 @@ package io.dobby.android
 
 import android.content.Context
 import androidx.core.content.edit
+import io.dobby.pipeline.ListenCue
 
 /**
  * The panel's own settings, as opposed to a Sock's.
@@ -31,8 +32,20 @@ class Settings(context: Context) {
         get() = preferences.getBoolean(KEY_HANDS_FREE, true)
         set(value) = preferences.edit { putBoolean(KEY_HANDS_FREE, value) }
 
+    /**
+     * How the panel acknowledges the wake word: a buzz, a pip, or nothing.
+     *
+     * Stored by name rather than by ordinal, so reordering the enum cannot silently change
+     * what somebody chose. An unreadable value falls back to the default instead of throwing —
+     * a settings file is the one input that can come back from an older version of the app.
+     */
+    var listenCue: ListenCue
+        get() = ListenCue.of(preferences.getString(KEY_LISTEN_CUE, null))
+        set(value) = preferences.edit { putString(KEY_LISTEN_CUE, value.name) }
+
     private companion object {
         const val KEY_WAKE_WORD = "wakeword.id"
         const val KEY_HANDS_FREE = "wakeword.armed"
+        const val KEY_LISTEN_CUE = "listen.cue"
     }
 }

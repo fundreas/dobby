@@ -95,6 +95,7 @@ class MainActivity : ComponentActivity() {
                                     onBack = { settingsOpen = false },
                                     onHandsFree = { connected.controller.setHandsFree(it) },
                                     onSelect = { connected.controller.selectWakeWord(it) },
+                                    onListenCue = { connected.controller.setListenCue(it) },
                                 )
                             } else {
                                 ChatScreen(

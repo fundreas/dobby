@@ -40,6 +40,15 @@ interface VoiceIo {
     /** The chosen phrase's id, or null while the catalogue default is in use. */
     val selectedWakeWordId: String?
 
+    /**
+     * How the panel acknowledges the wake word. Settable, and takes effect on the next one.
+     *
+     * A plain property rather than a flow: nothing in the pipeline reacts to it, it is read
+     * once per wake word on the audio thread, and the screen that changes it is the screen
+     * that shows it.
+     */
+    var listenCue: ListenCue
+
     /** Switches the active phrase, fetching its classifier the first time it is chosen. */
     suspend fun selectWakeWord(id: String)
 
@@ -55,16 +64,14 @@ interface VoiceIo {
      * One utterance. Null when nothing was said or the microphone never opened.
      *
      * [openFor] caps how long the microphone waits for someone to *start* talking; once a voice
-     * is heard the utterance runs to its own end as usual. Null means no separate deadline,
-     * which is the right answer for a turn somebody just asked for by pressing the button or
-     * saying the wake word. The follow-up window after a not-understood buzz passes a few
-     * seconds, because nobody asked for that one — it is Dobby holding the microphone open on
-     * the chance that the sentence is about to be repeated.
+     * is heard the utterance runs to its own end as usual. It is what closes the microphone
+     * again after a wake word that fired at the television, and what ends the follow-up window
+     * when a repeated sentence never comes.
      *
      * The wake word comes off the microphone stream for the duration and stays off until
      * [endTurn] — command audio is not wake-word audio (`dobby-plan.md` §2, invariant 4).
      */
-    suspend fun listen(openFor: Duration? = null): String?
+    suspend fun listen(openFor: Duration): String?
 
     /**
      * The turn that [listen] began is finished: dispatched, answered, spoken. Re-arms the wake

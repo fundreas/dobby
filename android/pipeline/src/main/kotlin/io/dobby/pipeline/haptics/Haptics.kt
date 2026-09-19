@@ -29,13 +29,13 @@ class Haptics(context: Context) {
             ?.takeIf { it.hasVibrator() }
 
     /**
-     * One short tick: the wake word landed and the microphone is open.
+     * One firm pulse: the wake word landed and the microphone is open.
      *
-     * Beside the earcon rather than instead of it. The beep answers "did it hear me?" across a
-     * room; the tick answers it for whoever is standing at the panel, where a beep at
-     * half past five in the morning is the reason people stop using a thing.
+     * At full amplitude and long enough to be felt through a bracket rather than only through
+     * a palm — this is the cue that has to arrive while somebody is still walking towards the
+     * panel, and a polite tick is one nobody notices.
      */
-    fun listening() = play(VibrationEffect.createOneShot(TICK_MS, VibrationEffect.DEFAULT_AMPLITUDE))
+    fun listening() = play(VibrationEffect.createOneShot(LISTENING_MS, MAX_AMPLITUDE))
 
     /** Buzz–pause–buzz: heard you, did not understand you. */
     fun notUnderstood() = play(VibrationEffect.createWaveform(NOT_UNDERSTOOD, NO_REPEAT))
@@ -52,8 +52,11 @@ class Haptics(context: Context) {
     }
 
     private companion object {
-        /** Shorter than one pulse of [NOT_UNDERSTOOD]: a tick, not a buzz. */
-        const val TICK_MS = 40L
+        /** Longer than either pulse of [NOT_UNDERSTOOD], so the two are told apart by length. */
+        const val LISTENING_MS = 80L
+
+        /** `VibrationEffect`'s amplitude scale is 1..255 and exposes no constant for the top. */
+        const val MAX_AMPLITUDE = 255
 
         /** Off, on, off, on — short enough to read as one gesture rather than two events. */
         val NOT_UNDERSTOOD = longArrayOf(0, 60, 90, 60)

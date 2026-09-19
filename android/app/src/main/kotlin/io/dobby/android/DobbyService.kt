@@ -95,7 +95,7 @@ class DobbyService : Service() {
         val settings = Settings(this)
         controller = DobbyController(
             scope = scope,
-            pipeline = VoicePipeline(this, scope, settings.wakeWordId),
+            pipeline = VoicePipeline(this, scope, settings.wakeWordId, settings.listenCue),
             sockContext = { announce -> AndroidSockContext(this, scope, announce) },
             hardware = clockHardware,
             settings = settings,

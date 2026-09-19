@@ -11,6 +11,7 @@ import io.dobby.core.registry.Introspection
 import io.dobby.core.registry.SockRegistry
 import io.dobby.core.sock.SockContext
 import io.dobby.core.sock.SockResult
+import io.dobby.pipeline.ListenCue
 import io.dobby.pipeline.wakeword.WakeWordOption
 import io.dobby.socks.clock.ClockState
 import io.dobby.pipeline.VoiceIo
@@ -44,6 +45,8 @@ data class DobbyUiState(
     /** Everything settings offers, and which of them is active. */
     val wakeWords: List<WakeWordOption> = emptyList(),
     val wakeWordId: String? = null,
+    /** How the panel acknowledges the wake word: a buzz, a pip, or nothing. */
+    val listenCue: ListenCue = ListenCue.DEFAULT,
 )
 
 enum class Phase {
@@ -165,6 +168,7 @@ class DobbyController(
                 wakePhrase = pipeline.wakePhrase,
                 wakeWords = wakeWordOptions,
                 wakeWordId = pipeline.selectedWakeWordId,
+                listenCue = pipeline.listenCue,
             )
         }.stateIn(
             scope,
@@ -213,6 +217,13 @@ class DobbyController(
         listen()
     }
 
+    /** Chooses how the wake word is acknowledged. Takes effect on the next one. */
+    fun setListenCue(cue: ListenCue) {
+        pipeline.listenCue = cue
+        settings?.listenCue = cue
+        refresh.value = refresh.value + 1
+    }
+
     /** Arms or disarms the wake word. */
     fun setHandsFree(enabled: Boolean) {
         if (enabled) pipeline.startHandsFree() else pipeline.stopHandsFree()
@@ -240,10 +251,15 @@ class DobbyController(
      * utterance (`dobby-plan.md` §5.2) — so what the panel shows is the status line: whether
      * the VAD can hear a voice, then that the recogniser is running.
      *
-     * A turn is not always one utterance. An utterance Tier 1 could not match is answered with
-     * two buzzes and the microphone stays open for [CLARIFY_WINDOW] — which is what somebody
-     * who has just been buzzed at does anyway: say it again, differently, without waiting to be
-     * invited. Silence in that window ends the turn and the panel goes back to sleep.
+     * Every utterance in a turn gets [SPEECH_WINDOW] to *begin*. A wake word that fired at the
+     * television is the common case, not the rare one, and a microphone that then stays open
+     * for the ten-second hard cap is ten seconds of a panel listening to a room that is not
+     * talking to it. Nothing said in the window: the turn ends and the wake word comes back.
+     *
+     * A turn is also not always one utterance. An utterance Tier 1 could not match is answered
+     * with two buzzes and the microphone stays open for the same window — which is what
+     * somebody who has just been buzzed at does anyway: say it again, differently, without
+     * waiting to be invited.
      *
      * [VoiceIo.endTurn] closes the turn in a `finally`, because the wake word stays off the
      * microphone until it is called and a turn that throws must not leave it off forever.
@@ -251,13 +267,10 @@ class DobbyController(
     fun listen(): Job = scope.launch {
         turn.withLock {
             try {
-                // The first utterance is the one that was asked for, so it waits as long as the
-                // hard cap allows; every retry after it is Dobby's idea and gets the window.
-                var openFor: Duration? = null
                 var attempts = 0
                 while (true) {
                     transcript.beginListening()
-                    val heard = pipeline.listen(openFor)
+                    val heard = pipeline.listen(SPEECH_WINDOW)
                     if (heard.isNullOrBlank()) {
                         transcript.abandonListening()
                         return@withLock
@@ -268,7 +281,6 @@ class DobbyController(
                     // A television is a speaker that never runs out of unmatched sentences, and
                     // without a bound it would hold the microphone open all evening.
                     if (++attempts >= MAX_CLARIFY_ROUNDS) return@withLock
-                    openFor = CLARIFY_WINDOW
                 }
             } finally {
                 pipeline.endTurn()
@@ -374,13 +386,14 @@ class DobbyController(
         const val WAKE_SCREEN_SECONDS = 30
 
         /**
-         * How long the microphone stays open after a buzz.
+         * How long the microphone stays open waiting for somebody to start talking.
          *
-         * Long enough to draw a breath and rephrase, short enough that a panel nobody is
-         * talking to any more is back to listening for its name before they have left the room.
-         * It is the deadline on *starting* to speak, so a slow sentence is never cut off by it.
+         * Long enough to draw a breath — after the wake word, or after a buzz — and short
+         * enough that a panel nobody is talking to any more is back to listening for its name
+         * before they have left the room. It is a deadline on *starting* to speak, so a slow
+         * sentence is never cut off by it.
          */
-        val CLARIFY_WINDOW: Duration = 5.seconds
+        val SPEECH_WINDOW: Duration = 5.seconds
 
         /**
          * How many unmatched utterances one turn will sit through: the first, and two retries.

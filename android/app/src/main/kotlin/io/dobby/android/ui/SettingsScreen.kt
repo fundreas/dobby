@@ -28,12 +28,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.dobby.android.DobbyUiState
+import io.dobby.pipeline.ListenCue
 import io.dobby.pipeline.wakeword.WakeWordOption
 
 /**
- * The panel's settings: which phrase wakes it, and whether it is listening at all.
+ * The panel's settings: which phrase wakes it, whether it is listening at all, and how it says
+ * so when it starts.
  *
- * One screen, two decisions, no nesting. A wall panel is not a phone — whoever is standing in
+ * One screen, three decisions, no nesting. A wall panel is not a phone — whoever is standing in
  * front of it wants to change the one thing they came for and get back to the conversation.
  */
 @Composable
@@ -42,6 +44,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onHandsFree: (Boolean) -> Unit,
     onSelect: (String) -> Unit,
+    onListenCue: (ListenCue) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier.fillMaxSize()) {
@@ -118,10 +121,37 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                SectionLabel("Wenn Dobby zu hören beginnt")
             }
+
+            items(ListenCue.entries, key = { it.name }) { cue ->
+                ChoiceRow(
+                    title = cue.title,
+                    subtitle = cue.subtitle,
+                    selected = cue == state.listenCue,
+                    onSelect = { onListenCue(cue) },
+                )
+            }
+
+            item { Spacer(Modifier.size(16.dp)) }
         }
     }
 }
+
+private val ListenCue.title: String
+    get() = when (this) {
+        ListenCue.VIBRATE -> "Vibrieren"
+        ListenCue.TONE -> "Ton"
+        ListenCue.NONE -> "Nichts"
+    }
+
+private val ListenCue.subtitle: String
+    get() = when (this) {
+        ListenCue.VIBRATE -> "Ein kurzer, kräftiger Impuls. Lautlos."
+        ListenCue.TONE -> "Ein kurzer Piep. Hörbar durch den ganzen Raum."
+        ListenCue.NONE -> "Kein Signal — nur der Bildschirm geht an."
+    }
 
 @Composable
 private fun SectionLabel(text: String) {
@@ -135,6 +165,19 @@ private fun SectionLabel(text: String) {
 
 @Composable
 private fun WakeWordRow(option: WakeWordOption, selected: Boolean, onSelect: () -> Unit) {
+    ChoiceRow(
+        title = option.phrase,
+        // A phrase with no URL is a file somebody pushed to the device. Worth saying: it is the
+        // only kind that can disappear, and the only kind nobody else has tested.
+        subtitle = if (option.url.isEmpty()) "Eigenes Modell · ${option.file}" else null,
+        selected = selected,
+        onSelect = onSelect,
+    )
+}
+
+/** One radio option, big enough to hit from a step back with a wet hand. */
+@Composable
+private fun ChoiceRow(title: String, subtitle: String?, selected: Boolean, onSelect: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -146,15 +189,13 @@ private fun WakeWordRow(option: WakeWordOption, selected: Boolean, onSelect: () 
         RadioButton(selected = selected, onClick = onSelect)
         Column(Modifier.weight(1f)) {
             Text(
-                option.phrase,
+                title,
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onBackground,
             )
-            // A phrase with no URL is a file somebody pushed to the device. Worth saying:
-            // it is the only kind that can disappear, and the only kind nobody else has tested.
-            if (option.url.isEmpty()) {
+            if (subtitle != null) {
                 Text(
-                    "Eigenes Modell · ${option.file}",
+                    subtitle,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

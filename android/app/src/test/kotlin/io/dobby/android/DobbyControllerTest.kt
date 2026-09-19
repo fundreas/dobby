@@ -2,6 +2,7 @@ package io.dobby.android
 
 import io.dobby.android.chat.Voice
 import io.dobby.core.testing.FakeSockContext
+import io.dobby.pipeline.ListenCue
 import io.dobby.pipeline.VoiceIo
 import io.dobby.pipeline.VoiceState
 import io.dobby.pipeline.wakeword.WakeWordOption
@@ -53,7 +54,9 @@ class DobbyControllerTest {
         var buzzes: Int = 0
 
         /** One entry per [listen], holding the deadline it was given for speech to start. */
-        val windows: MutableList<Duration?> = mutableListOf()
+        val windows: MutableList<Duration> = mutableListOf()
+
+        override var listenCue: ListenCue = ListenCue.DEFAULT
 
         private val _wakeWords = MutableSharedFlow<Float>(extraBufferCapacity = 1)
         override val wakeWords: SharedFlow<Float> = _wakeWords.asSharedFlow()
@@ -111,7 +114,7 @@ class DobbyControllerTest {
 
         val turnsEnded: MutableList<Boolean> = mutableListOf()
 
-        override suspend fun listen(openFor: Duration?): String? {
+        override suspend fun listen(openFor: Duration): String? {
             turnOpen = true
             windows += openFor
             _state.value = VoiceState.Listening(speaking = false)
@@ -229,9 +232,10 @@ class DobbyControllerTest {
         assertEquals(null, answer.detail)
         assertTrue(answer.failed)
 
-        // The first utterance was asked for and waits as long as the hard cap allows; the
-        // second is Dobby's own idea and gets five seconds to begin.
-        assertEquals(listOf(null, 5.seconds), voice.windows)
+        // Both utterances get five seconds to begin: the first because a wake word that fired
+        // at the television must not hold the microphone for the full ten-second cap, the
+        // second because nobody asked for it at all.
+        assertEquals(listOf(5.seconds, 5.seconds), voice.windows)
         // Silence in that window ends the turn, which is what puts the wake word back.
         assertEquals(listOf(true), voice.turnsEnded)
     }
@@ -262,7 +266,7 @@ class DobbyControllerTest {
         dobby.listen().join()
 
         assertEquals(3, voice.buzzes)
-        assertEquals(listOf(null, 5.seconds, 5.seconds), voice.windows)
+        assertEquals(listOf(5.seconds, 5.seconds, 5.seconds), voice.windows)
         assertEquals(emptyList(), voice.spoken)
         assertEquals(listOf(true), voice.turnsEnded)
     }
@@ -438,6 +442,24 @@ class DobbyControllerTest {
         // The list settings renders comes from the pipeline, so a phrase pushed to the device
         // while the app was running is offered without a restart.
         assertEquals(listOf("Hey Dobby", "Hey Jarvis"), uiState(dobby).wakeWords.map { it.phrase })
+    }
+
+    @Test
+    fun `the acknowledgement is a setting, and it is remembered`() = runTest {
+        // A kitchen at midday wants the pip; a bedroom at five in the morning is where a pip is
+        // the reason a panel gets unplugged. Neither is the right default for the other, so it
+        // is a choice — and one that has to survive the reboot that follows making it.
+        val voice = FakeVoice()
+        val dobby = controller(voice)
+        dobby.start()
+        assertEquals(ListenCue.VIBRATE, uiState(dobby).listenCue, "silent, and felt")
+
+        dobby.setListenCue(ListenCue.NONE)
+
+        assertEquals(ListenCue.NONE, voice.listenCue, "the pipeline is what acts on it")
+        // And the screen shows what was chosen: the cue is not a flow, so a change to it has to
+        // be pushed into the UI state by hand, and forgetting that is invisible in the code.
+        assertEquals(ListenCue.NONE, uiState(dobby).listenCue)
     }
 
     @Test
