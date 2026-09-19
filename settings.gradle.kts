@@ -20,6 +20,7 @@ include(":socks:winky")
 include(":socks:clock")
 include(":socks:calculator")
 include(":socks:help")
+include(":socks:conversation")
 include(":cli")
 
 // Phase B — everything that only exists on the device.

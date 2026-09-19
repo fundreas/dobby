@@ -9,6 +9,7 @@ dependencies {
     implementation(project(":socks:clock"))
     implementation(project(":socks:calculator"))
     implementation(project(":socks:help"))
+    implementation(project(":socks:conversation"))
 }
 
 application {

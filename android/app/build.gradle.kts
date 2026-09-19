@@ -64,6 +64,7 @@ dependencies {
     implementation(project(":socks:clock"))
     implementation(project(":socks:calculator"))
     implementation(project(":socks:help"))
+    implementation(project(":socks:conversation"))
     // Winky is a development Sock and must not reach a release build (dobby-plan.md §8).
     debugImplementation(project(":socks:winky"))
 

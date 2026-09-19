@@ -18,6 +18,7 @@ import io.dobby.core.sock.Sock
 import io.dobby.core.sock.SockResult
 import io.dobby.socks.calculator.CalculatorSock
 import io.dobby.socks.clock.ClockSock
+import io.dobby.socks.conversation.ConversationSock
 import io.dobby.socks.winky.WinkySock
 import io.dobby.socks.help.HelpSock
 import kotlinx.coroutines.CoroutineScope
@@ -48,6 +49,7 @@ object DobbySocks {
             // as testable here as on the panel — which is the whole point of the interface.
             ClockSock(chime = { sound -> out("  🔔 ${sound.configValue}") }),
             CalculatorSock(),
+            ConversationSock(),
             WinkySock(),
             HelpSock { directory },
         )

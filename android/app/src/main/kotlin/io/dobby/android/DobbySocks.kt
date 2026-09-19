@@ -4,6 +4,7 @@ import io.dobby.core.registry.Introspection
 import io.dobby.core.sock.Sock
 import io.dobby.socks.calculator.CalculatorSock
 import io.dobby.socks.clock.ClockSock
+import io.dobby.socks.conversation.ConversationSock
 import io.dobby.socks.help.HelpSock
 
 /**
@@ -46,6 +47,7 @@ object DobbySocks {
         val socks = buildList {
             add(clock)
             add(CalculatorSock())
+            add(ConversationSock())
             add(HelpSock { directory })
             addAll(DevSocks.create())
         }
