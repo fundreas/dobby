@@ -1,0 +1,17 @@
+/*
+ * Only the JNI entry points leave this library.
+ *
+ * llama and ggml are linked in statically, and without this every one of their symbols would
+ * be in the dynamic table — where they could bind against, or be bound by, whatever else the
+ * process has loaded. The APK already carries ONNX Runtime twice over (the wake word's and the
+ * recogniser's), so "two libraries that both export a common symbol" is not hypothetical here.
+ *
+ * No JNI_OnLoad: the functions are bound by name, so there is nothing to register and
+ * nothing else to export.
+ */
+{
+  global:
+    Java_io_dobby_llama_*;
+  local:
+    *;
+};

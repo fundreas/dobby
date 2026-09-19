@@ -43,9 +43,37 @@ class Settings(context: Context) {
         get() = ListenCue.of(preferences.getString(KEY_LISTEN_CUE, null))
         set(value) = preferences.edit { putString(KEY_LISTEN_CUE, value.name) }
 
+    /**
+     * The crash tripwire for Tier 2.
+     *
+     * Set immediately before the first-ever `nativeLoadModel`, cleared after a successful
+     * prefill. Still set at the next start means the last attempt did not survive loading the
+     * model — and a native crash on a `START_STICKY` service is a boot loop, not a crash. So
+     * Tier 2 is skipped permanently until somebody re-arms it, and the panel says why.
+     *
+     * The one failure mode [io.dobby.llama.LlamaTier2] cannot catch, made survivable by the
+     * only mechanism that works across a process death: a flag on disk.
+     */
+    var llmLoadAttempted: Boolean
+        get() = preferences.getBoolean(KEY_LLM_ATTEMPTED, false)
+        set(value) = preferences.edit { putBoolean(KEY_LLM_ATTEMPTED, value) }
+
+    /** Cleared by the settings screen's re-arm toggle, after a crash disabled Tier 2. */
+    var llmDisabledByCrash: Boolean
+        get() = preferences.getBoolean(KEY_LLM_CRASHED, false)
+        set(value) = preferences.edit { putBoolean(KEY_LLM_CRASHED, value) }
+
+    /** Whether Tier 2 may run at all. Off by default: the gigabyte is a deliberate download. */
+    var llmEnabled: Boolean
+        get() = preferences.getBoolean(KEY_LLM_ENABLED, false)
+        set(value) = preferences.edit { putBoolean(KEY_LLM_ENABLED, value) }
+
     private companion object {
         const val KEY_WAKE_WORD = "wakeword.id"
         const val KEY_HANDS_FREE = "wakeword.armed"
         const val KEY_LISTEN_CUE = "listen.cue"
+        const val KEY_LLM_ATTEMPTED = "llm.loadAttempted"
+        const val KEY_LLM_CRASHED = "llm.disabledByCrash"
+        const val KEY_LLM_ENABLED = "llm.enabled"
     }
 }

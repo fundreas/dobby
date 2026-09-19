@@ -58,6 +58,9 @@ android {
 dependencies {
     implementation(project(":core"))
     implementation(project(":android:pipeline"))
+    // The local model. One .so, built from the pinned llama.cpp submodule — see
+    // android/llama/README.md for why it is a submodule and not a prebuilt.
+    implementation(project(":android:llama"))
     implementation(project(":socks:clock"))
     implementation(project(":socks:help"))
     // Winky is a development Sock and must not reach a release build (dobby-plan.md §8).

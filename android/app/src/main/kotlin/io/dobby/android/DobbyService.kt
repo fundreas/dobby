@@ -16,7 +16,12 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
 import io.dobby.android.ui.MainActivity
+import io.dobby.core.nlu.llm.Tier2Program
+import io.dobby.core.registry.Introspection
+import io.dobby.core.registry.SockRegistry
+import io.dobby.llama.LlamaTier2
 import io.dobby.pipeline.VoicePipeline
+import io.dobby.pipeline.llm.LlmModelStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -44,6 +49,9 @@ class DobbyService : Service() {
 
     /** Owned here, not by the Sock: whoever creates a `SoundPool` is the one who releases it. */
     private var clockHardware: ClockHardware? = null
+
+    /** The local model, once it has loaded. Null on every device and every path that cannot. */
+    private var tier2: LlamaTier2? = null
 
     lateinit var controller: DobbyController
         private set
@@ -93,14 +101,103 @@ class DobbyService : Service() {
 
         clockHardware = ClockHardware(this)
         val settings = Settings(this)
+        val resolver = buildTier2(settings)
         controller = DobbyController(
             scope = scope,
             pipeline = VoicePipeline(this, scope, settings.wakeWordId, settings.listenCue),
             sockContext = { announce -> AndroidSockContext(this, scope, announce) },
             hardware = clockHardware,
             settings = settings,
+            tier2Resolver = resolver,
         )
         scope.launch { controller.start() }
+
+        // Its own launch, after controller.start(), because the prefill is tens of seconds and
+        // the microphone must not wait for it. Nothing downstream needs Tier 2 to be ready —
+        // an utterance arriving mid-load simply gets Tier 1 alone, which is the whole product
+        // as it shipped last milestone.
+        if (resolver != null) {
+            scope.launch { prepareTier2(resolver, settings) }
+        }
+    }
+
+    /**
+     * Builds the resolver, or returns null for any of the several good reasons not to.
+     *
+     * Off unless switched on, because the weights are a deliberate gigabyte; off if the model
+     * is not downloaded, because this is not the place to start a gigabyte download; and off
+     * permanently if the last attempt to load it did not come back.
+     */
+    private fun buildTier2(settings: Settings): LlamaTier2? {
+        if (!settings.llmEnabled) return null
+        if (settings.llmDisabledByCrash) {
+            Log.w(TAG, "Tier 2 stays off: a previous load did not survive. Re-arm it in settings.")
+            return null
+        }
+        // Still set from last time means the process died between "about to load" and "loaded".
+        // The only thing that can do that is the native side, and on a START_STICKY service
+        // retrying it is a boot loop.
+        if (settings.llmLoadAttempted) {
+            settings.llmDisabledByCrash = true
+            settings.llmLoadAttempted = false
+            Log.e(TAG, "Tier 2 disabled: the last load attempt did not complete (native crash?)")
+            return null
+        }
+
+        val store = LlmModelStore(filesDir)
+        val gguf = store.resolved()
+        if (!gguf.isFile) {
+            Log.i(TAG, "Tier 2 off: ${'$'}{gguf.name} is not downloaded")
+            return null
+        }
+
+        val build = SockRegistry.build(DobbySocks.create(clockHardware).socks)
+        val registry = build.registry ?: return null
+        val program = Tier2Program.ofOrNull(registry, Introspection(registry)) { Log.w(TAG, it) }
+            ?: return null
+
+        return LlamaTier2(gguf, program).also { tier2 = it }
+    }
+
+    /** The tripwire's two halves, around the one call that can take the process down. */
+    private suspend fun prepareTier2(resolver: LlamaTier2, settings: Settings) {
+        resolver.prepare(
+            onAttempt = { settings.llmLoadAttempted = true },
+            onLoaded = { settings.llmLoadAttempted = false },
+        )
+    }
+
+    /**
+     * §9's order of retreat, as a real trigger rather than a paragraph.
+     *
+     * At `RUNNING_CRITICAL` the system is about to start killing background processes, and the
+     * cheapest ~280 MiB in this process is the Tier 2 KV cache. The model's own gigabyte stays
+     * mapped — those are file-backed pages the kernel can reclaim by itself — and the context
+     * re-prefills in the background once the pressure is off.
+     *
+     * STT is never touched. A panel that cannot hear is broken; a panel that cannot paraphrase
+     * is the product as it shipped last milestone.
+     *
+     * **The levels are deprecated and this is still the right hook.** Since API 35 every
+     * `TRIM_MEMORY_*` constant except `TRIM_MEMORY_UI_HIDDEN` is deprecated, and the platform
+     * no longer promises to deliver them — so this is a signal to act on when it arrives, not a
+     * guarantee to rely on. There is no replacement that tells a foreground service "give
+     * memory back now", and the alternative to a best-effort retreat is no retreat at all. The
+     * backstop if it never fires is the same one as before: the process is killed and
+     * `START_STICKY` brings it back.
+     */
+    @Suppress("DEPRECATION")
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        val resolver = tier2 ?: return
+        when {
+            level >= TRIM_MEMORY_RUNNING_CRITICAL -> scope.launch {
+                Log.w(TAG, "onTrimMemory(${'$'}level): releasing the Tier 2 context")
+                resolver.releaseContext()
+            }
+
+            level <= TRIM_MEMORY_RUNNING_MODERATE -> scope.launch { resolver.reprefill() }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -118,6 +215,8 @@ class DobbyService : Service() {
     override fun onDestroy() {
         // onCreate may have bailed out before the controller existed.
         if (::controller.isInitialized) runBlocking { controller.stop() }
+        tier2?.let { resolver -> runBlocking { resolver.close() } }
+        tier2 = null
         clockHardware?.release()
         clockHardware = null
         scope.cancel()

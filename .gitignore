@@ -16,3 +16,6 @@ local.properties
 
 # sherpa-onnx native library, fetched by :android:sherpa at build time
 android/sherpa/src/main/jniLibs/
+
+# CMake/NDK intermediates for :android:llama (the .cxx tree AGP creates next to the module)
+android/llama/.cxx/

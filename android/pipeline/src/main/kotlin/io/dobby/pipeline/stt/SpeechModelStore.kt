@@ -1,6 +1,7 @@
 package io.dobby.pipeline.stt
 
 import io.dobby.pipeline.download.Downloader
+import io.dobby.pipeline.download.Verified
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -102,14 +103,17 @@ class SpeechModelStore(
     /**
      * Whether [target] is the file [expected] describes.
      *
-     * The length check comes first and settles it for a truncated download without reading
-     * 622 MB. The hash is only run on a file that is the right size, and only once per start —
-     * a few seconds of storage read against the alternative of trusting a file whose download
-     * nobody watched.
+     * The length check comes first and settles a truncated download without reading 622 MB.
+     * Past that, [Verified] answers from a stamp written the first time the file was hashed, so
+     * the full read happens once per *download* rather than once per service start — which
+     * matters now that the LLM adds another gigabyte to the same question. The stamp records
+     * length and mtime alongside the hash, so a file that moved is re-hashed rather than
+     * trusted, and a missing or unreadable stamp means the same.
      */
-    private fun isIntact(target: File, expected: RemoteFile): Boolean {
-        if (!target.isFile || target.length() != expected.bytes) return false
-        _state.value = ModelState.Verifying
-        return Downloader.sha256(target).equals(expected.sha256, ignoreCase = true)
-    }
+    private fun isIntact(target: File, expected: RemoteFile): Boolean = Verified.isIntact(
+        file = target,
+        expectedSha256 = expected.sha256,
+        expectedLength = expected.bytes,
+        onHashing = { _state.value = ModelState.Verifying },
+    )
 }
