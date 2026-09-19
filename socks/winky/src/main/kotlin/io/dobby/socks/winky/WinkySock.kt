@@ -1,4 +1,4 @@
-package io.dobby.socks.devi
+package io.dobby.socks.winky
 
 import io.dobby.core.sock.CommandInvocation
 import io.dobby.core.sock.Example
@@ -8,30 +8,30 @@ import io.dobby.core.sock.patterns
 import io.dobby.core.sock.SockResult
 
 /**
- * Devi — the development Sock.
+ * Winky — the development Sock.
  *
  * Exists to prove the wiring end to end without dragging in Spotify, a network or an account.
  * It is a real Sock (it goes through the registry, the palette and the dispatcher like any
  * other), but it is not a product Sock and must not ship in a release build.
  */
-class DeviSock : Sock {
+class WinkySock : Sock {
 
-    override val id: String = "devi"
+    override val id: String = "winky"
 
-    override val displayName: String = "Devi"
+    override val displayName: String = "Winky"
 
     override val commands: List<ExclusiveCommandSpec> = listOf(
         ExclusiveCommandSpec(
             id = HELLO,
             templates = patterns(
-                "(hello|hallo|hi) devi",
+                "(hello|hallo|hi) winky",
                 "hello",
             ),
-            description = "Begrüßt Devi, den Entwickler-Sock.",
+            description = "Begrüßt Winky, den Entwickler-Sock.",
             examples = listOf(
                 Example("hello"),
-                Example("hallo devi"),
-                Example("hello devi"),
+                Example("hallo winky"),
+                Example("hello winky"),
             ),
         ),
     )
@@ -45,7 +45,7 @@ class DeviSock : Sock {
     }
 
     companion object {
-        const val HELLO: String = "devi.hello"
-        const val GREETING: String = "Hallo, Meister"
+        const val HELLO: String = "winky.hello"
+        const val GREETING: String = "Hallo Meister"
     }
 }
