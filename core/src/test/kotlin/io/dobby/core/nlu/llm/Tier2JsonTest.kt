@@ -14,6 +14,9 @@ import kotlin.test.assertNull
  */
 class Tier2JsonTest {
 
+    private val QUOTE = "\""
+    private val BACKSLASH = "\\"
+
     @Test
     fun `encodes the minimal shape`() {
         assertEquals("""{"c":"shared.stop"}""", Tier2Json.encode("shared.stop"))
@@ -81,7 +84,7 @@ class Tier2JsonTest {
             """{"c":true}""",
             """{"c":"x" "y":1}""",
             """{"c":"x"} {"c":"y"}garbage{""",
-            "{\"c\":\"x\",\"t\":\"" + "a".repeat(41) + "\"}",
+            "{\"c\":\"x\",\"t\":\"" + "a".repeat(300) + "\"}",
             "{\"c\":\"" + "a".repeat(3000) + "\"}",
         )) {
             // Never throws is half the contract; the other half is that nothing malformed
@@ -102,12 +105,30 @@ class Tier2JsonTest {
             Tier2Reply("x", mapOf("q" to """a"b""")),
             Tier2Json.decode("""{"c":"x","q":"a\"b"}"""),
         )
+        // A \uXXXX escape, assembled rather than written, so nothing between here and the
+        // file can quietly turn it into the character it denotes.
+        val escaped = "{" + QUOTE + "c" + QUOTE + ":" + QUOTE + "x" + QUOTE + "," +
+            QUOTE + "q" + QUOTE + ":" + QUOTE + BACKSLASH + "u00e4" + QUOTE + "}"
+        assertEquals(Tier2Reply("x", mapOf("q" to "ä")), Tier2Json.decode(escaped))
+
+        // An unknown escape and a truncated one are both rejected rather than guessed at.
+        assertNull(Tier2Json.decode("{" + QUOTE + "c" + QUOTE + ":" + QUOTE + "x" + QUOTE + "," +
+            QUOTE + "q" + QUOTE + ":" + QUOTE + BACKSLASH + "q" + QUOTE + "}"))
+        assertNull(Tier2Json.decode("{" + QUOTE + "c" + QUOTE + ":" + QUOTE + "x" + QUOTE + "," +
+            QUOTE + "q" + QUOTE + ":" + QUOTE + BACKSLASH + "u00" + QUOTE + "}"))
+    }
+
+    @Test
+    fun `a text param longer than the grammar allows is decoded, not discarded`() {
+        // The 40-char cap belongs to the grammar, where it exists to bound the decode budget.
+        // If a reply arrives that the grammar should have prevented, a long-but-sensible query
+        // is still a better answer than a buzz — and the decoder is bounded by MAX_STRING and
+        // MAX_INPUT either way.
+        val long = "a".repeat(GrammarGenerator.MAX_TEXT_CHARS + 20)
         assertEquals(
-            Tier2Reply("x", mapOf("q" to "ä")),
-            Tier2Json.decode("""{"c":"x","q":"ä"}"""),
+            Tier2Reply("spotify.play_music", mapOf("query" to long)),
+            Tier2Json.decode("""{"c":"spotify.play_music","query":"$long"}"""),
         )
-        assertNull(Tier2Json.decode("""{"c":"x","q":"\q"}"""))
-        assertNull(Tier2Json.decode("""{"c":"x","q":"\u00"}"""))
     }
 
     @Test

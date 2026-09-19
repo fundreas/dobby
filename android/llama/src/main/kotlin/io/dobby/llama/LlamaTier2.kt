@@ -110,9 +110,10 @@ class LlamaTier2(
                 // different set of commands. Re-prefill rather than answer from it: an answer
                 // built on the wrong command list is worse than a slow one.
                 if (prefilledFor != program.fingerprint) {
-                    log("fingerprint changed (${prefilledFor} → ${program.fingerprint}); re-prefilling")
+                    log("fingerprint changed ($prefilledFor → ${program.fingerprint}); re-prefilling")
                     if (llama.prefillSystem(program.systemPrefix) <= 0) {
-                        return@withContext fail("Tier 2 deaktiviert (Prompt zu lang)").let { null }
+                        fail("Tier 2 deaktiviert (Prompt zu lang)")
+                        return@withContext null
                     }
                     prefilledFor = program.fingerprint
                 }

@@ -35,8 +35,17 @@ object Tier2Json {
     /** Longer than any legal reply; past this the model is not answering, it is rambling. */
     const val MAX_INPUT: Int = 2048
 
-    /** Text params are capped here and in the grammar. See [GrammarGenerator.MAX_TEXT_CHARS]. */
-    const val MAX_TEXT_CHARS: Int = 40
+    /**
+     * The longest single string the decoder will build: a key, a command id or a param value.
+     *
+     * Not [GrammarGenerator.MAX_TEXT_CHARS], deliberately. That 40-char cap is the *grammar's*
+     * business — it exists so the worst-case reply fits the decode budget. Re-enforcing it here
+     * would mean a command id longer than forty characters could never be decoded, and it would
+     * mean that on the day the grammar was not applied, a long but perfectly sensible query
+     * gets thrown away in favour of a buzz. The decoder's job is to be *bounded*, which
+     * [MAX_INPUT] and this already are, not to second-guess which of two bounds applies.
+     */
+    const val MAX_STRING: Int = 256
 
     fun encode(commandId: String, params: Map<String, Any> = emptyMap()): String = buildString {
         append("{\"").append(COMMAND_KEY).append("\":").append(quote(commandId))
@@ -175,7 +184,7 @@ object Tier2Json {
             val out = StringBuilder()
             while (index < src.length) {
                 when (val c = src[index++]) {
-                    '"' -> return if (out.length > MAX_TEXT_CHARS) null else out.toString()
+                    '"' -> return if (out.length > MAX_STRING) null else out.toString()
                     // The grammar's `char` class excludes both of these, so an escape means the
                     // grammar was not applied. Handled anyway, for exactly that reason.
                     '\\' -> {
