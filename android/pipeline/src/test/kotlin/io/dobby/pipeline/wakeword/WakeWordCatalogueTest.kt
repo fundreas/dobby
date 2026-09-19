@@ -1,5 +1,6 @@
 package io.dobby.pipeline.wakeword
 
+import io.dobby.pipeline.audio.MicProfile
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import java.io.File
 import java.io.IOException
@@ -65,7 +66,7 @@ class WakeWordCatalogueTest {
                 )
 
                 val detections = mutableListOf<Float>()
-                val detector = WakeWordDetector(loaded) { detections += it }
+                val detector = WakeWordDetector.forProfile(loaded, MicProfile.RECOGNITION) { detections += it }
                 val scores = mutableListOf<Float>()
                 val random = Random(3)
                 val frame = ShortArray(AudioWindow.FRAME)

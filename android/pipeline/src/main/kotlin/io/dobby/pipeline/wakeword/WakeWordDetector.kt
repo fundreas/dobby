@@ -4,6 +4,7 @@ import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import io.dobby.pipeline.audio.FrameSink
+import io.dobby.pipeline.audio.MicProfile
 import java.io.Closeable
 import java.io.File
 import java.nio.FloatBuffer
@@ -88,8 +89,18 @@ data class WakeWordFiles(
  */
 class WakeWordDetector(
     private val models: WakeWordModels,
-    private val threshold: Float = DEFAULT_THRESHOLD,
-    private val patience: Int = DEFAULT_PATIENCE,
+    /**
+     * The score a frame must reach. **No default, on purpose.**
+     *
+     * The right number depends on what the microphone did to the signal before the graphs saw
+     * it: openWakeWord was trained on unprocessed audio, and the telephony chain's AGC and
+     * noise suppression shift the score distribution. A number measured under one microphone
+     * profile is meaningless under the other, so there is nothing sensible to default to and
+     * every caller goes through [forProfile].
+     */
+    val threshold: Float,
+    /** Consecutive frames over [threshold] before firing. Per-profile, for the same reason. */
+    val patience: Int,
     private val refractoryFrames: Int = DEFAULT_REFRACTORY_FRAMES,
     private val onDetected: (Float) -> Unit,
 ) : FrameSink, Closeable {
@@ -197,11 +208,23 @@ class WakeWordDetector(
     }
 
     companion object {
-        /** openWakeWord's own suggested starting point. Measure, then change (§5.1). */
-        const val DEFAULT_THRESHOLD: Float = 0.5f
-
-        /** Two frames — 160 ms — over the threshold before the panel wakes up. */
-        const val DEFAULT_PATIENCE: Int = 2
+        /**
+         * The one way to build a detector: with the tuning that belongs to the open microphone.
+         *
+         * This exists so that the day somebody measures a threshold, there is exactly one place
+         * it can be applied and no way to apply the quiet-room number to the processed stream
+         * by forgetting a parameter (`m2b-plan.md` B2).
+         */
+        fun forProfile(
+            models: WakeWordModels,
+            profile: MicProfile,
+            onDetected: (Float) -> Unit,
+        ): WakeWordDetector = WakeWordDetector(
+            models = models,
+            threshold = profile.threshold,
+            patience = profile.patience,
+            onDetected = onDetected,
+        )
 
         /** ~1.5 s during which one phrase cannot fire twice. */
         const val DEFAULT_REFRACTORY_FRAMES: Int = 19

@@ -11,7 +11,7 @@
 | **Dependencies** | Media3 ExoPlayer (`androidx.media3:media3-exoplayer`, `media3-session`) |
 | **Hard requirements** | Network. No account, no API key. |
 | **Permissions** | `INTERNET` |
-| **Audio** | Requests `PlaybackCoordinator` focus, class `AUDIO_SUSTAINED` — starting radio pauses Spotify and vice versa |
+| **Audio** | Requests `PlaybackCoordinator` focus, class `AUDIO_SUSTAINED` — starting radio pauses Spotify and vice versa. Registers its player with `InProcessPlayers` so a turn can duck it (§6) |
 
 ## 2. Commands
 
@@ -146,7 +146,7 @@ Stop and release the ExoPlayer, release playback focus. Idempotent: stopping whe
 | `shared.stop` | ExoPlayer exists and is playing or buffering | never | player released, or idle/ended |
 | `shared.resume` | never | a station was stopped **in this session** and is remembered | no station history since service start |
 
-Read from the Sock's own `StateFlow<RadioState>` (§6) — no player interrogation, no network. Trivially satisfies the no-I/O contract.
+Read from the Sock's own `StateFlow<RadioState>` (§7) — no player interrogation, no network. Trivially satisfies the no-I/O contract.
 
 Consumes:
 
@@ -162,7 +162,35 @@ Consumes:
 
 ---
 
-## 6. State & dashboard
+## 6. Ducking while Dobby is listening
+
+The panel's microphone hears its own speaker. While somebody is talking to Dobby the radio has
+to get out of the way, or Silero VAD never finds the trailing silence that ends the utterance
+and every turn runs to the ten-second hard cap with the stream underneath it (`m2b-plan.md`).
+
+This is **not** `PlaybackCoordinator`. That one arbitrates between Socks, is keyed by sock id
+and holds exactly one request; a turn-level duck routed through it would abandon this Sock's
+own focus and never give it back. The turn holds its own audio focus for everything out of
+process — and for a player *inside* this process, audio focus is the wrong tool entirely.
+
+So:
+
+- **The Sock registers its ExoPlayer with `io.dobby.core.audio.InProcessPlayers`** when it is
+  created, and unregisters it when it is released. Registration is the player's lifecycle and
+  nothing else's: a Sock that forgets to unregister leaves a dead player holding a duck.
+- The registry calls `duck(volume)` at the start of a turn and `restore()` at the end. The
+  implementation is `player.volume = volume` and back to `1f` — nothing cleverer.
+- **`TurnDuck.PAUSE` mutes rather than pauses here** (`volume = 0f`). Pausing a stream costs a
+  re-buffer on every turn — §10 already budgets reconnects — and a turn is seconds. Muting
+  gives the recogniser the same silence, and the music is back the instant the turn ends rather
+  than after a reconnect.
+- A player registered *during* a turn starts ducked, so a stream that connects mid-sentence
+  does not come up at full volume under the person talking.
+- The duck is transient and invisible to `RadioState`: the Sock is still `Playing`, and §5's
+  `shared.stop` chain behaves exactly as it does at full volume. A turn duck is not a pause and
+  must never be reported as one.
+
+## 7. State & dashboard
 
 `DashboardCard`, shown while Radio holds playback focus:
 
@@ -172,7 +200,7 @@ Consumes:
 
 Exposed state: `StateFlow<RadioState>` = `Idle(lastStation: Station?)` | `Buffering(station)` | `Playing(station, nowPlaying: String?)` | `Error(station, reason)`. `lastStation` is what backs `IDLE` on `shared.resume`.
 
-## 7. Utterance collision surface
+## 8. Utterance collision surface
 
 Exclusively claimed: every phrase containing the literal `radio`, plus `sender {x}` / `radiosender {x}`.
 
@@ -180,7 +208,7 @@ Contributed to chains, not owned: `stopp`, `aus`, `weiter` (via `shared.stop` / 
 
 - Does **not** claim `lauter` / `leiser` / `stumm` — those are the System Sock's and apply to the whole device stream, radio included.
 
-## 8. Config
+## 9. Config
 
 | Key | Type | Default | Where set |
 |---|---|---|---|
@@ -188,13 +216,13 @@ Contributed to chains, not owned: `stopp`, `aus`, `weiter` (via `shared.stop` / 
 | `radio.buffer_timeout_s` | int | `10` | Settings (advanced) |
 | `radio.reconnect_attempts` | int | `3` | Settings (advanced) |
 
-## 9. Failure & degradation
+## 10. Failure & degradation
 
 - Stream drops mid-playback (common on mobile networks and after router reboots): ExoPlayer error → retry up to `reconnect_attempts` with backoff 1 s / 3 s / 9 s. All retries exhausted → release, state `Error`, `ctx.announce("Der Radiostream ist abgerissen.")`.
 - Never auto-restart after a user-initiated `stop_radio`.
 - Sock status is always `Ready` — there is no account or device prerequisite that can make radio permanently unavailable; failures are per-invocation.
 
-## 10. Testing
+## 11. Testing
 
 - Template table (§3, §4) as a parameterized unit test.
 - **Collision test against the Spotify Sock:** "spiele radio fm4" must resolve to `radio.play_radio`, not `spotify.play_music(query="radio fm4")`. This is a regression test, not a nice-to-have.
@@ -202,9 +230,10 @@ Contributed to chains, not owned: `stopp`, `aus`, `weiter` (via `shared.stop` / 
 - `activityFor` derives purely from `RadioState`, with an assertion of zero player/network calls.
 - Station resolution: the alias table, umlaut normalization, Levenshtein edge cases, and explicit negative cases ("spiele radio bayern 3" → unresolvable, not default).
 - Handler tests with a fake ExoPlayer and fake `PlaybackCoordinator`: focus denied, buffering timeout, mid-stream error + successful reconnect, mid-stream error + exhausted retries.
+- **Turn ducking (§6) with a fake player:** registered on create and unregistered on release; `duck`/`restore` move the volume and put it back; a turn duck leaves `RadioState` and the Sock's own `PlaybackCoordinator` focus untouched — that last one is the regression test for routing the turn duck through the coordinator by mistake.
 - No test hits a real stream URL.
 
-## 11. Open questions / out of scope (v1)
+## 12. Open questions / out of scope (v1)
 
 - Station favorites / "nächster Sender" cycling.
 - User-editable station list in the UI (v1 is a constant table + a default-station setting).

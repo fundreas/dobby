@@ -104,11 +104,20 @@ class DobbyService : Service() {
         val resolver = buildTier2(settings)
         controller = DobbyController(
             scope = scope,
-            pipeline = VoicePipeline(this, scope, settings.wakeWordId, settings.listenCue),
+            pipeline = VoicePipeline(
+                this,
+                scope,
+                settings.wakeWordId,
+                settings.listenCue,
+                settings.micProfile,
+            ),
             sockContext = { announce -> AndroidSockContext(this, scope, announce) },
             hardware = clockHardware,
             settings = settings,
             tier2Resolver = resolver,
+            // The mode is read per turn rather than captured, so a change to the setting
+            // takes effect on the next turn instead of on the next restart.
+            turnAudio = AndroidTurnAudio(this, mode = { settings.turnDuck }),
         )
         scope.launch { controller.start() }
 

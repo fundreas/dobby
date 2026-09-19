@@ -2,6 +2,7 @@ package io.dobby.pipeline
 
 import android.content.Context
 import io.dobby.pipeline.audio.AudioSource
+import io.dobby.pipeline.audio.MicProfile
 import io.dobby.pipeline.audio.MicrophoneUnavailableException
 import io.dobby.pipeline.haptics.Haptics
 import io.dobby.pipeline.stt.ModelState
@@ -85,11 +86,20 @@ class VoicePipeline(
     private var selectedWakeWord: String? = null,
     /** How the wake word is acknowledged, as chosen in settings. */
     initialCue: ListenCue = ListenCue.DEFAULT,
+    /**
+     * Which microphone to open, as chosen in settings.
+     *
+     * Fixed for the life of the pipeline: [AudioSource] is the only thing allowed to open the
+     * recorder, and changing the source means re-opening it — which is a deaf gap in the middle
+     * of whatever was listening. Changing the setting takes effect on the next start, which for
+     * a panel that is measured by standing in front of it is often enough.
+     */
+    private val micProfile: MicProfile = MicProfile.DEFAULT,
     modelRoot: File = context.filesDir,
     private val utteranceTimeout: Duration = UTTERANCE_TIMEOUT,
 ) : VoiceIo {
     private val appContext = context.applicationContext
-    private val audio = AudioSource(scope)
+    private val audio = AudioSource(scope, micProfile)
     private val models = SpeechModelStore(modelRoot)
     private val wakeWordModels = WakeWordModelStore(modelRoot)
     private val speaker = Speaker(appContext)
@@ -241,7 +251,9 @@ class VoicePipeline(
         val models = wakeWord ?: return false
         if (detector != null) return true
 
-        val listener = WakeWordDetector(models) { score -> onWakeWord(score) }
+        // Through forProfile, never the constructor: the threshold belongs to the microphone
+        // that is open, and the two profiles' numbers are not interchangeable (`m2b-plan.md` B2).
+        val listener = WakeWordDetector.forProfile(models, micProfile) { score -> onWakeWord(score) }
         detector = listener
         return try {
             audio.addSink(listener)

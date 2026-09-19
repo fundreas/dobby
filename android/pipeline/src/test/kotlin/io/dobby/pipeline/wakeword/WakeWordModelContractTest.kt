@@ -4,6 +4,7 @@ import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import ai.onnxruntime.TensorInfo
+import io.dobby.pipeline.audio.MicProfile
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import java.io.File
 import java.nio.FloatBuffer
@@ -28,34 +29,8 @@ import kotlin.test.assertTrue
  */
 class WakeWordModelContractTest {
 
-    private fun models(): WakeWordFiles? {
-        val directory = File("build/oww-models")
-        val files = WakeWordFiles(
-            melspectrogram = File(directory, "melspectrogram.onnx"),
-            embedding = File(directory, "embedding_model.onnx"),
-            classifier = File(directory, "hey_jarvis_v0.1.onnx"),
-            phrase = "Hey Jarvis",
-        )
-        val all = listOf(files.melspectrogram, files.embedding, files.classifier)
-        if (all.all { it.isFile }) return files
-
-        directory.mkdirs()
-        return try {
-            for (file in all) {
-                if (!file.isFile) {
-                    URI_BASE.plus("/${file.name}").let { url ->
-                        java.net.URI(url).toURL().openStream().use { input ->
-                            file.outputStream().use { input.copyTo(it) }
-                        }
-                    }
-                }
-            }
-            files
-        } catch (e: java.io.IOException) {
-            all.forEach { it.delete() }
-            null
-        }
-    }
+    /** The real graphs, downloaded once and cached under `build/`. See [WakeWordTestModels]. */
+    private fun models(): WakeWordFiles? = WakeWordTestModels.files()
 
     private fun session(environment: OrtEnvironment, file: File) =
         environment.createSession(file.absolutePath, OrtSession.SessionOptions())
@@ -139,7 +114,7 @@ class WakeWordModelContractTest {
 
         WakeWordModels.load(files!!).use { loaded ->
             val detections = mutableListOf<Float>()
-            val detector = WakeWordDetector(loaded) { detections += it }
+            val detector = WakeWordDetector.forProfile(loaded, MicProfile.RECOGNITION) { detections += it }
 
             // Four seconds of silence, then four of white noise. Neither is a wake word, and a
             // panel that fires on either is a panel nobody leaves switched on.
@@ -169,7 +144,7 @@ class WakeWordModelContractTest {
         // every time still returns a plausible-looking number — it just never changes. If the
         // score does not move as the audio changes, nothing downstream can work.
         WakeWordModels.load(files!!).use { loaded ->
-            val detector = WakeWordDetector(loaded) { }
+            val detector = WakeWordDetector.forProfile(loaded, MicProfile.RECOGNITION) { }
             val scores = mutableListOf<Float>()
             val random = Random(11)
             val frame = ShortArray(AudioWindow.FRAME)
@@ -189,6 +164,25 @@ class WakeWordModelContractTest {
     }
 
     @Test
+    fun `a detector is built with the tuning of the profile it will listen through`() {
+        val files = models()
+        assumeTrue(files != null, "openWakeWord models unavailable (offline?)")
+
+        // The failure this catches is a silent one: a caller that reaches past forProfile and
+        // applies the quiet-room threshold to the telephony chain's processed stream, where a
+        // number measured under the other microphone means nothing (`m2b-plan.md` B2). The
+        // constructor has no defaults precisely so that this is the only way in.
+        WakeWordModels.load(files!!).use { loaded ->
+            for (profile in MicProfile.entries) {
+                val detector = WakeWordDetector.forProfile(loaded, profile) { }
+                assertEquals(profile.threshold, detector.threshold, "threshold for $profile")
+                assertEquals(profile.patience, detector.patience, "patience for $profile")
+                detector.close()
+            }
+        }
+    }
+
+    @Test
     fun `the mel transform matches the reference`() {
         // x/10 + 2. Cheap to assert, and its absence is invisible: without it the embedding
         // model is fed values it was never trained on and every score stays flat.
@@ -198,8 +192,6 @@ class WakeWordModelContractTest {
     }
 
     private companion object {
-        const val URI_BASE = "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1"
-
         /** 1000 ms / 80 ms. */
         const val FRAMES_PER_SECOND = 12
     }

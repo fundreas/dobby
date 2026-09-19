@@ -41,7 +41,7 @@ Not yet built: the LLM tier, the remaining Socks (Spotify, Radio, System, Depart
 ## Run it
 
 ```sh
-./gradlew build                      # 163 tests, all JVM, no emulator
+./gradlew build                      # 468 tests, all JVM, no emulator
 ./gradlew :cli:run -q                # the terminal harness
 ./gradlew :android:app:installDebug  # the phone
 ```
@@ -88,9 +88,36 @@ adb push hey_dobby.onnx /sdcard/Android/data/io.dobby.android/files/wakeword/
 
 Restart; no rebuild, no code change. The filename becomes the phrase on screen, because the graph carries no metadata and the file is the only thing that knows.
 
+### Talking to it while it is playing music
+
+The panel hears its own speaker. `VOICE_RECOGNITION` — the microphone source M2 shipped — is *defined* as the one with no AGC, no noise suppression and no echo cancellation, because in a quiet room the least-processed signal is the best thing for a recogniser. It is also why music went straight into the microphone: nothing had ever been asked to stop it. That is two failures, and they have different fixes.
+
+**The command was polluted.** The wake word fired, but the audio captured after it had the music underneath. Silero VAD, watching that stream, never found its ~800 ms of trailing silence, so every turn ran to the ten-second hard cap and Parakeet was handed ten seconds of music with a sentence somewhere inside. **The fix is ducking, and it is most of the relief for none of the difficulty:** whatever is playing is quietened for the length of a turn and restored in the same `finally` that re-arms the wake word.
+
+- **The turn ducks, not the Sock.** `TurnAudio` is its own interface and takes its own `AudioFocusRequest`. `PlaybackCoordinator` — what a Sock uses — is keyed by sock id and holds exactly one request, so a turn borrowing it would abandon the Radio Sock's focus and never give it back. There is a test that fails loudly if anybody ever routes it through there.
+- **Turn-scoped, not utterance-scoped.** A turn is up to three utterances plus Dobby's answers, and letting the music swell back up between them is worse than not ducking at all: it happens exactly while the person is waiting to speak again.
+- **Two channels, because the audio has two origins.** Audio focus for everything out of process — Spotify decodes and plays in its own app, so there is nothing else to reach it with — and a registry of in-process players for what Dobby plays itself, where setting a volume beats asking the system for permission to be quiet. Radio (M4) registers there; the requirement is written into [`radio.specs.md`](socks.specs/radio.specs.md) §6 rather than left for M4 to discover.
+- **Duck or pause is a setting**, in Einstellungen, defaulting to ducking. Pausing recognises better and is heavier to live with; which one is right is a measurement, not an argument.
+- The typed path does not duck. No microphone is open.
+
+**The wake word still cannot be heard over loud music**, and nothing above helps: it has to be heard *before* there is a turn to duck. Only echo cancellation fixes that, and on this device only the platform's — Spotify's samples never enter this process, so there is no reference signal for a software canceller to subtract. So the microphone source is now a setting: `RECOGNITION` (unprocessed, what M2 shipped) or `COMMUNICATION` (the telephony chain, where the hardware echo canceller lives, plus `AcousticEchoCanceler` and `NoiseSuppressor` where the device offers them). **The default has not moved**, because moving it before measuring is how you trade a known quiet-room panel for an unknown one. Wake-word threshold and patience hang off the profile for the same reason: a number measured through one microphone means nothing through the other.
+
 ### Before you trust it
 
-A wake word trained on speech nobody ever spoke has accuracy you cannot predict from the code, only measure. Before relying on it, do the two counts `dobby-plan.md` §5.1 asks for: say the phrase 50 times and count the misses; leave it armed through an evening of television and conversation and count the spurious wakes. Then set `WakeWordDetector`'s threshold and patience from those numbers.
+A wake word trained on speech nobody ever spoke has accuracy you cannot predict from the code, only measure. Two measurements are outstanding, and they answer different questions.
+
+**In a room, with a phone — the 2×2 that also settles `dobby-plan.md` §5.1's two counts.** Each cell: say the phrase 50 times and count the misses, then leave it armed through an evening and count the spurious wakes. Plus `SttTemplateTest`'s pass rate per profile, which is the existing harness for "did the recogniser get worse".
+
+| | silent room | music at panel volume |
+|---|---|---|
+| `RECOGNITION` | the baseline M2 never took | today's failure, quantified |
+| `COMMUNICATION` | what the telephony chain costs in the common case | whether the platform AEC references the media mix at all |
+
+The bottom-right cell is the one the product turns on, and it is not knowable from the API: whether the *media* mix reaches the echo reference on this Nord CE is a question about Qualcomm's audio HAL. If the answer is no, barge-in during playback is not supported on this hardware, the duck setting goes to **pause**, and the panel becomes one that stops the music to listen. Better to find that out in an evening than after building an echo canceller.
+
+Then set the profile, its threshold and its patience from the numbers, and write them here.
+
+**On the JVM, in minutes — the detection curve against interference.** `WakeWordSnrSweepTest` mixes recorded wake phrases with recorded music at a sweep of signal-to-noise ratios and scores them through the real graphs. It isolates the detector from the echo path, which is the point: a good curve here with a deaf panel in the room means the echo is the problem, and a bad curve means no echo canceller would have saved it. It skips itself until you supply recordings — see `android/pipeline/src/test/resources/snr/README.md` — and writes its table to `build/reports/wakeword-snr.txt`.
 
 Two more things to know: the pre-trained models are **CC BY-NC-SA** (fine for your own wall, a hard stop for shipping), and ONNX Runtime adds ~32 MB of native library, which took the release APK from 53 MB to 85 MB.
 
@@ -99,6 +126,7 @@ Two more things to know: the pre-trained models are **CC BY-NC-SA** (fine for yo
 - **A foreground service, not an Activity.** The panel's screen is off most of the time and the Activity is not; the registry and the Socks' state have to outlive it. The Activity's only privileges are starting the service and showing the chat.
 - **The mic rule is load-bearing.** On Android 12+ a service keeps microphone access only if it was started while an Activity was in the foreground (§7.1), so the order is permission → `startForegroundService` → bind, every time. Getting it backwards makes Dobby deaf with no error anywhere, which is why the call lives in `DobbyService.startFrom` with that written on it. One tap per reboot is the accepted trade-off (§9).
 - **One `AudioRecord`, many sinks.** `AudioSource` is the only code that touches the microphone; everything downstream is a `FrameSink` fed 1280-sample frames at 16 kHz — 80 ms, openWakeWord's shape, because the wake word needs multiples of 80 ms and nothing downstream cares. Callers add and remove sinks and never start or stop the recorder: with two consumers whose lifetimes overlap, any explicit stop is the bug that takes the wake word down the moment an utterance ends.
+- **Whatever is playing ducks for the turn.** The panel's microphone hears the panel's speaker, and the duck is what puts the VAD's endpoint back within reach. It is taken in `DobbyController` — the one place both the button and the wake word pass through — and released in the same `finally` that re-arms the wake word, because a duck that outlived a thrown turn is a panel that permanently quietened the music.
 - **The wake word sits out the turn.** The moment it fires it comes off the stream, and it goes back on only when the turn is finished — dispatched, answered and spoken. Command audio is not wake-word audio, and a detector left running through your sentence and through Dobby's reply is one threshold away from a panel that wakes itself. The capture sink joins before the detector leaves, so the microphone never closes in the gap.
 - **One way through, two ways in.** The wake word does not run its own turn — it emits a signal, and the same `listen()` the button calls picks it up. A second path is how the two drift apart.
 - **Speech recognition is batch, and the VAD decides when you stopped.** Parakeet sees a finished utterance and answers once, so there is no running guess to stream into the bubble. Silero VAD watches the same frames the capture buffer gets and ends the utterance on ~800 ms of silence, with a 10 s cap for the times that silence never comes. What the panel shows instead of a live transcript is the honest thing: whether it can hear a voice, and then that it is working.
@@ -166,7 +194,7 @@ own few-shots.
 
 ## What the tests cover
 
-All 163 tests are plain JVM tests. Nothing needs an emulator, including the wake word.
+All 468 tests are plain JVM tests. Nothing needs an emulator, including the wake word.
 
 - `GermanNumbersTest`, `NormalizerTest` — German cardinals, and why `ein` is left alone while `eins` is not.
 - `TemplateParserTest`, `TemplateMatcherTest`, `SpecificityTest` — the DSL, backtracking, fuzzy tolerance, palette ordering.
@@ -184,13 +212,16 @@ All 163 tests are plain JVM tests. Nothing needs an emulator, including the wake
 - **`SttTemplateTest`** — *(STT, instrumented)* recorded German commands through the real recogniser into the real palette, one per Tier-1 template. The only test that can see a wrong `model_type` or a token table that does not belong to its encoder: none of those throw, they just return text no template matches. Skips itself when the model or the recordings are absent.
 - **`OutcomeDetailTest`** — *(Phase B)* the trace line under each answer, including the three-Sock chain case it exists for.
 - **`WakeWordModelContractTest`** — *(M2)* the wake word's inference chain, run against the real openWakeWord graphs on the JVM. This is the one that earns its keep. Every constant in the feature pipeline — the 480-sample overlap, 8 mel rows per frame, the 76-row window, `x/10 + 2` — was reimplemented from a Python reference, and getting any of them wrong throws nothing: the models still run, the scores just sit near zero, and the only symptom is a panel that ignores its name. So the arithmetic is asserted against the graphs themselves: 1760 samples must yield exactly 8×32, the embedding must return 96, and the score must actually *move* as the audio changes. It also checks that silence and white noise never fire. Models are fetched to `build/` on first run.
+- **`TurnDuckTest`** — *(M2b)* what a turn does to whatever is playing: the duck is taken before the microphone opens and released once after it closes, held across all three utterances of a turn rather than taken per utterance, released when nothing was said, when a Sock ends the turn, when the microphone throws and when the turn is cancelled — and the button ducks exactly as the wake word does, while typing does not duck at all. Its last test is the one that matters most in a year: a turn duck leaves the Socks' own `PlaybackCoordinator` focus untouched, so routing it through there later fails loudly instead of quietly stealing the Radio Sock's focus.
+- **`TurnAudioTest`**, **`MicProfileTest`** — *(M2b)* the in-process half of the duck (register, duck, restore, a player that joins mid-turn, one broken player not costing the others theirs) and the promise that the microphone source has not quietly moved off the one M2 shipped.
+- **`SnrMixTest`**, **`WakeWordSnrSweepTest`** — *(M2b)* the detection curve against music. The sweep is opt-in and skips itself until somebody supplies recordings; the mixer underneath it is tested on synthetic audio always, because a mixer that is quietly wrong produces a curve that looks like a finding.
 - **`FeatureBuffersTest`** — *(M2)* the sliding buffers on their own: the overlap carried between frames, the windows being the newest rows in order, the bounds that let a panel run for weeks, and that a short frame is a loud error rather than a quietly padded one.
 
 Lint runs with `warningsAsErrors`, as the Kotlin compiler does across every module.
 
 ## Next
 
-**Measure the wake word on the device** (above), then train "Hey Dobby" and drop it in.
+**Measure the wake word on the device** (above) — now a 2×2 of microphone profile against a room with and without music, which also settles whether this hardware can hear past its own speaker at all. Then train "Hey Dobby" and drop it in.
 
 After that, §8's order stands: **M3–M4** more Socks, **M5** the dashboard cards, **M6** the LLM fallback tier, **M7** hardening — boot notification, watchdog, and the week of unattended uptime that decides whether any of this actually lives on a wall.
 

@@ -28,15 +28,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.dobby.android.DobbyUiState
+import io.dobby.core.audio.TurnDuck
 import io.dobby.pipeline.ListenCue
+import io.dobby.pipeline.audio.MicProfile
 import io.dobby.pipeline.wakeword.WakeWordOption
 
 /**
- * The panel's settings: which phrase wakes it, whether it is listening at all, and how it says
- * so when it starts.
+ * The panel's settings: which phrase wakes it, whether it is listening at all, how it says so
+ * when it starts, and what it does to the music while somebody is talking to it.
  *
- * One screen, three decisions, no nesting. A wall panel is not a phone — whoever is standing in
- * front of it wants to change the one thing they came for and get back to the conversation.
+ * One screen, no nesting. A wall panel is not a phone — whoever is standing in front of it
+ * wants to change the one thing they came for and get back to the conversation.
+ *
+ * The last two sections are here so that the measurement `m2b-plan.md` B3 asks for can be taken
+ * by somebody standing in the room, rather than by somebody rebuilding the app between cells of
+ * a 2×2.
  */
 @Composable
 fun SettingsScreen(
@@ -45,6 +51,8 @@ fun SettingsScreen(
     onHandsFree: (Boolean) -> Unit,
     onSelect: (String) -> Unit,
     onListenCue: (ListenCue) -> Unit,
+    onTurnDuck: (TurnDuck) -> Unit,
+    onMicProfile: (MicProfile) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier.fillMaxSize()) {
@@ -134,6 +142,45 @@ fun SettingsScreen(
                 )
             }
 
+            item {
+                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                SectionLabel("Musik, während du sprichst")
+            }
+
+            items(TurnDuck.entries, key = { it.name }) { mode ->
+                ChoiceRow(
+                    title = mode.title,
+                    subtitle = mode.subtitle,
+                    selected = mode == state.turnDuck,
+                    onSelect = { onTurnDuck(mode) },
+                )
+            }
+
+            item {
+                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                SectionLabel("Mikrofon")
+            }
+
+            items(MicProfile.entries, key = { it.name }) { profile ->
+                ChoiceRow(
+                    title = profile.title,
+                    subtitle = profile.subtitle,
+                    selected = profile == state.micProfile,
+                    onSelect = { onMicProfile(profile) },
+                )
+            }
+
+            item {
+                Text(
+                    // Said where it is chosen, because the alternative is somebody switching
+                    // profiles, hearing no difference, and concluding the setting does nothing.
+                    "Die Mikrofon-Einstellung gilt ab dem nächsten Start.",
+                    Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
             item { Spacer(Modifier.size(16.dp)) }
         }
     }
@@ -151,6 +198,30 @@ private val ListenCue.subtitle: String
         ListenCue.VIBRATE -> "Ein kurzer, kräftiger Impuls. Lautlos."
         ListenCue.TONE -> "Ein kurzer Piep. Hörbar durch den ganzen Raum."
         ListenCue.NONE -> "Kein Signal — nur der Bildschirm geht an."
+    }
+
+private val TurnDuck.title: String
+    get() = when (this) {
+        TurnDuck.DUCK -> "Leiser"
+        TurnDuck.PAUSE -> "Pausieren"
+    }
+
+private val TurnDuck.subtitle: String
+    get() = when (this) {
+        TurnDuck.DUCK -> "Läuft leise weiter, solange Dobby zuhört."
+        TurnDuck.PAUSE -> "Hält an und läuft nach der Antwort weiter. Sicherer, aber gröber."
+    }
+
+private val MicProfile.title: String
+    get() = when (this) {
+        MicProfile.RECOGNITION -> "Erkennung"
+        MicProfile.COMMUNICATION -> "Kommunikation"
+    }
+
+private val MicProfile.subtitle: String
+    get() = when (this) {
+        MicProfile.RECOGNITION -> "Unbearbeitet. Am besten im ruhigen Raum — hört aber auch sich selbst."
+        MicProfile.COMMUNICATION -> "Telefonie-Kette: Echounterdrückung, Entrauschen, Pegelregelung."
     }
 
 @Composable

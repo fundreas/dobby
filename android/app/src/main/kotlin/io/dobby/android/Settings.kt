@@ -2,7 +2,9 @@ package io.dobby.android
 
 import android.content.Context
 import androidx.core.content.edit
+import io.dobby.core.audio.TurnDuck
 import io.dobby.pipeline.ListenCue
+import io.dobby.pipeline.audio.MicProfile
 
 /**
  * The panel's own settings, as opposed to a Sock's.
@@ -44,6 +46,31 @@ class Settings(context: Context) {
         set(value) = preferences.edit { putString(KEY_LISTEN_CUE, value.name) }
 
     /**
+     * What happens to the music while somebody is talking to the panel: quieter, or stopped.
+     *
+     * Stored by name for the same reason [listenCue] is. The default is `DUCK` and stays there
+     * until the measurement in `m2b-plan.md` B3 says otherwise — if the platform echo canceller
+     * turns out not to reference the media mix on this device, `PAUSE` is the honest answer and
+     * this is the switch that delivers it.
+     */
+    var turnDuck: TurnDuck
+        get() = TurnDuck.of(preferences.getString(KEY_TURN_DUCK, null))
+        set(value) = preferences.edit { putString(KEY_TURN_DUCK, value.name) }
+
+    /**
+     * Which microphone the panel opens: the unprocessed one, or the telephony chain with its
+     * echo canceller.
+     *
+     * A setting rather than a constant because choosing between them is the 2×2 in
+     * `m2b-plan.md` B3, and that measurement is somebody standing in a room saying the wake
+     * phrase fifty times — which they cannot do if switching profiles means a rebuild. Takes
+     * effect on the next start: the microphone source is fixed for the life of the pipeline.
+     */
+    var micProfile: MicProfile
+        get() = MicProfile.of(preferences.getString(KEY_MIC_PROFILE, null))
+        set(value) = preferences.edit { putString(KEY_MIC_PROFILE, value.name) }
+
+    /**
      * The crash tripwire for Tier 2.
      *
      * Set immediately before the first-ever `nativeLoadModel`, cleared after a successful
@@ -72,6 +99,8 @@ class Settings(context: Context) {
         const val KEY_WAKE_WORD = "wakeword.id"
         const val KEY_HANDS_FREE = "wakeword.armed"
         const val KEY_LISTEN_CUE = "listen.cue"
+        const val KEY_TURN_DUCK = "turn.duck"
+        const val KEY_MIC_PROFILE = "mic.profile"
         const val KEY_LLM_ATTEMPTED = "llm.loadAttempted"
         const val KEY_LLM_CRASHED = "llm.disabledByCrash"
         const val KEY_LLM_ENABLED = "llm.enabled"

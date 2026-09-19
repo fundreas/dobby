@@ -3,7 +3,10 @@ package io.dobby.pipeline.audio
 import android.annotation.SuppressLint
 import android.media.AudioFormat
 import android.media.AudioRecord
-import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.AudioEffect
+import android.media.audiofx.NoiseSuppressor
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -46,6 +49,16 @@ class MicrophoneUnavailableException(message: String, cause: Throwable? = null) 
  */
 class AudioSource(
     private val scope: CoroutineScope,
+    /**
+     * Which microphone to open, and what the platform does to the signal on the way out.
+     *
+     * A parameter rather than a constant because the two profiles are not orderable: the
+     * unprocessed one is better in a quiet room and deaf to the panel's own speaker, and the
+     * processed one is the only thing on this device that can hear past music. Which is right
+     * is a measurement (`m2b-plan.md` B3), and until it has been taken the default is what M2
+     * shipped.
+     */
+    val profile: MicProfile = MicProfile.DEFAULT,
     val sampleRate: Int = SAMPLE_RATE,
     val frameLength: Int = FRAME_LENGTH,
 ) {
@@ -57,6 +70,9 @@ class AudioSource(
     @Volatile
     private var record: AudioRecord? = null
     private var reader: Job? = null
+
+    /** The platform effects attached to the open session, released with it. */
+    private var effects: List<AudioEffect> = emptyList()
 
     val isRunning: Boolean get() = reader?.isActive == true
 
@@ -113,7 +129,7 @@ class AudioSource(
 
         val opened = try {
             AudioRecord(
-                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                profile.source,
                 sampleRate,
                 CHANNEL,
                 ENCODING,
@@ -130,8 +146,14 @@ class AudioSource(
             throw MicrophoneUnavailableException("the microphone is held by something else")
         }
 
+        // Before startRecording, because an effect is attached to the session rather than to
+        // the stream and some HALs only honour one set up on an idle session.
+        val attached = attachEffects(opened.audioSessionId)
+        effects = attached
+
         opened.startRecording()
         if (opened.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+            release(attached)
             opened.release()
             throw MicrophoneUnavailableException("the microphone did not start")
         }
@@ -158,14 +180,64 @@ class AudioSource(
             } finally {
                 // The reader owns the release, and it is the only thread that can do it
                 // safely: releasing an AudioRecord from elsewhere while read() is blocked in
-                // native code is a crash, not an exception.
+                // native code is a crash, not an exception. The effects go with the session
+                // they were attached to, and must go first: they hold a handle on it. Both
+                // checks are the same guard — a reader that is shutting down while the mic has
+                // already been reopened must release its own session's things, not the new
+                // session's.
                 if (record === opened) record = null
+                release(attached)
                 opened.release()
             }
         }
     }
 
+    /**
+     * Attaches the platform's echo canceller and noise suppressor to [sessionId], if it has any.
+     *
+     * Only for a profile that wants them, and only where the device offers them.
+     * `create()` returning null is the normal negative answer on hardware that has no such
+     * effect — not an error, and never a reason to fail the microphone: a panel that cannot
+     * cancel its own echo still hears people in a quiet room, and a panel that refuses to open
+     * the microphone hears nobody at all.
+     */
+    private fun attachEffects(sessionId: Int): List<AudioEffect> {
+        if (!profile.wantsPlatformEffects) return emptyList()
+        return buildList {
+            if (AcousticEchoCanceler.isAvailable()) {
+                addIfEnabled(AcousticEchoCanceler.create(sessionId), "echo canceller")
+            } else {
+                Log.i(TAG, "no platform echo canceller on this device")
+            }
+            if (NoiseSuppressor.isAvailable()) {
+                addIfEnabled(NoiseSuppressor.create(sessionId), "noise suppressor")
+            }
+        }
+    }
+
+    private fun MutableList<AudioEffect>.addIfEnabled(effect: AudioEffect?, what: String) {
+        if (effect == null) {
+            Log.i(TAG, "$what unavailable for this session")
+            return
+        }
+        try {
+            effect.enabled = true
+            add(effect)
+        } catch (e: IllegalStateException) {
+            // The effect exists but this session will not take it. Nothing to do but let go.
+            Log.w(TAG, "$what refused to enable", e)
+            effect.release()
+        }
+    }
+
+    private fun release(attached: List<AudioEffect>) {
+        if (effects === attached) effects = emptyList()
+        attached.forEach { it.release() }
+    }
+
     companion object {
+        private const val TAG = "Dobby"
+
         /** What openWakeWord requires, and what Parakeet and Silero VAD are configured for. */
         const val SAMPLE_RATE: Int = 16_000
 

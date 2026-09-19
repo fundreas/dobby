@@ -7,6 +7,8 @@ import io.dobby.android.chat.detailLine
 import io.dobby.core.DobbyEngine
 import io.dobby.core.Fallthrough
 import io.dobby.core.FallthroughLog
+import io.dobby.core.audio.TurnAudio
+import io.dobby.core.audio.TurnDuck
 import io.dobby.core.dispatch.Dispatcher
 import io.dobby.core.dispatch.SockHealth
 import io.dobby.core.nlu.llm.Tier2
@@ -19,12 +21,14 @@ import io.dobby.core.sock.SockContext
 import io.dobby.core.sock.SockLog
 import io.dobby.core.sock.SockResult
 import io.dobby.pipeline.ListenCue
+import io.dobby.pipeline.audio.MicProfile
 import io.dobby.pipeline.wakeword.WakeWordOption
 import io.dobby.socks.clock.ClockState
 import io.dobby.pipeline.VoiceIo
 import io.dobby.pipeline.VoiceState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -33,6 +37,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
@@ -54,6 +59,10 @@ data class DobbyUiState(
     val wakeWordId: String? = null,
     /** How the panel acknowledges the wake word: a buzz, a pip, or nothing. */
     val listenCue: ListenCue = ListenCue.DEFAULT,
+    /** What happens to the music while somebody is talking: quieter, or stopped. */
+    val turnDuck: TurnDuck = TurnDuck.DEFAULT,
+    /** Which microphone is open. Changing it takes effect at the next start. */
+    val micProfile: MicProfile = MicProfile.DEFAULT,
 )
 
 /**
@@ -116,6 +125,14 @@ class DobbyController(
      * Tier 1", with no branch anywhere else in this class.
      */
     private val tier2Resolver: Tier2Resolver? = null,
+    /**
+     * Quietens whatever is playing for the length of a turn.
+     *
+     * Here rather than in [VoicePipeline], which knows nothing about Socks or playback and
+     * should keep not knowing, and rather than in `PlaybackCoordinator`, which is Sock-facing
+     * and single-slot. [TurnAudio.NONE] off-device, where there is nothing to duck.
+     */
+    private val turnAudio: TurnAudio = TurnAudio.NONE,
     sockContext: (announce: suspend (String) -> Unit) -> SockContext,
 ) {
     private val transcript = Transcript()
@@ -259,6 +276,10 @@ class DobbyController(
                 wakeWords = wakeWordOptions,
                 wakeWordId = pipeline.selectedWakeWordId,
                 listenCue = pipeline.listenCue,
+                // From settings rather than from the pipeline: the pipeline took its profile at
+                // construction and cannot change it, and the duck is not the pipeline's at all.
+                turnDuck = settings?.turnDuck ?: TurnDuck.DEFAULT,
+                micProfile = settings?.micProfile ?: MicProfile.DEFAULT,
             )
         }.stateIn(
             scope,
@@ -314,6 +335,29 @@ class DobbyController(
         refresh.value = refresh.value + 1
     }
 
+    /**
+     * Chooses whether the music ducks or stops for a turn. Takes effect on the next turn.
+     *
+     * Which of the two is right is a measurement and not a preference — but it is the person
+     * standing in the room who takes it, so the switch has to be reachable from the room.
+     */
+    fun setTurnDuck(mode: TurnDuck) {
+        settings?.turnDuck = mode
+        refresh.value = refresh.value + 1
+    }
+
+    /**
+     * Chooses which microphone the panel opens. **Takes effect at the next start.**
+     *
+     * The source is fixed for the life of the pipeline — [io.dobby.pipeline.audio.AudioSource]
+     * is the only thing allowed to open the recorder, and swapping it mid-life is a deaf gap in
+     * the middle of whatever was listening. The settings screen says so where it is chosen.
+     */
+    fun setMicProfile(profile: MicProfile) {
+        settings?.micProfile = profile
+        refresh.value = refresh.value + 1
+    }
+
     /** Arms or disarms the wake word. */
     fun setHandsFree(enabled: Boolean) {
         if (enabled) pipeline.startHandsFree() else pipeline.stopHandsFree()
@@ -358,6 +402,12 @@ class DobbyController(
      * microphone — which is what somebody who has just been buzzed at does anyway: say it
      * again, differently, without waiting to be invited.
      *
+     * Whatever is playing is ducked for the whole turn and released in the same `finally` that
+     * re-arms the wake word. Without it the microphone hears the panel's own speaker: the VAD
+     * never finds its trailing silence, every turn runs to the ten-second cap, and Parakeet is
+     * handed a haystack. The duck is what puts the endpoint back within reach — it does nothing
+     * for the wake word, which had to be heard before this method was ever called.
+     *
      * [VoiceIo.endTurn] closes the turn in a `finally`, because the wake word stays off the
      * microphone until it is called and a turn that throws must not leave it off forever.
      */
@@ -367,6 +417,12 @@ class DobbyController(
             // one. Somebody walking up and saying the wake word has not agreed to answer it.
             engine?.endTurn()
             try {
+                // Before the first utterance, not before each one: a turn is up to three
+                // utterances plus Dobby's spoken answers, and letting the music swell back up
+                // in the gaps is worse than not ducking at all — it happens exactly while the
+                // person is waiting to speak again. Inside the try so that a duck that somehow
+                // fails half-way is still released below.
+                turnAudio.duck()
                 var attempts = 0
                 var window = SPEECH_WINDOW
                 while (true) {
@@ -406,6 +462,11 @@ class DobbyController(
                     }
                 }
             } finally {
+                // NonCancellable, and first: the scope this runs in is cancelled when the
+                // service dies, and a suspending release in a plain finally would be cancelled
+                // before it did anything — leaving the panel switched off and the music still
+                // quiet, with nothing left running to put it back.
+                withContext(NonCancellable) { turnAudio.release() }
                 // Both, in this order and in a finally: a question that outlived its turn would
                 // be answered by whatever the next wake word picked up (`socks.specs/README.md`
                 // §5), and the wake word stays off the microphone until endTurn() puts it back.
@@ -430,6 +491,7 @@ class DobbyController(
      */
     fun submit(text: String): Job = scope.launch {
         if (text.isBlank()) return@launch
+        // No duck: no microphone is open, so there is nothing the music can drown out.
         turn.withLock {
             transcript.heard(text.trim())
             respondTo(text.trim())
