@@ -92,7 +92,7 @@ class DobbyController(
 
     private val health = SockHealth()
 
-    private val wiring = DobbySocks.create({ text -> transcript.note(text) }, hardware)
+    private val wiring = DobbySocks.create(hardware)
 
     /** The panel's clock and timer countdown, straight from the Sock that owns them. */
     val clock: StateFlow<ClockState> get() = wiring.clock.state

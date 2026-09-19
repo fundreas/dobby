@@ -16,7 +16,6 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -286,16 +285,16 @@ class DobbyControllerTest {
     }
 
     @Test
-    fun `a Sock's own output lands in the chat, since there is no stdout on a wall`() = runTest {
-        // Devi prints its greeting through the `out` callback rather than returning it.
-        val dobby = controller(FakeVoice())
+    fun `a development Sock answers like any other - in the chat and out loud`() = runTest {
+        val voice = FakeVoice()
+        val dobby = controller(voice)
         dobby.start()
 
         dobby.submit("hello").join()
 
-        val note = uiState(dobby).messages.firstOrNull { it.voice == Voice.SYSTEM }
-        assertNotNull(note, "the development Sock's output should be visible")
-        assertEquals("Hallo, Meister", note.text)
+        val answer = uiState(dobby).messages.last { it.voice == Voice.DOBBY }
+        assertEquals("Hallo, Meister", answer.text)
+        assertEquals(listOf("Hallo, Meister"), voice.spoken)
     }
 
     @Test

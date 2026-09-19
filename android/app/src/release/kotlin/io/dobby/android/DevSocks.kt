@@ -7,6 +7,5 @@ import io.dobby.core.sock.Sock
  * classpath — the app module declares it `debugImplementation`.
  */
 object DevSocks {
-    @Suppress("UNUSED_PARAMETER")
-    fun create(out: (String) -> Unit): List<Sock> = emptyList()
+    fun create(): List<Sock> = emptyList()
 }

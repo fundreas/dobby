@@ -98,7 +98,7 @@ class SttTemplateTest {
      * reaches the command it was recorded for across *every* Sock that is installed.
      */
     private fun registry(): SockRegistry =
-        SockRegistry.buildOrThrow(DobbySocks.create(out = {}, hardware = null).socks)
+        SockRegistry.buildOrThrow(DobbySocks.create(hardware = null).socks)
 
     private fun readCases(present: List<String>, manifest: () -> String): List<Case> {
         if (MANIFEST !in present) return emptyList()

@@ -35,7 +35,7 @@ object DobbySocks {
      *   timer then runs off its coroutine alone and chimes silently, which is exactly what a
      *   unit test wants and what the terminal harness gets.
      */
-    fun create(out: (String) -> Unit, hardware: ClockHardware? = null): Wiring {
+    fun create(hardware: ClockHardware? = null): Wiring {
         var directory: Introspection? = null
         val clock = if (hardware == null) {
             ClockSock()
@@ -45,7 +45,7 @@ object DobbySocks {
         val socks = buildList {
             add(clock)
             add(HelpSock { directory })
-            addAll(DevSocks.create(out))
+            addAll(DevSocks.create())
         }
         return Wiring(socks, clock) { directory = it }
     }

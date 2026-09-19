@@ -39,7 +39,7 @@ object DobbySocks {
             // The terminal has no SoundPool, so the chime prints itself. A timer is then just
             // as testable here as on the panel — which is the whole point of the interface.
             ClockSock(chime = { sound -> out("  🔔 ${sound.configValue}") }),
-            DeviSock(out),
+            DeviSock(),
             HelpSock { directory },
         )
         return Wiring(socks) { directory = it }
