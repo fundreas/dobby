@@ -7,20 +7,17 @@ import io.dobby.core.sock.SockResult
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 class DeviSockTest {
 
-    private val printed = mutableListOf<String>()
-    private val devi = DeviSock(printed::add)
+    private val devi = DeviSock()
 
     @Test
-    fun `hello prints the greeting`() = runTest {
+    fun `hello answers with the greeting`() = runTest {
         val result = devi.handle(CommandInvocation(DeviSock.HELLO))
 
-        assertEquals(listOf("Hallo, Meister"), printed)
-        // Silent, not Spoken: the printing is the feedback.
-        assertEquals(SockResult.Silent, result)
+        // Spoken, not Silent: core shows it in the chat and says it out loud.
+        assertEquals(SockResult.Spoken("Hallo, Meister"), result)
     }
 
     @Test
@@ -30,13 +27,12 @@ class DeviSockTest {
     }
 }
 
-/** The full Phase A path: raw text → normalize → match → dispatch → side effect. */
+/** The full Phase A path: raw text → normalize → match → dispatch → answer. */
 class DeviEngineTest {
 
-    private val printed = mutableListOf<String>()
     private val fellThrough = mutableListOf<String>()
     private val engine = DobbyEngine(
-        registry = SockRegistry.buildOrThrow(listOf(DeviSock(printed::add))),
+        registry = SockRegistry.buildOrThrow(listOf(DeviSock())),
         onFallthrough = fellThrough::add,
     )
 
@@ -46,22 +42,19 @@ class DeviEngineTest {
 
         assertEquals("hello", outcome.normalized)
         assertEquals(DeviSock.HELLO, outcome.invocation?.commandId)
-        assertEquals(listOf("Hallo, Meister"), printed)
-        assertEquals(SockResult.Silent, outcome.result)
+        assertEquals(SockResult.Spoken("Hallo, Meister"), outcome.result)
     }
 
     @Test
     fun `accepts the variants`() = runTest {
         for (utterance in listOf("hello", "Hallo Devi", "hello devi", "Hi Devi")) {
-            engine.handle(utterance)
+            assertEquals(SockResult.Spoken("Hallo, Meister"), engine.handle(utterance).result)
         }
-        assertEquals(List(4) { "Hallo, Meister" }, printed)
     }
 
     @Test
     fun `tolerates an STT slip in the keyword`() = runTest {
-        engine.handle("hallo devi")
-        assertEquals(listOf("Hallo, Meister"), printed)
+        assertEquals(SockResult.Spoken("Hallo, Meister"), engine.handle("hallo devi").result)
     }
 
     @Test
@@ -71,6 +64,5 @@ class DeviEngineTest {
         assertEquals(null, outcome.invocation)
         assertEquals(SockResult.Spoken(DobbyEngine.NOT_UNDERSTOOD), outcome.result)
         assertEquals(listOf("spiele irgendwas von queen"), fellThrough)
-        assertTrue(printed.isEmpty())
     }
 }

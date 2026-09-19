@@ -13,13 +13,8 @@ import io.dobby.core.sock.SockResult
  * Exists to prove the wiring end to end without dragging in Spotify, a network or an account.
  * It is a real Sock (it goes through the registry, the palette and the dispatcher like any
  * other), but it is not a product Sock and must not ship in a release build.
- *
- * The greeting goes to [out] rather than straight to `println` so the same Sock works on
- * Android, where "print" will have to mean something else.
  */
-class DeviSock(
-    private val out: (String) -> Unit = ::println,
-) : Sock {
+class DeviSock : Sock {
 
     override val id: String = "devi"
 
@@ -42,12 +37,9 @@ class DeviSock(
     )
 
     override suspend fun handle(invocation: CommandInvocation): SockResult = when (invocation.commandId) {
-        HELLO -> {
-            out(GREETING)
-            // Silent, not Spoken: the printing IS the action here. When this moves to the phone,
-            // `out` changes and the result type does not.
-            SockResult.Silent
-        }
+        // Spoken, not Silent: the greeting IS the answer, so it belongs in the chat and in the
+        // room. Core decides how to deliver it — a Sock never speaks or prints on its own.
+        HELLO -> SockResult.Spoken(GREETING)
 
         else -> SockResult.NotForMe
     }
