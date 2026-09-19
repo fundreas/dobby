@@ -299,26 +299,77 @@ The interface above this stage is very nearly the one it has always been — `su
 - The resolution for a genuinely ambiguous word is therefore always the same: **promote it to a shared command** (§3.4), never re-word one Sock's templates to dodge the other.
 - ~150 lines of pure Kotlin for the matcher itself. HA's `hassil` proves the mechanism at scale.
 
-### 5.4 Tier 2 — local LLM with grammar-constrained decoding (later milestone)
+### 5.4 Tier 2 — local LLM with grammar-constrained decoding
 
-- Only invoked when Tier 1 returns null.
-- The system prompt is **generated** from the registry: every `CommandSpec.description` becomes a tool definition, every `Example` a few-shot line. Adding a Sock automatically teaches the LLM its commands.
-- The **GBNF grammar** is likewise generated — one branch per command, so params are constrained per command and the model cannot emit an unknown command or a malformed param set:
+*Built in M6 (single shot) and split in M6b (route, then fill). This section describes what
+exists; `m6-plan.md` and `m6b-plan.md` carry the reasoning.*
+
+- Only invoked when Tier 1 returns null, on the **first utterance of a turn only**, under one
+  5 s deadline, and the panel behaves exactly as it did without it whenever anything fails.
+- Both prompts and both grammars are **generated** from the registry, so adding a Sock teaches
+  the LLM its commands and removing one makes them unreachable in the same breath.
+
+**Two steps, because there are two decisions.** One prompt that asks a 1.7B model for the
+command *and* its parameters reached 1426 of 1500 estimated tokens at eleven commands, with
+seven Socks still to come. So:
+
+*Step 1 — route.* One line per command, no parameters. The model answers with a bare command
+id, or `none`. The grammar is a flat alternation of literals:
 
 ```
-root           ::= cmd_play_music | cmd_stop | cmd_set_timer | … | cmd_none
-cmd_play_music ::= "{\"command\":\"spotify.play_music\",\"params\":{\"query\":" string "}}"
-cmd_stop       ::= "{\"command\":\"shared.stop\",\"params\":{}}"
-cmd_set_timer  ::= "{\"command\":\"clock.set_timer\",\"params\":{\"amount\":" int ",\"unit\":" unit "}}"
-cmd_none       ::= "{\"command\":\"none\",\"params\":{}}"
+root ::= "clock.set_timer" | "clock.whats_the_time" | … | "shared.stop" | "none"
 ```
 
-- `none` is core's own command, always present, and means "no Sock claims this".
-- A shared command emits **one** branch no matter how many Socks subscribe — the chain, not the LLM, decides who acts.
-- **Prompt caching:** persist the KV cache of the static system prompt at model load; per request, only the utterance is prefilled. Expected end-to-end on Nord CE CPU: **~2–4 s** (vs. 3–6 s uncached). Generation ~8–12 tok/s at 1.7B Q4; output is ~30 tokens. The cache must be **invalidated whenever the registry changes** (Sock added/removed/updated) — key it on a hash of the generated prompt.
-- Load the model **once** at service start, keep resident (mmap). If memory pressure proves fatal, make Tier 2 lazy-load + idle-unload — measure first.
-- **Flywheel:** log every utterance that fell through to Tier 2 together with the resolved command. Periodically promote frequent phrasings into new Tier 1 templates **in the owning Sock's spec**.
-- **Examples serve two jobs and must be marked as such.** Most `Example`s are Tier 1 regression cases — the spec's utterance tables, asserted on every registry build. Some are Tier 2 few-shots: paraphrases Tier 1 is *supposed* to miss, which is the entire reason this tier exists. The latter carry `matchedByTemplates = false` so they reach the system prompt without failing the collision gate.
+The label **is** the command id: it is a hint a numbered list cannot give, the gate's lookup
+does not change, and there is no second vocabulary to keep in sync.
+
+*Step 2 — fill*, and only for a command that has parameters. A user turn carrying that one
+command's spec and one worked example, and a grammar for its params object with an escape:
+
+```
+root   ::= "{\"amount\":" int ",\"unit\":" p-unit "}" | "none"
+p-unit ::= "\"sekunden\"" | "\"minuten\"" | "\"stunden\"" | "null"
+```
+
+The `"none"` escape is load-bearing: once the command has been chosen, the model would
+otherwise be *forced* to invent a duration for "stell einen timer" said without one.
+
+Most commands have no parameters, so for them step 1 is the whole answer — no second request,
+no second prefill, no second decode.
+
+- Rule names use **hyphens**: llama.cpp's `is_word_char` accepts `[a-zA-Z0-9-]` and not `_`.
+  Verified against the pinned source both ways by `android/llama/tools/gbnf_check.cpp`.
+- `none` is core's own command, always present, and `SockRegistry.build` rejects any Sock that
+  declares it — so the label has exactly one meaning.
+- A shared command is **one** label no matter how many Socks subscribe: the chain, not the LLM,
+  decides who acts.
+- **The gate, not the grammar, is the guarantee.** `:core` cannot verify that a grammar was
+  applied, so every reply goes back through `registry.commands[label]` and `ParamCoercion` —
+  the same function Tier 1's palette uses. The LLM gets no route into a Sock that a template
+  does not also have.
+- **Prompt caching:** only the route prefix is prefilled, once per *process*, and the KV cache
+  is truncated back to it at the start of every request — no snapshot and no file, because a
+  ~1100-token prefix snapshots to ~120 MiB. A fill turn is uncached by design; its tail replays
+  the route exchange rather than continuing a warm cache, which keeps the truncate-first
+  invariant that makes a cancelled request safe. The cache is keyed on a hash of both prompts
+  and both grammars, so any registry change re-prefills.
+- Load the model **once** at service start, mmapped, on its own coroutine after the microphone
+  is up. `onTrimMemory(RUNNING_CRITICAL)` gives back the ~280 MiB context and keeps the
+  weights; the context re-prefills in the background.
+- **Flywheel:** every utterance that fell through is logged with what Tier 2 made of it, in a
+  bounded in-memory ring. Frequent phrasings get promoted into Tier 1 templates **in the owning
+  Sock's spec** — or into a held-out accuracy case, which is the same discipline pointed at the
+  model instead of at the matcher.
+- **Examples serve three jobs and must be marked as such.** Most are Tier 1 regression cases,
+  asserted on every registry build. Some are Tier 2 few-shots (`matchedByTemplates = false`):
+  paraphrases Tier 1 is *supposed* to miss, which reach the prompts without failing the
+  collision gate. Some are held-out accuracy cases (`heldOut = true`): never shown to the model
+  at all, because an accuracy test over the few-shots measures memorisation.
+- **Measured / not yet measured.** The token budgets are measured on the JVM and enforced by
+  `PromptBudgetTest`. Everything about *speed* — decode rate, prefill rate, thread count,
+  mlock, end-to-end latency — is still inherited rather than measured on a 750G; the suites in
+  `android/llama/src/androidTest` and `android/app/src/androidTest` are what replace those
+  numbers, and `android/llama/README.md` lists which they are.
 
 ---
 

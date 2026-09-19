@@ -135,14 +135,27 @@ class Tier2DeviceTest {
         assertTrue(llama.loadModel(model))
         try {
             assertTrue(llama.newContext())
-            val tokens = llama.prefillSystem(program.systemPrefix)
-            assertTrue("the system prefix did not prefill: $tokens", tokens > 0)
+            val tokens = llama.prefillSystem(program.route.systemPrefix)
+            assertTrue("the route prefix did not prefill: $tokens", tokens > 0)
+
+            // Every fill grammar too, not just the route one: a grammar can parse and still be
+            // unsatisfiable by a particular tokenizer, and only the device can say so.
+            for ((id, fill) in program.fill) {
+                val reply = llama.generate(
+                    program.fillRequest(id, "weck mich in 20 minuten")!!.tail,
+                    fill.grammar,
+                    GrammarGenerator.ROOT,
+                    Tier2.MAX_FILL_TOKENS,
+                )
+                assertNotNull("fill grammar for $id produced nothing", reply)
+                println("$id fill → $reply")
+            }
 
             // The scaffold has to end on a token boundary the utterance cannot merge across,
             // or n_system is not a stable cut and the KV cache answers with a corrupted prompt.
-            val prefixTokens = llama.tokenCount(program.systemPrefix)
-            val withShort = llama.tokenCount(program.systemPrefix + "hallo")
-            val withLong = llama.tokenCount(program.systemPrefix + "weck mich in 20 minuten")
+            val prefixTokens = llama.tokenCount(program.route.systemPrefix)
+            val withShort = llama.tokenCount(program.route.systemPrefix + "hallo")
+            val withLong = llama.tokenCount(program.route.systemPrefix + "weck mich in 20 minuten")
             assertEquals(
                 "the utterance's first token merged backwards into the system prefix",
                 prefixTokens + llama.tokenCount("hallo"),
@@ -169,12 +182,12 @@ class Tier2DeviceTest {
         try {
             assertTrue(llama.newContext())
             val samples = listOf(
-                program.systemPrefix,
-                PromptGenerator.NO_COMMAND_EXAMPLE,
+                program.route.systemPrefix,
+                PromptGenerator.NO_COMMAND_EXAMPLES.first(),
                 "weck mich in 20 minuten",
-                Tier2Json.encode("clock.set_timer", mapOf("amount" to 9999, "unit" to "sekunden")),
-                Tier2Json.encode("none"),
-            )
+                Tier2Json.encodeParams(mapOf("amount" to 9999, "unit" to "sekunden")),
+                "none",
+            ) + program.fill.values.map { it.userTurn }
             for (text in samples) {
                 val real = llama.tokenCount(text)
                 val estimated = TokenEstimate.of(text)
@@ -185,12 +198,21 @@ class Tier2DeviceTest {
                 println("tokens: real=$real estimated=$estimated ratio=${"%.2f".format(estimated.toDouble() / real)}")
             }
 
-            // And the real length of the longest grammar-legal reply, which is the number
-            // Tier2.MAX_REPLY_TOKENS has to exceed.
-            val longest = Tier2Catalog.of(registry()).commands.maxOf { command ->
+            // The real length of the longest label, and of the longest params-only reply: the
+            // two numbers MAX_ROUTE_TOKENS and MAX_FILL_TOKENS have to exceed.
+            val longestLabel = program.route.labels.maxOf { llama.tokenCount(it) }
+            println(
+                "longest route label: $longestLabel real tokens " +
+                    "(cap ${Tier2.maxRouteTokens(program.route.labels)})",
+            )
+            assertTrue(
+                "the route cap is below the longest label this registry admits",
+                longestLabel <= Tier2.maxRouteTokens(program.route.labels),
+            )
+
+            val longestFill = Tier2Catalog.of(registry()).withParams.maxOfOrNull { command ->
                 llama.tokenCount(
-                    Tier2Json.encode(
-                        command.id,
+                    Tier2Json.encodeParams(
                         command.params.associate { spec ->
                             spec.name to when (val type = spec.type) {
                                 is ParamType.Integer -> 9999
@@ -200,11 +222,11 @@ class Tier2DeviceTest {
                         },
                     ),
                 )
-            }
-            println("longest grammar-legal reply: $longest real tokens (cap ${Tier2.MAX_REPLY_TOKENS})")
+            } ?: 0
+            println("longest params-only reply: $longestFill real tokens (cap ${Tier2.MAX_FILL_TOKENS})")
             assertTrue(
-                "the cap is below the longest reply this registry admits",
-                longest <= Tier2.MAX_REPLY_TOKENS,
+                "the fill cap is below the longest reply this registry admits",
+                longestFill <= Tier2.MAX_FILL_TOKENS,
             )
         } finally {
             llama.close()
@@ -217,6 +239,10 @@ class Tier2DeviceTest {
      * Sweeps the thread count, times the warm path, and reports the resample count. Whatever
      * this prints is what belongs in `Llama.THREADS`, in `dobby-plan.md` §5.4 and in §9 — the
      * numbers there today are inherited, not measured on a 750G.
+     *
+     * This is the **route** path only; `Tier2AccuracyTest.latencyBySplit` in `:android:app` is
+     * where route-only and route+fill are compared against each other, because that is the one
+     * module that can build the real registry.
      */
     @Test
     fun threadSweepAndWarmLatency() {
@@ -227,14 +253,14 @@ class Tier2DeviceTest {
         try {
             for (threads in listOf(2, 4, 8)) {
                 assertTrue(llama.newContext(threads = threads))
-                val prefill = measureTimeMillis { llama.prefillSystem(program.systemPrefix) }
+                val prefill = measureTimeMillis { llama.prefillSystem(program.route.systemPrefix) }
                 val latencies = UTTERANCES.map { utterance ->
                     measureTimeMillis {
                         llama.generate(
-                            utterance + program.assistantSuffix,
-                            program.grammar,
+                            program.routeRequest(utterance).tail,
+                            program.route.grammar,
                             GrammarGenerator.ROOT,
-                            Tier2.MAX_REPLY_TOKENS,
+                            Tier2.maxRouteTokens(program.route.labels),
                         )
                     }
                 }.sorted()
@@ -252,54 +278,6 @@ class Tier2DeviceTest {
         }
     }
 
-    /**
-     * `Tier2AccuracyTest` — and the half that matters is the negatives.
-     *
-     * A model that resolves everything is worse than no model: it turns "wie wird das Wetter"
-     * into a timer. The held-out paraphrases say the tier is useful; the non-commands say it is
-     * safe.
-     */
-    @Test
-    fun accuracyOnParaphrasesAndNonCommands() {
-        val model = gguf ?: return skip("no GGUF pushed")
-        val reg = registry()
-        val llama = Llama()
-        assumeTrue(llama.open())
-        assertTrue(llama.loadModel(model))
-        try {
-            assertTrue(llama.newContext())
-            assertTrue(llama.prefillSystem(program.systemPrefix) > 0)
-            val resolver = object : io.dobby.core.nlu.llm.Tier2Resolver {
-                override val available = true
-                override val unavailableReason: String? = null
-                override suspend fun generate(utterance: String, program: Tier2Program) =
-                    llama.generate(
-                        utterance + program.assistantSuffix,
-                        program.grammar,
-                        GrammarGenerator.ROOT,
-                        Tier2.MAX_REPLY_TOKENS,
-                    )
-            }
-            val tier2 = Tier2(reg, resolver, program)
-
-            var correct = 0
-            runBlocking {
-                for ((utterance, expected) in EXPECTED) {
-                    val trace = tier2.resolve(utterance)
-                    val got = (trace.outcome as? io.dobby.core.nlu.llm.Tier2Outcome.Resolved)
-                        ?.invocation?.commandId
-                        ?: if (trace.outcome is io.dobby.core.nlu.llm.Tier2Outcome.NoCommand) "none" else "?"
-                    if (got == expected) correct++ else println("MISS: \"$utterance\" → $got, wanted $expected")
-                }
-            }
-            println("Tier 2 accuracy: $correct/${EXPECTED.size}")
-            assertNotNull(program.fingerprint)
-            assertTrue("accuracy below half is not a tier, it is a coin", correct * 2 >= EXPECTED.size)
-        } finally {
-            llama.close()
-        }
-    }
-
     private fun skip(why: String) {
         println("skipped: $why")
         assumeTrue(why, false)
@@ -312,21 +290,6 @@ class Tier2DeviceTest {
             "kannst du mir sagen wie spät es ist",
             "sag mal wie viel uhr haben wir",
             "ich will in 5 minuten erinnert werden",
-        )
-
-        /** Held out from the few-shots on purpose: these are not in the prompt. */
-        val EXPECTED: List<Pair<String, String>> = listOf(
-            "weck mich in 20 minuten" to "clock.set_timer",
-            "erinnere mich bitte in einer halben stunde" to "clock.set_timer",
-            "in 10 minuten bitte bescheid geben" to "clock.set_timer",
-            "kannst du mir sagen wie spät es ist" to "clock.whats_the_time",
-            "hast du die genaue zeit" to "clock.whats_the_time",
-            "wie viel uhr haben wir gerade" to "clock.whats_the_time",
-            // A model that resolves these is worse than no model.
-            "wie wird das wetter morgen" to "none",
-            "erzähl mir einen witz" to "none",
-            "ruf meine mutter an" to "none",
-            "was kostet ein liter milch" to "none",
         )
     }
 }

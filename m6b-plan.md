@@ -440,17 +440,44 @@ Steps 1 and 2 are independently mergeable. Step 5 is the one that says whether t
 
 ## Measured
 
-*(filled in by steps 0 and 5 — these are the numbers this plan is judged by)*
+**JVM, against the shipped registry (11 commands).** These are real and reproduced by
+`Tier2RegistryTest` and `PromptBudgetTest` on every build.
 
 | | single shot (baseline) | two-step |
 |---|---|---|
-| route prompt, estimated tokens at N commands | 1426 @ 11 | |
-| accuracy, held-out paraphrases | | |
-| negatives resolved as a command | | |
-| p50 / p95, zero-param command | | |
-| p50 / p95, command with params | | |
-| fill prefill, ms | — | |
-| resamples per request | | |
+| route prompt, estimated tokens at 11 commands | 1426 | **920** |
+| headroom, in commands | ~0 | **~6** |
+| commands needing a second request | 11 of 11 | **4 of 11** |
+| fill turn, estimated tokens | — | 102–170 of 180 |
+| longest reply the grammar admits | 45–48 over a 40 cap | 10–30 over a 25 cap |
+| longest route label | — | 14 tokens |
+
+The reply budget is still exceeded by the two calculator commands at their worst case
+(4-digit operand × 2), as it was under the single shot. Dropping the `{"c":"…"}` head bought
+~10 tokens; Qwen tokenizing digits one at a time costs 8 of them back. Reported, not enforced —
+see below.
+
+**On device: not measured.** Nothing in this section has run on a 750G, and every row below is
+still empty for the same reason M6's were: there is no phone in the loop.
+
+| | value | measured by |
+|---|---|---|
+| accuracy, held-out paraphrases | — | `:android:app` `Tier2AccuracyTest.accuracyAndNegatives` |
+| negatives resolved as a command | — | same (asserted 0; the only hard assertion) |
+| p50 / p95, zero-param command | — | `Tier2AccuracyTest.latencyBySplit` |
+| p50 / p95, command with params | — | same |
+| **fill prefill, ms** | — | same — **the number this design's main risk turns on** |
+| resamples per request | — | `Tier2DeviceTest.threadSweepAndWarmLatency` |
+| decode tok/s, thread sweep | — | same |
+
+Until the fill prefill is measured, `FILL_TURN_MAX_TOKENS` rests on an assumed prefill rate of
+120 tok/s (12× the pessimistic decode rate). If the device is slower, the lever is the one the
+open risks name and the budget's KDoc repeats.
+
+**What was checked without a device.** All seven generated grammars — route plus six fill —
+parse under llama.cpp's own parser at the pinned v0.4.1, via `android/llama/tools/gbnf_check.cpp`.
+That also settled the hyphen rule empirically: the same grammar with `cmd_clock_set_timer`
+fails with `expecting newline or end at _clock_set_timer`.
 
 ---
 

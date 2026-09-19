@@ -128,10 +128,40 @@ Dobby can be asked what it can do, two ways.
 | `/commands <sock>` | one Sock in detail: params, phrasings, templates in match order |
 | `/find <text>` | commands matching a word |
 | `/palette` | every template, in the order the matcher tries them |
-| `/fallthrough` | utterances Tier 1 could not match |
+| `/keywords` | every keyword, its phonetic code, and whether the phonetic tier trusts it |
+| `/prompt`, `/prompt <command>` | the Tier 2 route prompt and its headroom, or one command's fill turn |
+| `/grammar`, `/grammar <command>` | the route GBNF, or one command's fill GBNF |
+| `/tier2 <utterance>` | run both Tier 2 steps and the gate, with the model scripted from the registry's own few-shots |
+| `/fallthrough` | utterances Tier 1 could not match, and what Tier 2 made of them |
 | `/trace`, `/quit` | |
 
-Both read the same `Introspection` API in `:core`, so the terminal, the app's header line and the generated Tier 2 prompt answer identical questions. `:` also works as a prefix.
+Both read the same `Introspection` API in `:core`, so the terminal, the app's header line and the generated Tier 2 prompts answer identical questions. `:` also works as a prefix.
+
+## Understanding an utterance
+
+Two tiers, and the panel works with only the first.
+
+**Tier 1 — templates**, on every utterance. Token-by-token matching against the palette, with
+exact, Levenshtein and phonetic comparison of each keyword. The phonetic tier is Kölner
+Phonetik, and almost all of it is guards: a code ignores vowels entirely, so `spiele` and
+`spüle` are indistinguishable to it. A keyword is matched by sound only if it is long enough,
+if no other palette keyword shares its code, if no frequent German word does either, and if a
+consonant actually moved — which is what separates "schbiele" (a misheard cluster) from "spüle"
+(the kitchen sink). `/keywords` says which keywords qualify and why the others do not.
+
+**Tier 2 — a local model**, only when Tier 1 matches nothing, only on the first utterance of a
+turn, under one 5 s deadline, and only on the phone. Qwen3 1.7B through llama.cpp, in two steps:
+
+1. **Route** — one line per command, and the model answers with a bare command id or `none`.
+2. **Fill** — only if that command has parameters: its spec, one worked example, and a grammar
+   for its params object. Most commands skip this entirely.
+
+Both prompts and both grammars are generated from the registry, so a Sock is reachable by the
+model the moment it is registered. Whatever comes back goes through the same `ParamCoercion`
+Tier 1 uses, so **the model gets no route into a Sock that a template does not also have** —
+and an unmatched utterance still ends in two buzzes, exactly as it did before there was a
+model. `/tier2` runs the whole path in the terminal with the model scripted from the registry's
+own few-shots.
 
 ## What the tests cover
 

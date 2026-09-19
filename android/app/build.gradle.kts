@@ -87,4 +87,7 @@ dependencies {
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.kotlinx.coroutines.test)
+    // The held-out accuracy suite drives the real model through the real registry, so it needs
+    // both the native module and core's Tier2Negatives.
+    androidTestImplementation(testFixtures(project(":core")))
 }
