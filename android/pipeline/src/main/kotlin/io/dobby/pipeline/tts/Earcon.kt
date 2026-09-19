@@ -12,7 +12,9 @@ import java.io.Closeable
  * beep answers it before the screen can. `dobby-plan.md` §5.1 asks for it by name.
  *
  * A generated tone rather than an audio asset — one short beep does not justify a file, and a
- * `ToneGenerator` cannot fail to decode.
+ * `ToneGenerator` cannot fail to decode. Nothing here is shipped in the APK and nothing is a
+ * system sound the user could have changed: the platform synthesises the waveform on demand,
+ * the same machinery that makes a dial tone.
  */
 class Earcon(private val volumePercent: Int = DEFAULT_VOLUME) : Closeable {
 
@@ -25,9 +27,19 @@ class Earcon(private val volumePercent: Int = DEFAULT_VOLUME) : Closeable {
     }
 
     private fun create(): ToneGenerator? = try {
-        // STREAM_NOTIFICATION, not MUSIC: on a panel that will one day be playing the radio,
-        // the acknowledgement must not duck or be ducked by what it is interrupting.
-        ToneGenerator(AudioManager.STREAM_NOTIFICATION, volumePercent).also { generator = it }
+        // STREAM_MUSIC, and it has to be.
+        //
+        // This was STREAM_NOTIFICATION, on the reasoning that an acknowledgement should not be
+        // ducked by the radio it interrupts. True, and irrelevant next to what it cost: ringer
+        // mode mutes STREAM_NOTIFICATION outright, so a phone set to vibrate — which a wall
+        // panel very reasonably is — played nothing at all, silently, with the tone generator
+        // reporting success. Somebody who goes into settings and chooses "Ton" has asked for a
+        // sound in the plainest terms available to them; a panel that answers by consulting a
+        // ringer it never rings is broken, whatever the reasoning behind it was.
+        //
+        // Media volume is also the one the rocker controls by default, so "make it quieter" now
+        // does what it looks like it does.
+        ToneGenerator(AudioManager.STREAM_MUSIC, volumePercent).also { generator = it }
     } catch (e: RuntimeException) {
         // Some devices refuse when the audio hardware is busy. A missing beep is not a reason
         // to not listen.
