@@ -5,6 +5,9 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- The STT model is downloaded on first run rather than bundled: 46 MB does not belong in an APK. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Two short buzzes are what Dobby answers with when it did not understand, instead of
+         saying so out loud. Install-time, and the panel degrades to silence without it. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <queries>
         <intent>

@@ -3,6 +3,7 @@ package io.dobby.pipeline
 import android.content.Context
 import io.dobby.pipeline.audio.AudioSource
 import io.dobby.pipeline.audio.MicrophoneUnavailableException
+import io.dobby.pipeline.haptics.Haptics
 import io.dobby.pipeline.stt.ModelState
 import io.dobby.pipeline.stt.ParakeetRecognizer
 import io.dobby.pipeline.stt.SpeechModelStore
@@ -91,6 +92,7 @@ class VoicePipeline(
     private val wakeWordModels = WakeWordModelStore(modelRoot)
     private val speaker = Speaker(appContext)
     private val earcon = Earcon()
+    private val haptics = Haptics(appContext)
 
     /** One utterance at a time: the microphone is not shareable and neither is the transcript. */
     private val turn = Mutex()
@@ -287,10 +289,14 @@ class VoicePipeline(
      * means every utterance and every spoken answer is also scored against the wake phrase —
      * which is one detection threshold away from the panel waking itself in a loop.
      *
+     * [openFor] is the fourth way to end early: a deadline on the *start* of speech rather than
+     * on its end, for the follow-up window nobody asked for (see [VoiceIo.listen]). Once a voice
+     * is heard it stops applying and the utterance ends the way every other one does.
+     *
      * Returns null when nothing was said, the mic is unavailable, or the recogniser heard only
      * noise — all three are the same thing to the caller: no turn to take.
      */
-    override suspend fun listen(): String? = turn.withLock {
+    override suspend fun listen(openFor: Duration?): String? = turn.withLock {
         val recognizer = this.recognizer ?: return@withLock null
         val detector = vad ?: return@withLock null
 
@@ -304,7 +310,13 @@ class VoicePipeline(
             // sink list is never empty and the microphone never closes between the two.
             audio.addSink(capture)
             detachWakeWord()
-            withTimeoutOrNull(utteranceTimeout) { capture.await() } ?: capture.flush()
+            // A window that expires leaves `heardSpeech` false, which the check below already
+            // treats as "no turn to take" — so there is one way out of a silent room, not two.
+            if (openFor != null && withTimeoutOrNull(openFor) { capture.awaitSpeech() } != true) {
+                capture.flush()
+            } else {
+                withTimeoutOrNull(utteranceTimeout) { capture.await() } ?: capture.flush()
+            }
         } catch (e: MicrophoneUnavailableException) {
             _state.value = VoiceState.Unavailable(e.message ?: "Mikrofon nicht verfügbar")
             endTurn()
@@ -364,6 +376,8 @@ class VoicePipeline(
         pausedWakeWord = listener
         audio.removeSink(listener)
     }
+
+    override fun buzz() = haptics.notUnderstood()
 
     /** Speaks [text], returning once it has finished playing. */
     override suspend fun say(text: String) {

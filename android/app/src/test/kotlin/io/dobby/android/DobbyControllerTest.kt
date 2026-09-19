@@ -18,6 +18,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * The join between the microphone and Phase A.
@@ -30,7 +32,17 @@ import kotlin.test.assertTrue
 @OptIn(ExperimentalCoroutinesApi::class)
 class DobbyControllerTest {
 
-    private class FakeVoice(var heard: String? = null) : VoiceIo {
+    private class FakeVoice(vararg utterances: String?) : VoiceIo {
+        /** What the microphone returns, one per call to [listen]; the last one repeats. */
+        private val script = utterances.toMutableList()
+
+        var heard: String?
+            get() = script.firstOrNull()
+            set(value) {
+                script.clear()
+                script += value
+            }
+
         // Starts where the real pipeline starts: nothing is loaded yet.
         private val _state = MutableStateFlow<VoiceState>(VoiceState.Preparing("Starte…"))
         override val state: StateFlow<VoiceState> = _state.asStateFlow()
@@ -39,6 +51,10 @@ class DobbyControllerTest {
         val spoken: MutableList<String> = mutableListOf()
         var prepared: Boolean = false
         var shutdownCalls: Int = 0
+        var buzzes: Int = 0
+
+        /** One entry per [listen], holding the deadline it was given for speech to start. */
+        val windows: MutableList<Duration?> = mutableListOf()
 
         private val _wakeWords = MutableSharedFlow<Float>(extraBufferCapacity = 1)
         override val wakeWords: SharedFlow<Float> = _wakeWords.asSharedFlow()
@@ -96,13 +112,14 @@ class DobbyControllerTest {
 
         val turnsEnded: MutableList<Boolean> = mutableListOf()
 
-        override suspend fun listen(): String? {
+        override suspend fun listen(openFor: Duration?): String? {
             turnOpen = true
+            windows += openFor
             _state.value = VoiceState.Listening(speaking = false)
             _state.value = VoiceState.Listening(speaking = true)
             _state.value = VoiceState.Transcribing
             _state.value = VoiceState.Ready
-            return heard
+            return if (script.size > 1) script.removeAt(0) else script.firstOrNull()
         }
 
         override fun endTurn() {
@@ -112,6 +129,10 @@ class DobbyControllerTest {
 
         override suspend fun say(text: String) {
             spoken += text
+        }
+
+        override fun buzz() {
+            buzzes++
         }
 
         override fun shutdown() {
@@ -145,7 +166,7 @@ class DobbyControllerTest {
 
     @Test
     fun `an utterance reaches the Sock and its answer is both shown and spoken`() = runTest {
-        val voice = FakeVoice(heard = "wie spät ist es")
+        val voice = FakeVoice("wie spät ist es")
         val dobby = controller(voice)
         dobby.start()
 
@@ -166,7 +187,7 @@ class DobbyControllerTest {
     @Test
     fun `the Sock reaches the real SockContext through the join`() = runTest {
         val context = FakeSockContext()
-        val dobby = controller(FakeVoice(heard = "wie spät ist es"), context)
+        val dobby = controller(FakeVoice("wie spät ist es"), context)
         dobby.start()
 
         dobby.listen().join()
@@ -178,7 +199,7 @@ class DobbyControllerTest {
 
     @Test
     fun `saying nothing leaves the transcript untouched`() = runTest {
-        val voice = FakeVoice(heard = null)
+        val voice = FakeVoice(null)
         val dobby = controller(voice)
         dobby.start()
 
@@ -189,18 +210,62 @@ class DobbyControllerTest {
     }
 
     @Test
-    fun `an utterance no Sock claims is answered, not swallowed`() = runTest {
-        val voice = FakeVoice(heard = "mach mir ein sandwich")
+    fun `an utterance no Sock claims buzzes, and the microphone stays open`() = runTest {
+        // Nothing matched, so there is nothing to say. Saying "Das habe ich nicht verstanden."
+        // takes two seconds to deliver one bit of information, and delivers it over the top of
+        // the person already repeating themselves. Two buzzes, then listen again.
+        val voice = FakeVoice("mach mir ein sandwich", null)
         val dobby = controller(voice)
         dobby.start()
 
         dobby.listen().join()
 
+        assertEquals(1, voice.buzzes)
+        assertEquals(emptyList(), voice.spoken, "the apology must not be spoken")
+
+        // It is still in the chat: the chat is the log of what happened, and a buzz leaves no
+        // trace on it. Nothing matched, so there is no command to show under it.
         val answer = uiState(dobby).messages.last { it.voice == Voice.DOBBY }
         assertEquals("Das habe ich nicht verstanden.", answer.text)
-        // Nothing matched, so there is no command to show under it.
         assertEquals(null, answer.detail)
+        assertTrue(answer.failed)
+
+        // The first utterance was asked for and waits as long as the hard cap allows; the
+        // second is Dobby's own idea and gets five seconds to begin.
+        assertEquals(listOf(null, 5.seconds), voice.windows)
+        // Silence in that window ends the turn, which is what puts the wake word back.
+        assertEquals(listOf(true), voice.turnsEnded)
+    }
+
+    @Test
+    fun `saying it again inside the window is answered, without a new wake word`() = runTest {
+        val voice = FakeVoice("mach mir ein sandwich", "wie spät ist es")
+        val dobby = controller(voice)
+        dobby.start()
+
+        dobby.listen().join()
+
+        assertEquals(1, voice.buzzes)
+        val answer = uiState(dobby).messages.last { it.voice == Voice.DOBBY }
+        assertTrue(answer.text.startsWith("Es ist"), "the second try was answered: ${answer.text}")
         assertEquals(listOf(answer.text), voice.spoken)
+        // Both utterances belong to one turn — the wake word goes back on the stream once.
+        assertEquals(listOf(true), voice.turnsEnded)
+    }
+
+    @Test
+    fun `the panel gives up rather than hold the microphone open all evening`() = runTest {
+        // A television is a speaker that never runs out of unmatched sentences.
+        val voice = FakeVoice("mach mir ein sandwich")
+        val dobby = controller(voice)
+        dobby.start()
+
+        dobby.listen().join()
+
+        assertEquals(3, voice.buzzes)
+        assertEquals(listOf(null, 5.seconds, 5.seconds), voice.windows)
+        assertEquals(emptyList(), voice.spoken)
+        assertEquals(listOf(true), voice.turnsEnded)
     }
 
     @Test
@@ -235,7 +300,7 @@ class DobbyControllerTest {
 
     @Test
     fun `the status line reports what Dobby is doing`() = runTest {
-        val voice = FakeVoice(heard = "wie spät ist es")
+        val voice = FakeVoice("wie spät ist es")
         val dobby = controller(voice)
 
         assertEquals(Phase.PREPARING, uiState(dobby).phase)
@@ -254,7 +319,7 @@ class DobbyControllerTest {
 
     @Test
     fun `the wake word takes the same turn the button takes`() = runTest {
-        val voice = FakeVoice(heard = "wie spät ist es")
+        val voice = FakeVoice("wie spät ist es")
         val context = FakeSockContext()
         val dobby = controller(voice, context)
         dobby.start()
@@ -279,7 +344,7 @@ class DobbyControllerTest {
         // The panel's screen is off almost always, so being heard has to become visible. The
         // wake lock lives in SockContext (§7.2), which is why this is the controller's job and
         // not the pipeline's.
-        val voice = FakeVoice(heard = "wie spät ist es")
+        val voice = FakeVoice("wie spät ist es")
         val context = FakeSockContext()
         val dobby = controller(voice, context)
         dobby.start()
@@ -329,7 +394,7 @@ class DobbyControllerTest {
         // The wake word leaves the microphone stream for the duration of a turn (§2 invariant
         // 4). Nothing puts it back but endTurn, so a path that forgets to call it is a panel
         // that stops answering to its name — and says nothing about why.
-        val voice = FakeVoice(heard = "wie spät ist es")
+        val voice = FakeVoice("wie spät ist es")
         val dobby = controller(voice)
         dobby.start()
 
@@ -347,7 +412,7 @@ class DobbyControllerTest {
         // Parakeet is batch: there is a real second between the end of a sentence and the
         // answer. A panel that still says "listening" through it looks like one that did not
         // hear, and the person repeats themselves into a closed microphone.
-        val voice = FakeVoice(heard = "wie spät ist es")
+        val voice = FakeVoice("wie spät ist es")
         val dobby = controller(voice)
         dobby.start()
         settle()

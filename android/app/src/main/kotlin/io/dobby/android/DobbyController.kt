@@ -25,6 +25,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 /** What the chat view needs to know, in one object. */
 data class DobbyUiState(
@@ -238,20 +240,36 @@ class DobbyController(
      * utterance (`dobby-plan.md` §5.2) — so what the panel shows is the status line: whether
      * the VAD can hear a voice, then that the recogniser is running.
      *
+     * A turn is not always one utterance. An utterance Tier 1 could not match is answered with
+     * two buzzes and the microphone stays open for [CLARIFY_WINDOW] — which is what somebody
+     * who has just been buzzed at does anyway: say it again, differently, without waiting to be
+     * invited. Silence in that window ends the turn and the panel goes back to sleep.
+     *
      * [VoiceIo.endTurn] closes the turn in a `finally`, because the wake word stays off the
      * microphone until it is called and a turn that throws must not leave it off forever.
      */
     fun listen(): Job = scope.launch {
         turn.withLock {
-            transcript.beginListening()
             try {
-                val heard = pipeline.listen()
-                if (heard.isNullOrBlank()) {
-                    transcript.abandonListening()
-                    return@withLock
+                // The first utterance is the one that was asked for, so it waits as long as the
+                // hard cap allows; every retry after it is Dobby's idea and gets the window.
+                var openFor: Duration? = null
+                var attempts = 0
+                while (true) {
+                    transcript.beginListening()
+                    val heard = pipeline.listen(openFor)
+                    if (heard.isNullOrBlank()) {
+                        transcript.abandonListening()
+                        return@withLock
+                    }
+                    transcript.heard(heard)
+                    if (respondTo(heard)) return@withLock
+
+                    // A television is a speaker that never runs out of unmatched sentences, and
+                    // without a bound it would hold the microphone open all evening.
+                    if (++attempts >= MAX_CLARIFY_ROUNDS) return@withLock
+                    openFor = CLARIFY_WINDOW
                 }
-                transcript.heard(heard)
-                respondTo(heard)
             } finally {
                 pipeline.endTurn()
             }
@@ -273,13 +291,30 @@ class DobbyController(
         }
     }
 
-    private suspend fun respondTo(utterance: String) {
-        val dobby = engine ?: return
+    /**
+     * Dispatches one utterance and delivers the answer. Returns whether it was understood —
+     * which is what decides if the turn is over or if the microphone stays open for another go.
+     *
+     * "Understood" means Tier 1 matched a command, not that the command succeeded. A timer that
+     * fails to start is an answer worth speaking; an utterance nothing claimed is not.
+     */
+    private suspend fun respondTo(utterance: String): Boolean {
+        val dobby = engine ?: return true
         thinking.value = true
         val outcome = try {
             dobby.handle(utterance)
         } finally {
             thinking.value = false
+        }
+
+        if (!outcome.wasUnderstood) {
+            // Two buzzes instead of the sentence. The chat still shows it, because the chat is
+            // the log of what happened and a buzz leaves no mark on it — this is the one place
+            // where what is shown and what is said deliberately differ.
+            pipeline.buzz()
+            val text = (outcome.result as? SockResult.Spoken)?.text ?: DobbyEngine.NOT_UNDERSTOOD
+            transcript.said(text, failed = true)
+            return false
         }
 
         when (val result = outcome.result) {
@@ -303,6 +338,7 @@ class DobbyController(
 
             SockResult.NotForMe -> transcript.said("Das kann ich gerade nicht.", outcome.detailLine(), failed = true)
         }
+        return true
     }
 
     private fun phaseOf(voice: VoiceState, isThinking: Boolean): Phase = when {
@@ -336,5 +372,23 @@ class DobbyController(
 
         /** Long enough to read the answer that is about to appear. */
         const val WAKE_SCREEN_SECONDS = 30
+
+        /**
+         * How long the microphone stays open after a buzz.
+         *
+         * Long enough to draw a breath and rephrase, short enough that a panel nobody is
+         * talking to any more is back to listening for its name before they have left the room.
+         * It is the deadline on *starting* to speak, so a slow sentence is never cut off by it.
+         */
+        val CLARIFY_WINDOW: Duration = 5.seconds
+
+        /**
+         * How many unmatched utterances one turn will sit through: the first, and two retries.
+         *
+         * Past that, "it is still trying" has become "it is stuck", and the useful thing is to
+         * stop and let the person start again on their own terms. It is also the bound that
+         * keeps a television from holding the microphone open indefinitely.
+         */
+        const val MAX_CLARIFY_ROUNDS = 3
     }
 }

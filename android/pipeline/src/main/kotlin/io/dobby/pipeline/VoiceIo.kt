@@ -3,6 +3,7 @@ package io.dobby.pipeline
 import io.dobby.pipeline.wakeword.WakeWordOption
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlin.time.Duration
 
 /**
  * Speech in, speech out — the whole of what the layer above the microphone is allowed to ask for.
@@ -53,10 +54,17 @@ interface VoiceIo {
     /**
      * One utterance. Null when nothing was said or the microphone never opened.
      *
+     * [openFor] caps how long the microphone waits for someone to *start* talking; once a voice
+     * is heard the utterance runs to its own end as usual. Null means no separate deadline,
+     * which is the right answer for a turn somebody just asked for by pressing the button or
+     * saying the wake word. The follow-up window after a not-understood buzz passes a few
+     * seconds, because nobody asked for that one — it is Dobby holding the microphone open on
+     * the chance that the sentence is about to be repeated.
+     *
      * The wake word comes off the microphone stream for the duration and stays off until
      * [endTurn] — command audio is not wake-word audio (`dobby-plan.md` §2, invariant 4).
      */
-    suspend fun listen(): String?
+    suspend fun listen(openFor: Duration? = null): String?
 
     /**
      * The turn that [listen] began is finished: dispatched, answered, spoken. Re-arms the wake
@@ -70,6 +78,16 @@ interface VoiceIo {
 
     /** Speaks [text], returning once it has finished playing. */
     suspend fun say(text: String)
+
+    /**
+     * Two short buzzes: heard you, did not understand you.
+     *
+     * The wordless half of an answer. It exists so that the one sentence Dobby would otherwise
+     * repeat most often — "Das habe ich nicht verstanden." — never has to be spoken: it is
+     * slow, it says nothing a buzz does not, and it talks over the moment when the person is
+     * about to try again. Returns immediately.
+     */
+    fun buzz()
 
     fun shutdown()
 }

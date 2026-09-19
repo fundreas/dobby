@@ -180,6 +180,17 @@ class SpeechCapture internal constructor(
     private val captured = CompletableDeferred<FloatArray>()
 
     /**
+     * Resolves the moment the VAD first hears a voice — true — or when the capture ends
+     * without one, false.
+     *
+     * Separate from [captured] because "has anyone started talking?" and "has the utterance
+     * finished?" are two different questions with two different deadlines. The follow-up
+     * window after a not-understood buzz asks the first one: five seconds to *begin* speaking,
+     * and then however long the sentence takes.
+     */
+    private val started = CompletableDeferred<Boolean>()
+
+    /**
      * Guards every call into the native VAD.
      *
      * Frames arrive on the audio thread and [close] comes from whoever ended the utterance.
@@ -222,7 +233,10 @@ class SpeechCapture internal constructor(
             }
 
             val hearing = vad.isSpeechDetected()
-            if (hearing) heardSpeech = true
+            if (hearing) {
+                heardSpeech = true
+                started.complete(true)
+            }
             if (hearing != speaking) {
                 speaking = hearing
                 onSpeaking(hearing)
@@ -243,6 +257,14 @@ class SpeechCapture internal constructor(
 
     /** Resumes with the captured samples once the speaker stops. */
     suspend fun await(): FloatArray = captured.await()
+
+    /**
+     * Resumes as soon as the VAD hears a voice, or with false if the capture ends first.
+     *
+     * Never resumes on its own in a silent room — silence is the absence of an event, so the
+     * deadline belongs to the caller, exactly as the hard cap on [await] does.
+     */
+    suspend fun awaitSpeech(): Boolean = started.await()
 
     /**
      * Ends the capture now and returns whatever was heard.
@@ -273,6 +295,8 @@ class SpeechCapture internal constructor(
         if (existing != null) return existing
         settled = samples
         captured.complete(samples)
+        // Whatever it is waiting for, a capture that has ended will not hear it now.
+        started.complete(heardSpeech)
         return samples
     }
 
