@@ -7,6 +7,16 @@ Dobby core owns no commands. Everything the user can *do* lives in a **Sock** �
 - [`dobby-plan.md`](dobby-plan.md) — the build spec for core
 - [`socks.specs/`](socks.specs/) — one spec per Sock, plus [the contract](socks.specs/README.md) and the [shared-command catalog](socks.specs/shared-commands.specs.md)
 
+## Build & Install
+```sh
+# Gradle Build
+$ ./gradlew :android:app:assembleDebug
+
+# Install Debug Apk
+$ adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+
 ## Status: hands-free (M2)
 
 Phase A was "Dobby in a terminal": everything below the microphone and above the Socks, as pure JVM code. Phase B put it on the phone. M2 makes it hands-free — say the wake phrase and the panel answers, screen off, nothing touched.
