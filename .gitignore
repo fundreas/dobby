@@ -13,3 +13,6 @@ local.properties
 
 # Claude Code local machine settings
 .claude/settings.local.json
+
+# sherpa-onnx native library, fetched by :android:sherpa at build time
+android/sherpa/src/main/jniLibs/

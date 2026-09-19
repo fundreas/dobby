@@ -7,7 +7,7 @@ import java.io.Closeable
 /**
  * The sound the panel makes when the wake word lands.
  *
- * Small, but not decoration: between the wake word firing and Vosk having anything to show,
+ * Small, but not decoration: between the wake word firing and the panel having anything to show,
  * there is a second of silence in which the only honest question is "did it hear me?". The
  * beep answers it before the screen can. `dobby-plan.md` §5.1 asks for it by name.
  *

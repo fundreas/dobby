@@ -8,15 +8,16 @@ import kotlin.test.assertTrue
 class TranscriptTest {
 
     @Test
-    fun `a partial transcript becomes the final one in place`() {
+    fun `the live bubble becomes the transcript in place`() {
+        // Parakeet answers once, for the whole utterance, so the bubble is empty until it
+        // does. That it is replaced rather than appended to is what keeps the list from
+        // jumping under someone's eyes at the moment they are reading it.
         val transcript = Transcript()
         transcript.beginListening()
-        transcript.partial("wie")
-        transcript.partial("wie spät")
 
         val live = transcript.messages.value.single()
         assertTrue(live.live)
-        assertEquals("wie spät", live.text)
+        assertEquals("", live.text)
 
         transcript.heard("wie spät ist es")
 
@@ -30,27 +31,9 @@ class TranscriptTest {
         val transcript = Transcript()
         transcript.said("Es ist halb 3.")
         transcript.beginListening()
-        transcript.partial("ähm")
         transcript.abandonListening()
 
         assertEquals(listOf("Es ist halb 3."), transcript.messages.value.map { it.text })
-    }
-
-    @Test
-    fun `a partial arriving after the live bubble is gone is ignored`() {
-        // Vosk runs on the audio thread and the mirror job is cancelled from another; a late
-        // frame must not resurrect a bubble or overwrite the answer that replaced it.
-        val transcript = Transcript()
-        transcript.beginListening()
-        transcript.heard("wie spät ist es")
-        transcript.said("Es ist halb 3.")
-
-        transcript.partial("wie spät ist es dann")
-
-        assertEquals(
-            listOf("wie spät ist es", "Es ist halb 3."),
-            transcript.messages.value.map { it.text },
-        )
     }
 
     @Test
@@ -61,16 +44,6 @@ class TranscriptTest {
 
         val only = transcript.messages.value.single()
         assertEquals(Voice.DOBBY, only.voice)
-    }
-
-    @Test
-    fun `ids are stable so the list does not re-animate on every partial`() {
-        val transcript = Transcript()
-        transcript.beginListening()
-        transcript.partial("wie")
-        val first = transcript.messages.value.single().id
-        transcript.partial("wie spät")
-        assertEquals(first, transcript.messages.value.single().id)
     }
 
     @Test

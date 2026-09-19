@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.IBinder
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -22,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -84,12 +86,24 @@ class MainActivity : ComponentActivity() {
                         else -> {
                             val state by connected.controller.state.collectAsStateWithLifecycle()
                             val clock by connected.controller.clock.collectAsStateWithLifecycle()
-                            ChatScreen(
-                                state = state,
-                                clock = clock,
-                                onListen = { connected.controller.listen() },
-                                onHandsFree = { connected.controller.setHandsFree(it) },
-                            )
+                            var settingsOpen by remember { mutableStateOf(false) }
+
+                            if (settingsOpen) {
+                                BackHandler { settingsOpen = false }
+                                SettingsScreen(
+                                    state = state,
+                                    onBack = { settingsOpen = false },
+                                    onHandsFree = { connected.controller.setHandsFree(it) },
+                                    onSelect = { connected.controller.selectWakeWord(it) },
+                                )
+                            } else {
+                                ChatScreen(
+                                    state = state,
+                                    clock = clock,
+                                    onListen = { connected.controller.listen() },
+                                    onSettings = { settingsOpen = true },
+                                )
+                            }
                         }
                     }
                 }

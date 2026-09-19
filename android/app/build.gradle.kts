@@ -12,9 +12,13 @@ android {
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = 1
+        // Instrumented tests only (`dobby-plan.md` §5.2): the STT suite needs the real model on
+        // a real device. JVM unit tests stay on JUnit 5 and never touch this runner.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         versionName = "0.2.0-phase-b"
         ndk {
-            // The device is a OnePlus Nord CE; nothing else needs the Vosk native libs.
+            // The device is a OnePlus Nord CE; nothing else needs the ONNX Runtime and
+            // sherpa-onnx native libraries, which are most of the APK.
             abiFilters += "arm64-v8a"
         }
     }
@@ -74,4 +78,9 @@ dependencies {
 
     testImplementation(testFixtures(project(":core")))
     testImplementation(libs.kotlinx.coroutines.test)
+
+    androidTestImplementation(libs.junit4)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.kotlinx.coroutines.test)
 }

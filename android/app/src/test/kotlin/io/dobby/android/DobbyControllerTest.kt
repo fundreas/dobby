@@ -4,6 +4,7 @@ import io.dobby.android.chat.Voice
 import io.dobby.core.testing.FakeSockContext
 import io.dobby.pipeline.VoiceIo
 import io.dobby.pipeline.VoiceState
+import io.dobby.pipeline.wakeword.WakeWordOption
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -47,6 +48,21 @@ class DobbyControllerTest {
 
         override var wakePhrase: String? = "Hey Dobby"
 
+        override var selectedWakeWordId: String? = null
+            private set
+
+        override fun wakeWordOptions(): List<WakeWordOption> = listOf(
+            WakeWordOption("hey_dobby", "Hey Dobby", "hey_dobby.onnx", "", ""),
+            WakeWordOption("hey_jarvis", "Hey Jarvis", "hey_jarvis_v0.1.onnx", "", ""),
+        )
+
+        override suspend fun selectWakeWord(id: String) {
+            val option = wakeWordOptions().first { it.id == id }
+            selectedWakeWordId = id
+            wakePhrase = option.phrase
+            if (_handsFree.value) _state.value = VoiceState.Waiting(option.phrase)
+        }
+
         override fun startHandsFree(): Boolean {
             if (wakePhrase == null) return false
             _handsFree.value = true
@@ -64,15 +80,34 @@ class DobbyControllerTest {
             _wakeWords.tryEmit(score)
         }
 
+        /** Drives the pipeline state directly, for the states a whole turn passes through. */
+        fun emit(state: VoiceState) {
+            _state.value = state
+        }
+
         override suspend fun prepare() {
             prepared = true
             _state.value = VoiceState.Ready
         }
 
+        /** Set while [listen] is running: the wake word is off the stream until [endTurn]. */
+        var turnOpen: Boolean = false
+            private set
+
+        val turnsEnded: MutableList<Boolean> = mutableListOf()
+
         override suspend fun listen(): String? {
-            _state.value = VoiceState.Listening("")
+            turnOpen = true
+            _state.value = VoiceState.Listening(speaking = false)
+            _state.value = VoiceState.Listening(speaking = true)
+            _state.value = VoiceState.Transcribing
             _state.value = VoiceState.Ready
             return heard
+        }
+
+        override fun endTurn() {
+            turnsEnded += turnOpen
+            turnOpen = false
         }
 
         override suspend fun say(text: String) {
@@ -287,6 +322,73 @@ class DobbyControllerTest {
         assertEquals(null, uiState(dobby).wakePhrase)
         // Still fully usable by button and by typing.
         assertTrue(uiState(dobby).canListen)
+    }
+
+    @Test
+    fun `every turn is closed, so the wake word always comes back`() = runTest {
+        // The wake word leaves the microphone stream for the duration of a turn (§2 invariant
+        // 4). Nothing puts it back but endTurn, so a path that forgets to call it is a panel
+        // that stops answering to its name — and says nothing about why.
+        val voice = FakeVoice(heard = "wie spät ist es")
+        val dobby = controller(voice)
+        dobby.start()
+
+        dobby.listen().join()
+        assertEquals(listOf(true), voice.turnsEnded)
+
+        // And on the path where nothing was said, which returns early.
+        voice.heard = null
+        dobby.listen().join()
+        assertEquals(listOf(true, true), voice.turnsEnded)
+    }
+
+    @Test
+    fun `transcription reads as thinking, not as listening`() = runTest {
+        // Parakeet is batch: there is a real second between the end of a sentence and the
+        // answer. A panel that still says "listening" through it looks like one that did not
+        // hear, and the person repeats themselves into a closed microphone.
+        val voice = FakeVoice(heard = "wie spät ist es")
+        val dobby = controller(voice)
+        dobby.start()
+        settle()
+
+        voice.emit(VoiceState.Transcribing)
+        assertEquals(Phase.THINKING, uiState(dobby).phase)
+
+        voice.emit(VoiceState.Listening(speaking = true))
+        assertEquals(Phase.LISTENING, uiState(dobby).phase)
+        assertEquals("Ich höre dich…", uiState(dobby).detail)
+    }
+
+    @Test
+    fun `choosing a phrase in settings switches what the panel answers to`() = runTest {
+        val voice = FakeVoice()
+        val dobby = controller(voice)
+        dobby.start()
+        assertEquals("Hey Dobby", uiState(dobby).wakePhrase)
+
+        dobby.selectWakeWord("hey_jarvis").join()
+
+        assertEquals("Hey Jarvis", uiState(dobby).wakePhrase)
+        assertEquals("hey_jarvis", uiState(dobby).wakeWordId)
+        // The list settings renders comes from the pipeline, so a phrase pushed to the device
+        // while the app was running is offered without a restart.
+        assertEquals(listOf("Hey Dobby", "Hey Jarvis"), uiState(dobby).wakeWords.map { it.phrase })
+    }
+
+    @Test
+    fun `switching phrase does not switch listening back on`() = runTest {
+        // Someone who turned the microphone off and then browsed the settings list has not
+        // asked to be listened to again.
+        val voice = FakeVoice()
+        val dobby = controller(voice)
+        dobby.start()
+        dobby.setHandsFree(false)
+        assertTrue(!uiState(dobby).handsFree)
+
+        dobby.selectWakeWord("hey_jarvis").join()
+
+        assertTrue(!uiState(dobby).handsFree, "choosing a phrase re-armed the microphone")
     }
 
     @Test

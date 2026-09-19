@@ -22,5 +22,6 @@ include(":socks:help")
 include(":cli")
 
 // Phase B — everything that only exists on the device.
+include(":android:sherpa")
 include(":android:pipeline")
 include(":android:app")

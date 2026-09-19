@@ -27,19 +27,22 @@ class MicrophoneUnavailableException(message: String, cause: Throwable? = null) 
 /**
  * Owns the process's one [AudioRecord] and routes its frames to every registered [FrameSink].
  *
- * There is exactly one microphone and two things that want it: the wake word, permanently, and
- * the recognizer, for one utterance at a time. Android will not open the mic twice, so the
- * split happens here — the reader loop is the only code that touches `AudioRecord`, and
- * everything downstream is a sink (`dobby-plan.md` §2, invariant 4).
+ * There is exactly one microphone and two things that want it: the wake word, between turns,
+ * and the utterance capture, during one. They take turns rather than overlap — command audio is
+ * not wake-word audio — but their swap happens mid-stream, which is exactly why neither of them
+ * is allowed to open or close the recorder. Android will not open the mic twice, so the split
+ * happens here: the reader loop is the only code that touches `AudioRecord`, and everything
+ * downstream is a sink (`dobby-plan.md` §2, invariant 4).
  *
  * **The mic is open exactly while something is listening.** Callers add and remove sinks; they
- * never start or stop the recorder. That is not convenience, it is the invariant: with two
- * independent consumers whose lifetimes overlap, any explicit stop is a bug waiting for the
- * day hands-free is on and an utterance ends — which would take the wake word down with it.
+ * never start or stop the recorder. That is not convenience, it is the invariant: the handover
+ * at each end of a turn only works because whoever is arriving joins before whoever is leaving
+ * goes, and the recorder stays open across the overlap without anybody having to say so.
  *
  * Frame length and sample rate are the wake word's (1280 samples — 80 ms — at 16 kHz):
- * openWakeWord's melspectrogram front-end wants multiples of 80 ms, and Vosk is indifferent to
- * chunk size. The component that cannot choose is the one that gets to.
+ * openWakeWord's melspectrogram front-end wants multiples of 80 ms, while the STT side buffers
+ * whatever it is handed and the VAD re-cuts it into its own windows. The component that cannot
+ * choose is the one that gets to.
  */
 class AudioSource(
     private val scope: CoroutineScope,
@@ -163,7 +166,7 @@ class AudioSource(
     }
 
     companion object {
-        /** What Vosk's German model expects, and what openWakeWord requires. */
+        /** What openWakeWord requires, and what Parakeet and Silero VAD are configured for. */
         const val SAMPLE_RATE: Int = 16_000
 
         /**
@@ -171,7 +174,8 @@ class AudioSource(
          *
          * Its front-end accepts multiples of 80 ms, longer frames buying efficiency at the
          * cost of detection latency; on a panel you speak to, latency is the thing you feel.
-         * Vosk is indifferent, so the wake word sets it.
+         * Nothing downstream cares — the capture buffer takes any length and the VAD windows
+         * internally — so the wake word sets it.
          */
         const val FRAME_LENGTH: Int = 1280
 

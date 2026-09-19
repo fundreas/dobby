@@ -4,11 +4,13 @@ import android.content.Context
 import io.dobby.pipeline.audio.AudioSource
 import io.dobby.pipeline.audio.MicrophoneUnavailableException
 import io.dobby.pipeline.stt.ModelState
-import io.dobby.pipeline.stt.VoskEngine
-import io.dobby.pipeline.stt.VoskModelStore
+import io.dobby.pipeline.stt.ParakeetRecognizer
+import io.dobby.pipeline.stt.SpeechModelStore
+import io.dobby.pipeline.stt.SpeechVad
 import io.dobby.pipeline.tts.Earcon
 import io.dobby.pipeline.tts.Speaker
 import io.dobby.pipeline.wakeword.WakeWordDetector
+import io.dobby.pipeline.wakeword.WakeWordOption
 import io.dobby.pipeline.wakeword.WakeWordModelStore
 import io.dobby.pipeline.wakeword.WakeWordModels
 import io.dobby.pipeline.wakeword.WakeWordState
@@ -26,9 +28,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
-import java.io.IOException
 import kotlin.time.Duration
-import kotlin.time.Duration.Companion.seconds
 
 /** What the voice side of Dobby is doing. The chat view renders this as its status line. */
 sealed interface VoiceState {
@@ -44,8 +44,24 @@ sealed interface VoiceState {
     /** Hands-free: the microphone is open and the wake word is armed. */
     data class Waiting(val phrase: String) : VoiceState
 
-    /** The mic is open for an utterance. [partial] is Vosk's running guess. */
-    data class Listening(val partial: String) : VoiceState
+    /**
+     * The mic is open for an utterance. [speaking] is what the VAD hears right now.
+     *
+     * There is no running transcript to show: Parakeet is a batch recogniser and sees the
+     * finished utterance or nothing (`dobby-plan.md` §5.2). "I can hear a voice" is the only
+     * live signal the panel honestly has, and it is the one that matters — it is how someone
+     * standing three metres away learns the microphone is picking them up.
+     */
+    data class Listening(val speaking: Boolean) : VoiceState
+
+    /**
+     * The utterance is captured and the recogniser is running. About a second.
+     *
+     * A state of its own because a batch recogniser puts a real gap between the end of a
+     * sentence and the answer, and a panel that still says "listening" through it looks like a
+     * panel that did not hear.
+     */
+    data object Transcribing : VoiceState
 
     data class Speaking(val text: String) : VoiceState
 }
@@ -64,12 +80,14 @@ sealed interface VoiceState {
 class VoicePipeline(
     context: Context,
     private val scope: CoroutineScope,
+    /** The wake phrase id chosen in settings, or null for the catalogue default. */
+    private var selectedWakeWord: String? = null,
     modelRoot: File = context.filesDir,
     private val utteranceTimeout: Duration = UTTERANCE_TIMEOUT,
 ) : VoiceIo {
     private val appContext = context.applicationContext
     private val audio = AudioSource(scope)
-    private val models = VoskModelStore(modelRoot)
+    private val models = SpeechModelStore(modelRoot)
     private val wakeWordModels = WakeWordModelStore(modelRoot)
     private val speaker = Speaker(appContext)
     private val earcon = Earcon()
@@ -77,9 +95,13 @@ class VoicePipeline(
     /** One utterance at a time: the microphone is not shareable and neither is the transcript. */
     private val turn = Mutex()
 
-    private var engine: VoskEngine? = null
+    private var recognizer: ParakeetRecognizer? = null
+    private var vad: SpeechVad? = null
     private var wakeWord: WakeWordModels? = null
     private var detector: WakeWordDetector? = null
+
+    /** The detector while a turn is in flight: off the stream, still ours, not discarded. */
+    private var pausedWakeWord: WakeWordDetector? = null
 
     private val _state = MutableStateFlow<VoiceState>(VoiceState.Preparing("Starte…"))
     override val state: StateFlow<VoiceState> = _state.asStateFlow()
@@ -94,7 +116,7 @@ class VoicePipeline(
     /** Whether the wake word is currently armed. */
     override val handsFree: StateFlow<Boolean> = _handsFree.asStateFlow()
 
-    override val canListen: Boolean get() = engine != null
+    override val canListen: Boolean get() = recognizer != null && vad != null
 
     /** The phrase the panel answers to, once the wake word models are loaded. */
     override var wakePhrase: String? = null
@@ -116,22 +138,29 @@ class VoicePipeline(
         val progress = scope.launch {
             models.state.collect { _state.value = VoiceState.Preparing(it.describe()) }
         }
-        val directory = try {
+        val files = try {
             models.ensureAvailable()
         } finally {
             progress.cancel()
         }
 
-        if (directory == null) {
+        if (files == null) {
             val reason = (models.state.value as? ModelState.Failed)?.reason ?: "unbekannt"
             _state.value = VoiceState.Unavailable("Sprachmodell fehlt ($reason)")
             return
         }
 
         _state.value = VoiceState.Preparing("Lade Sprachmodell…")
-        engine = try {
-            withContext(Dispatchers.IO) { VoskEngine.load(directory, audio.sampleRate) }
-        } catch (e: IOException) {
+        try {
+            // Both are loaded once and stay resident: Parakeet costs seconds to open, and a
+            // VAD reloaded per utterance would be a fresh ONNX session on the audio thread.
+            withContext(Dispatchers.IO) {
+                recognizer = ParakeetRecognizer.load(files, audio.sampleRate)
+                vad = SpeechVad.load(files.vad, audio.sampleRate, maxUtterance = utteranceTimeout)
+            }
+        } catch (e: RuntimeException) {
+            // sherpa-onnx reports an unloadable graph as a plain runtime exception from JNI.
+            releaseStt()
             _state.value = VoiceState.Unavailable("Sprachmodell nicht lesbar (${e.message})")
             return
         }
@@ -151,12 +180,12 @@ class VoicePipeline(
         val progress = scope.launch {
             wakeWordModels.state.collect {
                 if (it is WakeWordState.Downloading) {
-                    _state.value = VoiceState.Preparing("Lade Weckwort… ${it.percent} %")
+                    _state.value = VoiceState.Preparing("Lade ${it.phrase}… ${it.percent} %")
                 }
             }
         }
         val files = try {
-            wakeWordModels.ensureAvailable()
+            wakeWordModels.ensureAvailable(selectedWakeWord)
         } finally {
             progress.cancel()
         }
@@ -170,6 +199,31 @@ class VoicePipeline(
             null
         }
         wakePhrase = wakeWord?.phrase
+    }
+
+    /** Everything settings can offer: the catalogue plus anything pushed to the device. */
+    override fun wakeWordOptions(): List<WakeWordOption> = wakeWordModels.options()
+
+    override val selectedWakeWordId: String? get() = selectedWakeWord
+
+    /**
+     * Switches the phrase the panel answers to, downloading the new head if this is its first use.
+     *
+     * Rearms afterwards only if it was armed before: choosing a phrase in settings should not
+     * quietly switch listening on for someone who had deliberately turned it off.
+     */
+    override suspend fun selectWakeWord(id: String) {
+        if (id == selectedWakeWord && wakeWord != null) return
+        val wasArmed = detector != null
+
+        stopHandsFree()
+        wakeWord?.close()
+        wakeWord = null
+        wakePhrase = null
+        selectedWakeWord = id
+
+        prepareWakeWord()
+        if (wasArmed) startHandsFree() else _state.value = idleState()
     }
 
     /**
@@ -197,11 +251,19 @@ class VoicePipeline(
 
     /** Disarms the wake word and closes the microphone if nothing else is listening. */
     override fun stopHandsFree() {
-        val listener = detector ?: return
+        // A turn in flight has the detector parked off the stream. Disarming during one must
+        // still take, or [endTurn] would put it back after the user asked for it to stop.
+        pausedWakeWord?.let {
+            pausedWakeWord = null
+            it.close()
+        }
+        val listener = detector
         detector = null
-        audio.removeSink(listener)
-        listener.close()
         _handsFree.value = false
+        if (listener != null) {
+            audio.removeSink(listener)
+            listener.close()
+        }
         if (_state.value is VoiceState.Waiting) _state.value = VoiceState.Ready
     }
 
@@ -213,31 +275,94 @@ class VoicePipeline(
     }
 
     /**
-     * Opens the microphone for one utterance.
+     * Opens the microphone for one utterance and returns the raw transcript.
      *
-     * Returns the raw transcript, or null when nothing was said, the mic is unavailable, or
-     * the [utteranceTimeout] hard cap fired before Vosk found the end of the sentence.
+     * Three steps (`dobby-plan.md` §5.2): capture every frame into a buffer while Silero VAD
+     * watches the same stream; end on ~800 ms of trailing silence, or on the
+     * [utteranceTimeout] hard cap when that silence never comes; hand the finished buffer to
+     * Parakeet.
+     *
+     * The wake word is **detached** for the duration and stays detached until [endTurn]
+     * (§2 invariant 4). It has nothing to contribute to command audio, and leaving it attached
+     * means every utterance and every spoken answer is also scored against the wake phrase —
+     * which is one detection threshold away from the panel waking itself in a loop.
+     *
+     * Returns null when nothing was said, the mic is unavailable, or the recogniser heard only
+     * noise — all three are the same thing to the caller: no turn to take.
      */
     override suspend fun listen(): String? = turn.withLock {
-        val vosk = engine ?: return@withLock null
+        val recognizer = this.recognizer ?: return@withLock null
+        val detector = vad ?: return@withLock null
 
-        val utterance = vosk.listen { partial -> _state.value = VoiceState.Listening(partial) }
-        _state.value = VoiceState.Listening("")
+        val capture = detector.capture(utteranceTimeout) { speaking ->
+            _state.value = VoiceState.Listening(speaking)
+        }
+        _state.value = VoiceState.Listening(speaking = false)
 
-        val transcript = try {
-            audio.addSink(utterance)
-            withTimeoutOrNull(utteranceTimeout) { utterance.await() } ?: utterance.flush()
+        val samples = try {
+            // Order is the invariant: the capture joins before the wake word leaves, so the
+            // sink list is never empty and the microphone never closes between the two.
+            audio.addSink(capture)
+            detachWakeWord()
+            withTimeoutOrNull(utteranceTimeout) { capture.await() } ?: capture.flush()
         } catch (e: MicrophoneUnavailableException) {
             _state.value = VoiceState.Unavailable(e.message ?: "Mikrofon nicht verfügbar")
+            endTurn()
             return@withLock null
         } finally {
             // Removing the sink closes the mic only if the wake word is not also holding it.
-            audio.removeSink(utterance)
-            utterance.close()
+            audio.removeSink(capture)
+            capture.close()
         }
 
+        // A wake word that fired at the television leaves ten seconds of room tone. Running
+        // the recogniser over it costs a second and can only return "".
+        if (!capture.heardSpeech) {
+            endTurn()
+            return@withLock null
+        }
+
+        _state.value = VoiceState.Transcribing
+        val transcript = withContext(Dispatchers.Default) { recognizer.transcribe(samples) }
         _state.value = idleState()
         transcript.ifBlank { null }
+    }
+
+    /**
+     * The turn is over — re-arm the wake word.
+     *
+     * Separate from [listen] because a turn does not end when the microphone closes: the
+     * command still has to be dispatched and answered, and re-arming before Dobby has finished
+     * speaking is how a panel hears its own voice say its own name. The caller owns the turn
+     * (`DobbyController`), so the caller says when it ended; calling this twice, or without a
+     * turn, does nothing.
+     */
+    override fun endTurn() {
+        val paused = pausedWakeWord ?: run {
+            if (_state.value !is VoiceState.Unavailable) _state.value = idleState()
+            return
+        }
+        pausedWakeWord = null
+        try {
+            audio.addSink(paused)
+            detector = paused
+            // Whatever the detector's window holds is the tail of the turn it just sat out.
+            paused.reset()
+            _handsFree.value = true
+        } catch (e: MicrophoneUnavailableException) {
+            paused.close()
+            _state.value = VoiceState.Unavailable(e.message ?: "Mikrofon nicht verfügbar")
+            return
+        }
+        if (_state.value !is VoiceState.Unavailable) _state.value = idleState()
+    }
+
+    /** Takes the wake word off the stream for the duration of a turn. */
+    private fun detachWakeWord() {
+        val listener = detector ?: return
+        detector = null
+        pausedWakeWord = listener
+        audio.removeSink(listener)
     }
 
     /** Speaks [text], returning once it has finished playing. */
@@ -251,7 +376,8 @@ class VoicePipeline(
             _state.value = if (previous is VoiceState.Unavailable) previous else idleState()
             // Dobby has been talking into an open microphone. Whatever the detector heard of
             // its own voice is not a wake word, and keeping it would let the tail of an answer
-            // sit in the window scoring against the next one.
+            // sit in the window scoring against the next one. (During a turn the detector is
+            // parked and [endTurn] does this; this covers announce() outside a turn.)
             detector?.reset()
         }
     }
@@ -261,25 +387,33 @@ class VoicePipeline(
 
     override fun shutdown() {
         stopHandsFree()
+        pausedWakeWord?.close()
+        pausedWakeWord = null
         audio.stop()
         earcon.close()
         speaker.shutdown()
-        engine?.close()
-        engine = null
+        releaseStt()
         wakeWord?.close()
         wakeWord = null
     }
 
+    private fun releaseStt() {
+        recognizer?.close()
+        recognizer = null
+        vad?.close()
+        vad = null
+    }
+
     companion object {
-        /** §5.2's hard cap: endpointing on a noisy wall panel can miss, and then this fires. */
-        val UTTERANCE_TIMEOUT: Duration = 10.seconds
+        /** §5.2's hard cap: the VAD can miss an endpoint in a noisy room, and then this fires. */
+        val UTTERANCE_TIMEOUT: Duration = SpeechVad.MAX_UTTERANCE
     }
 }
 
 private fun ModelState.describe(): String = when (this) {
     ModelState.Absent -> "Starte…"
     is ModelState.Downloading -> "Lade Sprachmodell… $percent %"
-    ModelState.Unpacking -> "Entpacke Sprachmodell…"
+    ModelState.Verifying -> "Prüfe Sprachmodell…"
     is ModelState.Ready -> "Lade Sprachmodell…"
     is ModelState.Failed -> "Sprachmodell fehlgeschlagen: $reason"
 }

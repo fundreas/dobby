@@ -67,7 +67,7 @@ Generic transport nouns (`bus`, `bim`, `u-bahn`, …) are matched by the **first
 
 ### Line resolution
 
-Vosk mangles line names predictably: "14A" → "14 a" / "vierzehn a", "U6" → "u sechs", "D" → "de". Resolution:
+STT mangles line names predictably: "14A" → "14 a" / "vierzehn a", "U6" → "u sechs", "D" → "de". Resolution:
 
 1. Normalize: lowercase, remove spaces between digits and a trailing letter ("14 a" → "14a"), map spelled-out digits to numerals ("u sechs" → "u6").
 2. Match case-insensitively against the `line` names returned by the API for the configured stops.

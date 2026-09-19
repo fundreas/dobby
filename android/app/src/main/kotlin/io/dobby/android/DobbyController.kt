@@ -11,6 +11,7 @@ import io.dobby.core.registry.Introspection
 import io.dobby.core.registry.SockRegistry
 import io.dobby.core.sock.SockContext
 import io.dobby.core.sock.SockResult
+import io.dobby.pipeline.wakeword.WakeWordOption
 import io.dobby.socks.clock.ClockState
 import io.dobby.pipeline.VoiceIo
 import io.dobby.pipeline.VoiceState
@@ -38,6 +39,9 @@ data class DobbyUiState(
     val handsFree: Boolean = false,
     /** The phrase the panel answers to, or null when no wake word model loaded. */
     val wakePhrase: String? = null,
+    /** Everything settings offers, and which of them is active. */
+    val wakeWords: List<WakeWordOption> = emptyList(),
+    val wakeWordId: String? = null,
 )
 
 enum class Phase {
@@ -73,6 +77,8 @@ class DobbyController(
      * device half does not exist; the timer then still counts, it just chimes into the void.
      */
     hardware: ClockHardware? = null,
+    /** Remembers the wake phrase and whether it is armed, across restarts. */
+    private val settings: Settings? = null,
     sockContext: (announce: suspend (String) -> Unit) -> SockContext,
 ) {
     private val transcript = Transcript()
@@ -129,13 +135,24 @@ class DobbyController(
         pipeline.say(text)
     }
 
+    /**
+     * The selectable phrases, and a counter that makes a change to them re-emit.
+     *
+     * The list is read from a directory rather than a flow — there is nothing to observe, and
+     * it changes only when a phrase is selected or a file is pushed. The counter is what turns
+     * that into something [combine] notices.
+     */
+    private var wakeWordOptions: List<WakeWordOption> = emptyList()
+    private val refresh = MutableStateFlow(0)
+
     val state: StateFlow<DobbyUiState> =
         combine(
             pipeline.state,
             transcript.messages,
             thinking,
             pipeline.handsFree,
-        ) { voice, messages, isThinking, armed ->
+            refresh,
+        ) { voice, messages, isThinking, armed, _ ->
             DobbyUiState(
                 phase = phaseOf(voice, isThinking),
                 detail = detailOf(voice),
@@ -144,6 +161,8 @@ class DobbyController(
                 canListen = pipeline.canListen && engine != null,
                 handsFree = armed,
                 wakePhrase = pipeline.wakePhrase,
+                wakeWords = wakeWordOptions,
+                wakeWordId = pipeline.selectedWakeWordId,
             )
         }.stateIn(
             scope,
@@ -167,7 +186,12 @@ class DobbyController(
         }
 
         pipeline.prepare()
-        if (engine != null) pipeline.startHandsFree()
+        wakeWordOptions = pipeline.wakeWordOptions()
+        refresh.value = refresh.value + 1
+
+        // Armed unless someone deliberately turned it off: switching the microphone off is a
+        // decision, and a reboot is not a reason to overrule it.
+        if (engine != null && settings?.handsFree != false) pipeline.startHandsFree()
     }
 
     suspend fun stop() {
@@ -190,27 +214,47 @@ class DobbyController(
     /** Arms or disarms the wake word. */
     fun setHandsFree(enabled: Boolean) {
         if (enabled) pipeline.startHandsFree() else pipeline.stopHandsFree()
+        settings?.handsFree = enabled
     }
 
-    /** Push to talk: one utterance, dispatched and answered. */
+    /**
+     * Switches the phrase the panel answers to.
+     *
+     * The first use of a phrase downloads its ~200 KB classifier, so this suspends for a moment
+     * on a slow connection; the settings screen shows the pipeline's own progress while it does.
+     */
+    fun selectWakeWord(id: String): Job = scope.launch {
+        pipeline.selectWakeWord(id)
+        settings?.wakeWordId = id
+        wakeWordOptions = pipeline.wakeWordOptions()
+        refresh.value = refresh.value + 1
+    }
+
+    /**
+     * Push to talk: one utterance, dispatched and answered.
+     *
+     * The live bubble opens before the microphone does and holds "…" until the transcript
+     * lands. There is nothing to fill it with in between — Parakeet answers once, for the whole
+     * utterance (`dobby-plan.md` §5.2) — so what the panel shows is the status line: whether
+     * the VAD can hear a voice, then that the recogniser is running.
+     *
+     * [VoiceIo.endTurn] closes the turn in a `finally`, because the wake word stays off the
+     * microphone until it is called and a turn that throws must not leave it off forever.
+     */
     fun listen(): Job = scope.launch {
         turn.withLock {
             transcript.beginListening()
-            val mirror = scope.launch {
-                pipeline.state.collect { if (it is VoiceState.Listening) transcript.partial(it.partial) }
-            }
-            val heard = try {
-                pipeline.listen()
+            try {
+                val heard = pipeline.listen()
+                if (heard.isNullOrBlank()) {
+                    transcript.abandonListening()
+                    return@withLock
+                }
+                transcript.heard(heard)
+                respondTo(heard)
             } finally {
-                mirror.cancel()
+                pipeline.endTurn()
             }
-
-            if (heard.isNullOrBlank()) {
-                transcript.abandonListening()
-                return@withLock
-            }
-            transcript.heard(heard)
-            respondTo(heard)
         }
     }
 
@@ -264,6 +308,9 @@ class DobbyController(
     private fun phaseOf(voice: VoiceState, isThinking: Boolean): Phase = when {
         engine == null -> Phase.UNAVAILABLE
         voice is VoiceState.Listening -> Phase.LISTENING
+        // Transcription is thinking as far as the panel is concerned: the microphone is shut,
+        // nothing is expected of the person, and something is working on what they said.
+        voice is VoiceState.Transcribing -> Phase.THINKING
         isThinking -> Phase.THINKING
         voice is VoiceState.Speaking -> Phase.SPEAKING
         voice is VoiceState.Preparing -> Phase.PREPARING
@@ -276,6 +323,11 @@ class DobbyController(
         is VoiceState.Preparing -> voice.detail
         is VoiceState.Unavailable -> voice.reason
         is VoiceState.Waiting -> "Sag \"${voice.phrase}\""
+        // The one live signal a batch recogniser leaves: whether the microphone is picking the
+        // speaker up. From three metres away that is the difference between waiting and
+        // walking closer.
+        is VoiceState.Listening -> if (voice.speaking) "Ich höre dich…" else "Sprich jetzt"
+        VoiceState.Transcribing -> "Verstehe…"
         else -> ""
     }
 

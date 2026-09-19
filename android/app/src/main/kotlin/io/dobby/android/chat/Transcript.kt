@@ -28,7 +28,7 @@ data class ChatMessage(
     val voice: Voice,
     val text: String,
     val detail: String? = null,
-    /** A partial transcript: still being spoken, and replaced on the next frame. */
+    /** The bubble for an utterance still being spoken, replaced once it is transcribed. */
     val live: Boolean = false,
     val failed: Boolean = false,
 )
@@ -36,9 +36,9 @@ data class ChatMessage(
 /**
  * The conversation, as the chat view renders it.
  *
- * Pure state over a [StateFlow] — no Android types, so the awkward parts (a partial transcript
- * that turns into a final one, or into nothing at all when the user says nothing) are unit
- * tests rather than things you find out by talking to a wall.
+ * Pure state over a [StateFlow] — no Android types, so the awkward parts (a live bubble that
+ * turns into a transcript, or into nothing at all when the user says nothing) are unit tests
+ * rather than things you find out by talking to a wall.
  */
 class Transcript(private val limit: Int = DEFAULT_LIMIT) {
 
@@ -47,18 +47,16 @@ class Transcript(private val limit: Int = DEFAULT_LIMIT) {
 
     private var nextId = 0L
 
-    /** Opens the live bubble the partial transcript writes into. */
+    /**
+     * Opens the empty live bubble that says the microphone is open.
+     *
+     * It stays empty until [heard] replaces it. Parakeet is a batch recogniser and has no
+     * running guess to stream into it (`dobby-plan.md` §5.2); the view renders an empty live
+     * bubble as "…", which is exactly the truth.
+     */
     fun beginListening() {
         _messages.update { current ->
             current.withoutLive() + ChatMessage(nextId++, Voice.USER, "", live = true)
-        }
-    }
-
-    /** Vosk's running guess. Called several times a second while someone is speaking. */
-    fun partial(text: String) {
-        _messages.update { current ->
-            val live = current.lastOrNull()?.takeIf { it.live } ?: return@update current
-            current.dropLast(1) + live.copy(text = text)
         }
     }
 

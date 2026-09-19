@@ -92,11 +92,13 @@ class DobbyService : Service() {
             .apply { acquire() }
 
         clockHardware = ClockHardware(this)
+        val settings = Settings(this)
         controller = DobbyController(
             scope = scope,
-            pipeline = VoicePipeline(this, scope),
+            pipeline = VoicePipeline(this, scope, settings.wakeWordId),
             sockContext = { announce -> AndroidSockContext(this, scope, announce) },
             hardware = clockHardware,
+            settings = settings,
         )
         scope.launch { controller.start() }
     }

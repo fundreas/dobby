@@ -68,7 +68,7 @@ radio( an| ein)?
 
 ### Station resolution
 
-Vosk will mangle station names badly (`FM4` → "ef em vier", `Ö3` → "oe drei"). Resolution is therefore alias-first, fuzzy-second:
+STT will mangle station names (`FM4` → "ef em vier", `Ö3` → "oe drei"): letter-and-digit names are what any acoustic model is worst at, and Parakeet is better at this than Vosk was without being reliable. Resolution is therefore alias-first, fuzzy-second:
 
 1. Normalize: lowercase, strip spaces and hyphens, `ö→oe`, `ä→ae`, `ü→ue`.
 2. Exact match against the station's `id` or any `alias`.

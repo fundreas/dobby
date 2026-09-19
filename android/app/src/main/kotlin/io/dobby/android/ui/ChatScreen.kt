@@ -20,14 +20,15 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -35,8 +36,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -60,11 +59,11 @@ fun ChatScreen(
     state: DobbyUiState,
     clock: ClockState,
     onListen: () -> Unit,
-    onHandsFree: (Boolean) -> Unit,
+    onSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        Header(state, onHandsFree)
+        Header(state, onSettings)
         // The Clock Sock owns the panel's clock, so the panel asks it rather than the system
         // (`clock.specs.md` §7). It is also where a running timer becomes visible.
         ClockCard(clock)
@@ -75,7 +74,7 @@ fun ChatScreen(
 }
 
 @Composable
-private fun Header(state: DobbyUiState, onHandsFree: (Boolean) -> Unit) {
+private fun Header(state: DobbyUiState, onSettings: () -> Unit) {
     Column(
         Modifier
             .fillMaxWidth()
@@ -91,16 +90,9 @@ private fun Header(state: DobbyUiState, onHandsFree: (Boolean) -> Unit) {
             )
             Spacer(Modifier.weight(1f))
             StatusPill(state)
-            // An always-open microphone needs a visible off switch. Not a setting buried in a
-            // screen: the thing is on a wall, and whoever walks past should be able to see
-            // whether it is listening and stop it without hunting.
-            if (state.wakePhrase != null) {
-                Spacer(Modifier.size(10.dp))
-                Switch(
-                    checked = state.handsFree,
-                    onCheckedChange = onHandsFree,
-                    modifier = Modifier.semantics { contentDescription = "Weckwort" },
-                )
+            Spacer(Modifier.size(4.dp))
+            IconButton(onClick = onSettings) {
+                Icon(Icons.Filled.Settings, contentDescription = "Einstellungen")
             }
         }
         Text(

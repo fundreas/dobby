@@ -19,7 +19,7 @@ android {
 dependencies {
     implementation(libs.kotlinx.coroutines.android)
     api(libs.kotlinx.coroutines.core)
-    api(libs.vosk.android)
+    api(project(":android:sherpa"))
     api(libs.onnxruntime.android)
 
     testImplementation(libs.kotlinx.coroutines.test)
