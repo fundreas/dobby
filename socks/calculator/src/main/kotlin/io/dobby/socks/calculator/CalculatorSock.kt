@@ -163,6 +163,10 @@ class CalculatorSock(
                     sum(1000, DIV, 4),
                     matchedByTemplates = false,
                 ),
+                // Held out: never shown to the model, asserted on the device (m6b-plan §B4).
+                Example("was kommt raus wenn ich 14 und 9 zusammenzähle", sum(14, ADD, 9), heldOut = true),
+                Example("nimm mal 6 und 7 zusammen", sum(6, MUL, 7), heldOut = true),
+                Example("wie viel bleibt von 100 wenn ich 35 abziehe", sum(100, SUB, 35), heldOut = true),
             ),
         ),
         ExclusiveCommandSpec(
@@ -198,6 +202,9 @@ class CalculatorSock(
                 Example("modulo 3", mapOf("op" to MOD, "b" to 3)),
                 Example("und wie oft passt da 250 rein", mapOf("op" to INT_DIV, "b" to 250)),
                 Example("weiter mit mal 3", mapOf("op" to MUL, "b" to 3), matchedByTemplates = false),
+                Example("und davon dann noch die hälfte", mapOf("op" to DIV, "b" to 2), heldOut = true),
+                Example("nimm das ergebnis mal 4", mapOf("op" to MUL, "b" to 4), heldOut = true),
+                Example("davon bitte noch 12 abziehen", mapOf("op" to SUB, "b" to 12), heldOut = true),
             ),
         ),
         ExclusiveCommandSpec(
@@ -225,6 +232,9 @@ class CalculatorSock(
                 Example("sag mir nochmal das ergebnis"),
                 Example("was hab ich zuletzt gerechnet"),
                 Example("wie war nochmal die zahl von vorhin", matchedByTemplates = false),
+                Example("was kam da nochmal raus", heldOut = true),
+                Example("wie hieß das ergebnis gleich wieder", heldOut = true),
+                Example("nochmal die zahl bitte", heldOut = true),
             ),
         ),
         ExclusiveCommandSpec(

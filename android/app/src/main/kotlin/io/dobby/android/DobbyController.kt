@@ -11,6 +11,7 @@ import io.dobby.core.dispatch.Dispatcher
 import io.dobby.core.dispatch.SockHealth
 import io.dobby.core.nlu.llm.Tier2
 import io.dobby.core.nlu.llm.Tier2Program
+import io.dobby.core.nlu.llm.Tier2Request
 import io.dobby.core.nlu.llm.Tier2Resolver
 import io.dobby.core.registry.Introspection
 import io.dobby.core.registry.SockRegistry
@@ -200,6 +201,9 @@ class DobbyController(
      * rather than a callback on the resolver itself, so it holds for every implementation —
      * the real one, a scripted one in a test, and whatever replaces them.
      *
+     * It wraps a *request*, not a turn, so "Ich denke nach…" covers both Tier 2 steps: the
+     * state is set again as the fill request is entered and only cleared once it returns.
+     *
      * The engine stays ignorant of the UI: it sees a [Tier2Resolver] and nothing else.
      */
     private fun announcing(resolver: Tier2Resolver): Tier2Resolver = object : Tier2Resolver {
@@ -207,10 +211,10 @@ class DobbyController(
 
         override val unavailableReason: String? get() = resolver.unavailableReason
 
-        override suspend fun generate(utterance: String, program: Tier2Program): String? {
+        override suspend fun generate(request: Tier2Request): String? {
             thinking.value = Thinking.MODEL
             return try {
-                resolver.generate(utterance, program)
+                resolver.generate(request)
             } finally {
                 // Back to DISPATCH rather than NO: handle() has not returned yet, and a Sock
                 // still has to run whatever the model just named.

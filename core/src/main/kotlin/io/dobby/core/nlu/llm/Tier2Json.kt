@@ -50,17 +50,37 @@ object Tier2Json {
     fun encode(commandId: String, params: Map<String, Any> = emptyMap()): String = buildString {
         append("{\"").append(COMMAND_KEY).append("\":").append(quote(commandId))
         for ((name, value) in params) {
-            append(",").append(quote(name)).append(":")
-            when (value) {
-                is Int -> append(value)
-                is Long -> append(value)
-                else -> append(quote(value.toString()))
-            }
+            append(",")
+            appendField(name, value)
         }
         append("}")
     }
 
     fun encode(reply: Tier2Reply): String = encode(reply.commandId, reply.params)
+
+    /**
+     * The params object alone, with no command key. What a fill step emits.
+     *
+     * Same shape and same key order as [encode] minus the head — which is the ten decode steps
+     * the two-step split stops spending on restating a command the model was just told.
+     */
+    fun encodeParams(params: Map<String, Any>): String = buildString {
+        append("{")
+        for ((index, entry) in params.entries.withIndex()) {
+            if (index > 0) append(",")
+            appendField(entry.key, entry.value)
+        }
+        append("}")
+    }
+
+    private fun StringBuilder.appendField(name: String, value: Any) {
+        append(quote(name)).append(":")
+        when (value) {
+            is Int -> append(value)
+            is Long -> append(value)
+            else -> append(quote(value.toString()))
+        }
+    }
 
     /**
      * Decodes the first balanced JSON object in [raw], or null.
@@ -69,8 +89,16 @@ object Tier2Json {
      * throws: an exception on this path would have to be caught by the caller and turned into
      * exactly this null, one layer further from the parsing that produced it.
      */
-    @Suppress("ReturnCount")
     fun decode(raw: String): Tier2Reply? {
+        val fields = decodeObject(raw) ?: return null
+        val commandId = fields[COMMAND_KEY] as? String ?: return null
+        if (commandId.isEmpty()) return null
+        return Tier2Reply(commandId, fields - COMMAND_KEY)
+    }
+
+    /** The shared half: the first balanced object in [raw] as a flat map, or null. */
+    @Suppress("ReturnCount")
+    private fun decodeObject(raw: String): Map<String, Any>? {
         if (raw.length > MAX_INPUT) return null
         val start = raw.indexOf('{')
         if (start < 0) return null
@@ -98,10 +126,21 @@ object Tier2Json {
             }
         }
         if (!cursor.atEnd()) return null
+        return fields
+    }
 
-        val commandId = fields[COMMAND_KEY] as? String ?: return null
-        if (commandId.isEmpty()) return null
-        return Tier2Reply(commandId, fields - COMMAND_KEY)
+    /**
+     * The flat field map of a fill reply, or null.
+     *
+     * [decode] without the command key: after step 1 the command is already known, so a reply
+     * that names one again is not answering the question it was asked. A stray `"c"` is
+     * therefore rejected rather than ignored — quietly dropping it would hide a model that has
+     * fallen back to the single-shot shape, which is a prompt bug worth seeing.
+     */
+    fun decodeParams(raw: String): Map<String, Any>? {
+        val reply = decodeObject(raw) ?: return null
+        if (COMMAND_KEY in reply) return null
+        return reply
     }
 
     /** The substring from [start] to its matching brace, or null: unbalanced, nested too deep. */

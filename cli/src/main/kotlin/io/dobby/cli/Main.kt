@@ -128,7 +128,7 @@ fun main(args: Array<String>) = runBlocking {
                     println(if (argument.isEmpty()) discovery.commands() else discovery.commands(argument))
 
                 "palette" -> println(discovery.palette())
-                "grammar" -> println(program?.grammar ?: NO_TIER2)
+                "grammar" -> println(program?.let { grammarView(it, argument) } ?: NO_TIER2)
                 "prompt" -> println(
                     program?.let { promptView(it, registry.commands.size, argument) } ?: NO_TIER2,
                 )
@@ -168,45 +168,85 @@ fun main(args: Array<String>) = runBlocking {
 
 private const val NO_TIER2 = "  Tier 2 is disabled — see the error printed at startup"
 
-/** `/prompt [utterance]` — the generated prompt, and how much room is left in the budget. */
-private fun promptView(program: Tier2Program, commandCount: Int, utterance: String): String {
-    val text = program.promptFor(utterance.ifEmpty { "<utterance>" })
-    val system = TokenEstimate.of(program.systemPrefix)
-    val perCommand = system.toDouble() / commandCount
-    val headroom = ((PromptGenerator.MAX_TOKENS - system) / perCommand).toInt()
+/**
+ * `/prompt` — the route prompt and its headroom. `/prompt <command>` — that command's fill turn.
+ *
+ * Two budgets, because they are two different costs. The route prefix is prefilled once per
+ * process and lives in the KV cache; a fill turn is re-decoded on every request that needs one,
+ * which is why it gets the much smaller [PromptGenerator.FILL_TURN_MAX_TOKENS].
+ */
+private fun promptView(program: Tier2Program, commandCount: Int, argument: String): String {
+    if (argument.isNotEmpty()) return fillView(program, argument)
+    val prefix = program.route.systemPrefix
+    val estimate = TokenEstimate.of(prefix)
+    val perCommand = estimate.toDouble() / commandCount
+    val headroom = ((PromptGenerator.MAX_TOKENS - estimate) / perCommand).toInt()
     return buildString {
-        appendLine(text)
-        appendLine("  ── estimate: $system tokens of ${PromptGenerator.MAX_TOKENS} for the system prefix")
+        appendLine(prefix + "<utterance>" + PromptGenerator.ASSISTANT_SUFFIX)
+        appendLine("  ── route: $estimate tokens of ${PromptGenerator.MAX_TOKENS}")
         appendLine("     $commandCount commands at ~${"%.0f".format(perCommand)} tokens each")
         appendLine("     room for about $headroom more before the budget tripwire fires")
-        append("     fingerprint ${program.fingerprint}")
+        appendLine("     ${program.fill.size} of $commandCount commands need a fill step")
+        append("     fingerprint ${program.fingerprint}   (/prompt <command> for a fill turn)")
     }
 }
 
+private fun fillView(program: Tier2Program, commandId: String): String {
+    val fill = program.fill[commandId] ?: return noFill(program, commandId)
+    val estimate = TokenEstimate.of(fill.userTurn)
+    return buildString {
+        appendLine(fill.userTurn)
+        appendLine("  ── fill turn: $estimate tokens of ${PromptGenerator.FILL_TURN_MAX_TOKENS}")
+        append("     uncached — this is re-decoded on every request that routes to $commandId")
+    }
+}
+
+private fun noFill(program: Tier2Program, commandId: String): String = when (commandId) {
+    in program.commandIds ->
+        "  $commandId has no parameters — the route answers it whole, with no second request"
+
+    else -> "  unknown command '$commandId'. with params: " + program.fill.keys.sorted().joinToString(", ")
+}
+
+/** `/grammar` — the route grammar. `/grammar <command>` — that command's fill grammar. */
+private fun grammarView(program: Tier2Program, commandId: String): String {
+    if (commandId.isEmpty()) return program.route.grammar
+    return program.fill[commandId]?.grammar ?: noFill(program, commandId)
+}
+
 /**
- * `/tier2 <utterance>` — the whole Tier 2 path, with the script standing in for the model.
+ * `/tier2 <utterance>` — both steps and the gate's verdict.
  *
- * `/tier2 <utterance> = <json>` forces the reply instead, which is how a hostile one is tried:
- * `/tier2 mach was = {"c":"nope"}` shows the gate rejecting an invented command.
+ * `/tier2 <utterance> = <route label>` forces step 1, and `= <label> | <params json>` forces
+ * both. That is how a hostile answer is tried without a model:
+ * `/tier2 mach was = nope.nope` shows the gate rejecting an invented label.
  */
 private suspend fun tier2View(engine: DobbyEngine, scripted: ScriptedTier2, argument: String): String {
     if (argument.isEmpty()) {
-        return "  usage: /tier2 <utterance> [= <json the model would emit>]\n" +
+        return "  usage: /tier2 <utterance> [= <label> [| <params json>]]\n" +
             "  scripted: " + scripted.utterances.sorted().joinToString("\n            ")
     }
-    val forced = argument.substringAfter(" = ", "").ifEmpty { null }
+    val forced = argument.substringAfter(" = ", "")
     val utterance = argument.substringBefore(" = ")
-    scripted.override = forced
+    scripted.overrideRoute = forced.substringBefore(" | ").trim().ifEmpty { null }
+    scripted.overrideFill = forced.substringAfter(" | ", "").trim().ifEmpty { null }
     return try {
         val outcome = engine.handle(utterance)
+        val trace = outcome.tier2
         buildString {
             appendLine("  normalized: ${Normalizer.normalize(utterance)}")
-            appendLine("  model said: ${outcome.tier2?.raw ?: "(Tier 1 matched; the model was never asked)"}")
-            appendLine("  ${outcome.tier2 ?: "tier: ${outcome.tier}"}")
+            if (trace == null) {
+                appendLine("  tier 1 matched; the model was never asked")
+            } else {
+                appendLine("  route said:  ${trace.route?.raw ?: "(never ran)"}")
+                appendLine("  fill said:   ${trace.fill?.raw ?: "(not needed)"}")
+                appendLine("  $trace")
+            }
             append("  → ${outcome.invocation?.let { "${it.commandId} ${it.params}" } ?: "nothing"}")
         }
     } finally {
-        scripted.override = null
+        scripted.overrideRoute = null
+        scripted.overrideFill = null
     }
 }
 
@@ -234,9 +274,9 @@ private fun help() = """
     |  /find <text>         commands matching a word
     |  /palette             every template, in the order the matcher tries them
     |  /keywords            every keyword, its phonetic code, and whether it is trusted
-    |  /grammar             the GBNF the local model is constrained to
-    |  /prompt [utterance]  the Tier 2 prompt, with its token estimate and headroom
-    |  /tier2 <utterance>   run the Tier 2 path; "<utterance> = <json>" forces the reply
+    |  /grammar [command]   the route GBNF, or one command's fill GBNF
+    |  /prompt [command]    the route prompt and its headroom, or one command's fill turn
+    |  /tier2 <utterance>   run both Tier 2 steps; "= <label> | <json>" forces the answers
     |  /fallthrough         utterances Tier 1 could not match, and what Tier 2 made of them
     |  /trace               toggle normalizer and template output
     |  /quit                exit

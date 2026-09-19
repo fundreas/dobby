@@ -72,6 +72,8 @@ class Introspection(
      *   paraphrase of its own.
      * - Params are kept, because a few-shot without them is a worked example with the work
      *   left out.
+     * - [Example.heldOut] cases are excluded outright. They exist to measure the model, and a
+     *   measurement the model was shown the answers to measures nothing.
      *
      * Which examples an audience may see is Introspection's policy question, which is why this
      * lives here rather than in the generator that consumes it.
@@ -82,8 +84,9 @@ class Introspection(
             .flatMap { it.shared }
             .filter { it.command.id == commandId }
             .flatMap { it.extraExamples }
-        val (paraphrases, tier1) = command.examples.partition { !it.matchedByTemplates }
-        return (paraphrases + extra + tier1).distinctBy { it.utterance }
+        val shown = command.examples.filterNot { it.heldOut }
+        val (paraphrases, tier1) = shown.partition { !it.matchedByTemplates }
+        return (paraphrases + extra.filterNot { it.heldOut } + tier1).distinctBy { it.utterance }
     }
 
     /**
@@ -144,7 +147,10 @@ class Introspection(
             templates = registry.palette.entries
                 .filter { it.command.id == command.id }
                 .map { entry -> entry.contributedBy?.let { "${entry.template.source}  (+$it)" } ?: entry.template.source },
-            examples = command.examples.filter { it.matchedByTemplates }.map { it.utterance },
+            // Only what Tier 1 actually matches. Spoken help is a promise — "say this and it
+            // will work" — so neither a few-shot nor a held-out case belongs in it, and
+            // [Example.tier2Only] is the one question that covers both.
+            examples = command.examples.filterNot { it.tier2Only }.map { it.utterance },
             ownerSockId = registry.ownerOf(command.id)?.id,
             subscribers = subscribers.map { SubscriberInfo(it.sock.id, it.subscription.priority) }
                 .sortedByDescending { it.priority },
@@ -211,7 +217,7 @@ data class CommandInfo(
     val params: List<ParamInfo>,
     /** Templates in palette match order. */
     val templates: List<String>,
-    /** Only the Tier 1 examples; Tier 2 paraphrases are not things a user can rely on. */
+    /** Only the Tier 1 examples; nothing Tier 2-only is something a user can rely on. */
     val examples: List<String>,
     /** Null for a shared command — nobody owns it. */
     val ownerSockId: String?,

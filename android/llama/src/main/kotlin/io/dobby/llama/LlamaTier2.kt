@@ -1,9 +1,8 @@
 package io.dobby.llama
 
 import android.util.Log
-import io.dobby.core.nlu.llm.GrammarGenerator
-import io.dobby.core.nlu.llm.Tier2
 import io.dobby.core.nlu.llm.Tier2Program
+import io.dobby.core.nlu.llm.Tier2Request
 import io.dobby.core.nlu.llm.Tier2Resolver
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -81,7 +80,9 @@ class LlamaTier2(
                 if (!llama.loadModel(gguf, mlock)) return@withContext fail(llama.unavailable)
                 if (!llama.newContext()) return@withContext fail(llama.unavailable)
 
-                val tokens = llama.prefillSystem(program.systemPrefix)
+                // Only the route prefix is prefilled. A fill turn is uncached by design — see
+                // Tier2Program.fillRequest for why step 2 is a fresh request.
+                val tokens = llama.prefillSystem(program.route.systemPrefix)
                 if (tokens <= 0) return@withContext fail("Tier 2 deaktiviert (Prompt zu lang)")
 
                 prefilledFor = program.fingerprint
@@ -102,27 +103,34 @@ class LlamaTier2(
             }
         }
 
-    override suspend fun generate(utterance: String, program: Tier2Program): String? =
+    /**
+     * Runs one request, whichever step it is.
+     *
+     * This class does not know what a prompt is any more: `:core` assembled the tail, the
+     * grammar and the cap, and both steps arrive here identical in shape. That is what keeps
+     * the two-step split out of the native module entirely — `dobby_llama.cpp` is unchanged.
+     */
+    override suspend fun generate(request: Tier2Request): String? =
         withContext(thread) {
             if (!ready) return@withContext null
             try {
                 // A palette that changed underneath means the cache holds a prefix for a
                 // different set of commands. Re-prefill rather than answer from it: an answer
                 // built on the wrong command list is worse than a slow one.
-                if (prefilledFor != program.fingerprint) {
-                    log("fingerprint changed ($prefilledFor → ${program.fingerprint}); re-prefilling")
-                    if (llama.prefillSystem(program.systemPrefix) <= 0) {
+                if (prefilledFor != request.fingerprint) {
+                    log("fingerprint changed ($prefilledFor → ${request.fingerprint}); re-prefilling")
+                    if (llama.prefillSystem(request.systemPrefix) <= 0) {
                         fail("Tier 2 deaktiviert (Prompt zu lang)")
                         return@withContext null
                     }
-                    prefilledFor = program.fingerprint
+                    prefilledFor = request.fingerprint
                 }
 
                 llama.generate(
-                    tail = utterance + program.assistantSuffix,
-                    grammar = program.grammar,
-                    root = GrammarGenerator.ROOT,
-                    maxTokens = Tier2.MAX_REPLY_TOKENS,
+                    tail = request.tail,
+                    grammar = request.grammar,
+                    root = request.root,
+                    maxTokens = request.maxTokens,
                 )
             } catch (e: Throwable) {
                 log("generate failed: ${e.javaClass.simpleName}: ${e.message}")
@@ -160,7 +168,7 @@ class LlamaTier2(
     suspend fun reprefill(): Boolean = withContext(thread) {
         if (ready) return@withContext true
         if (!llama.newContext()) return@withContext fail(llama.unavailable)
-        if (llama.prefillSystem(program.systemPrefix) <= 0) {
+        if (llama.prefillSystem(program.route.systemPrefix) <= 0) {
             return@withContext fail("Tier 2 deaktiviert (Prompt zu lang)")
         }
         prefilledFor = program.fingerprint

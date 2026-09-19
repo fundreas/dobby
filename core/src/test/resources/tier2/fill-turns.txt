@@ -1,0 +1,40 @@
+═══ clock.set_timer
+Befehl clock.set_timer: Stellt einen Timer für eine bestimmte Dauer.
+Parameter: amount: ganze Zahl; unit: sekunden/minuten/stunden
+Fehlt ein Pflichtparameter: none.
+Antworte nur mit dem JSON.
+
+═══ departures.departures
+Befehl departures.departures: Sagt die nächsten Abfahrten.
+Parameter: line: Text, optional
+Ein Parameter, der im Satz nicht vorkommt: null.
+Fehlt ein Pflichtparameter: none.
+Antworte nur mit dem JSON.
+
+═══ radio.play_radio
+Befehl radio.play_radio: Spielt einen Radiosender ab.
+Parameter: station: Text, optional
+Ein Parameter, der im Satz nicht vorkommt: null.
+Fehlt ein Pflichtparameter: none.
+Antworte nur mit dem JSON.
+
+═══ spotify.play_music
+Befehl spotify.play_music: Spielt Musik auf Spotify ab.
+Parameter: query: Text, optional
+Ein Parameter, der im Satz nicht vorkommt: null.
+Fehlt ein Pflichtparameter: none.
+Antworte nur mit dem JSON.
+
+═══ system.mute
+Befehl system.mute: Schaltet den Ton stumm oder wieder an.
+Parameter: state: an/aus, optional
+Ein Parameter, der im Satz nicht vorkommt: null.
+Fehlt ein Pflichtparameter: none.
+Antworte nur mit dem JSON.
+
+═══ system.volume
+Befehl system.volume: Ändert die Lautstärke schrittweise.
+Parameter: direction: lauter/leiser; steps: ganze Zahl, optional
+Ein Parameter, der im Satz nicht vorkommt: null.
+Fehlt ein Pflichtparameter: none.
+Antworte nur mit dem JSON.

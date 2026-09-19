@@ -9,62 +9,102 @@ import io.dobby.core.sock.ParamSpec
 import io.dobby.core.sock.ParamType
 
 /**
- * Turns the registry into the German system prompt, and wraps it in the chat scaffold.
+ * Turns the registry into the two prompts Tier 2 asks, and wraps them in the chat scaffold.
+ *
+ * ### Two prompts, because there are two decisions
+ *
+ * The single-shot prompt asked a 1.7B model "which of eighteen commands is this, and what are
+ * its parameters, as one JSON line, starting now" — and carried a ~40-token worked example per
+ * command to explain it. It reached 1426 of 1500 estimated tokens at eleven commands, with
+ * roughly no room for the seven still to come.
+ *
+ * [routePrefix] asks only for a name. One line per command, no parameters, examples that are
+ * `"utterance" -> id` and therefore ~18 tokens instead of ~40. [fillTurn] is then sent *only*
+ * for a command that has parameters, and carries that one command's spec and its examples
+ * rendered params-only. Each prompt is small and each decision is narrow.
  *
  * ### The scaffold is ours, and thinking is off
  *
  * Qwen3 is a hybrid-reasoning model: by default it writes a `<think>…</think>` scratchpad before
  * every answer, hundreds of tokens long, which is tens of seconds on an A55. Left on, the
- * grammar forbids `<think>` and forces `{`, and the model is pushed into a state it was never
- * trained on — valid JSON, degraded judgement, and nothing in the output to tell you why.
+ * grammar forbids `<think>` and forces the first legal token, and the model is pushed into a
+ * state it was never trained on — valid output, degraded judgement, and nothing to say why.
  *
  * Qwen's own off-switch is what its chat template emits for `enable_thinking=false`: an empty
  * think block after the assistant marker. So this class emits the **whole** prompt text itself,
  * in ChatML, and `llama_chat_apply_template` is never called — whatever template the GGUF
  * carries is irrelevant, which also means swapping the quantisation cannot silently change the
- * prompt.
- *
- * [Tier2Program.fingerprint] hashes the full scaffold rather than the system text alone, so a
- * change to the think block re-prefills the KV cache instead of being answered from a cache
- * built for a different prompt.
+ * prompt. Both steps are non-thinking.
  *
  * ### Generated from structure, not from display strings
  *
- * The parameter lines are built from [ParamType] directly. [Introspection.describe] stringifies
- * an enumeration to `"enum[a|b|c]"` for human display, and re-parsing that to build a prompt is
+ * Parameter lines are built from [ParamType] directly. [Introspection] stringifies an
+ * enumeration to `"enum[a|b|c]"` for human display, and re-parsing that to build a prompt is
  * exactly the coupling that breaks the day somebody puts a `|` in an enum value.
  *
- * The examples come from [Introspection.promptExamples], because *which* examples an audience
- * may see is Introspection's policy question rather than this generator's.
+ * Examples come from [Introspection.promptExamples], because *which* examples an audience may
+ * see is Introspection's policy question rather than this generator's — and it is what keeps
+ * [Example.heldOut] cases out of both prompts.
  */
 object PromptGenerator {
 
     /**
-     * The budget, from `dobby-plan.md`:420. `PromptBudgetTest` fails the build above it.
+     * The budget for the route prompt, from `dobby-plan.md`:420.
      *
-     * Measured at today's registry: see the test, which prints the current number and the
-     * headroom in commands. The tripwire is expected to fire partway through M4, *before* the
-     * full ~18-command registry lands — which is a scheduling fact worth knowing early, and the
-     * reason the failure message carries the three levers in order.
+     * Unchanged from the single-shot design on purpose: the context window did not get bigger,
+     * the prompt got smaller. `PromptBudgetTest` fails the build above it and prints the
+     * headroom in commands.
      */
     const val MAX_TOKENS: Int = 1500
 
-    /** At most this many worked examples per command, paraphrases preferred. */
+    /**
+     * The budget for one fill turn: `fill prefill allowance × pessimistic prefill rate`.
+     *
+     * A fill turn is **uncached prefill on the hot path** — unlike the route prefix, which is
+     * prefilled once per process and truncated back to, this is re-decoded on every request
+     * that routes to its command. So it gets a budget of its own, and it is derived from the
+     * same 1.5 s that [Tier2.MAX_FILL_TOKENS] spends: `1.5 s × 120 tok/s` = 180.
+     *
+     * **The prefill rate is the one number here nobody has measured**, and it is the
+     * milestone's largest open risk. 120 tok/s is twelve times the pessimistic *decode* rate,
+     * which is a reasonable-but-not-generous ratio for a batched prefill on two A77 cores. If
+     * the device measures slower, this budget is too big and the lever is the one `m6b-plan.md`
+     * names: move the parameter specs into the *cached* route prefix, where they cost ~20
+     * tokens per command once instead of ~170 per request. That spends route budget to buy
+     * latency, and the measurement decides — `Tier2DeviceTest` reports fill prefill separately
+     * for exactly this reason.
+     */
+    const val FILL_TURN_MAX_TOKENS: Int = 180
+
+    /** At most this many worked examples per command in the route prompt. Paraphrases first. */
     const val EXAMPLES_PER_COMMAND: Int = 2
 
     /**
-     * The system half of the scaffold, ending at the point the utterance is appended.
+     * And at most this many in a fill turn, which is fewer, because a fill turn is expensive.
      *
-     * Everything up to and including `<|im_start|>user\n` is the same for every request, which
+     * The route prefix is prefilled once per process; a fill turn is re-decoded on every
+     * request that routes to its command, so a line there costs far more than the same line in
+     * the route prompt. It is also doing a smaller job: the command is already known, and what
+     * is left is "here is the shape, here is one worked instance of it".
+     *
+     * Measured, not guessed: at two examples the real registry's fill turns were 190–231
+     * estimated tokens against [FILL_TURN_MAX_TOKENS]. At one they fit.
+     */
+    const val FILL_EXAMPLES_PER_COMMAND: Int = 1
+
+    /**
+     * The route system prefix, ending where the utterance is appended.
+     *
+     * Everything up to and including `<|im_start|>user\n` is identical for every request, which
      * is what makes `n_system` a stable cut for the KV cache: the BPE pre-tokenizer splits at
      * the newline, so the utterance's first token cannot merge backwards across it.
      */
-    fun systemPrefix(catalog: Tier2Catalog, introspection: Introspection): String =
-        "<|im_start|>system\n" + systemPrompt(catalog, introspection) + "<|im_end|>\n" +
+    fun routePrefix(catalog: Tier2Catalog, introspection: Introspection): String =
+        "<|im_start|>system\n" + routePrompt(catalog, introspection) + "<|im_end|>\n" +
             "<|im_start|>user\n"
 
     /**
-     * What follows the utterance: the assistant marker and Qwen's empty think block.
+     * What follows a user turn: the assistant marker and Qwen's empty think block.
      *
      * The trailing blank line is part of the off-switch, not an accident of formatting — it is
      * what Qwen's own template emits, and the model has seen that exact byte sequence in
@@ -72,52 +112,73 @@ object PromptGenerator {
      */
     const val ASSISTANT_SUFFIX: String = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
 
-    /** The complete prompt for one utterance. */
-    fun prompt(catalog: Tier2Catalog, introspection: Introspection, utterance: String): String =
-        systemPrefix(catalog, introspection) + utterance + ASSISTANT_SUFFIX
-
-    /** The German system prompt: what Dobby is, what it may answer, and what it can do. */
-    fun systemPrompt(catalog: Tier2Catalog, introspection: Introspection): String = buildString {
+    /** Step 1's system prompt: what Dobby is, and the list of names it may answer with. */
+    fun routePrompt(catalog: Tier2Catalog, introspection: Introspection): String = buildString {
         appendLine("Du bist der Befehls-Interpreter eines Sprachpanels in einer Wohnung.")
-        appendLine("Der Nutzer sagt einen Satz. Ordne ihn genau einem Befehl aus der Liste zu.")
+        appendLine("Der Nutzer sagt einen Satz. Nenne den einen Befehl aus der Liste, der gemeint ist.")
         appendLine()
         appendLine("Regeln:")
-        appendLine("- Antworte ausschließlich mit einer Zeile JSON, ohne Erklärung und ohne Text davor oder danach.")
-        appendLine("- Format: ${Tier2Json.encode("befehl.name", mapOf("parameter" to "wert"))}")
-        appendLine("- Nimm nur Befehle und Parameter aus der Liste. Erfinde nichts dazu.")
-        appendLine("- Ein optionaler Parameter, der im Satz nicht vorkommt: null.")
-        appendLine(
-            "- Passt kein Befehl, oder fehlt ein Pflicht-Parameter: " +
-                Tier2Json.encode(CommandInvocation.NONE) + ".",
-        )
-        appendLine("- Zahlen stehen bereits als Ziffern im Satz.")
+        appendLine("- Antworte nur mit dem Namen des Befehls, sonst nichts.")
+        appendLine("- Nimm nur Namen aus der Liste. Erfinde nichts dazu.")
+        appendLine("- Passt kein Befehl: ${CommandInvocation.NONE}.")
         appendLine()
         appendLine("Befehle:")
         for (command in catalog.commands) {
-            appendLine(describe(catalog, command))
+            appendLine("- ${command.id}: ${command.description}")
         }
         appendLine()
         appendLine("Beispiele:")
         for (command in catalog.commands) {
             for (example in examplesFor(introspection, command)) {
-                appendLine(exampleLine(command, example))
+                appendLine("${quoted(command, example)} -> ${command.id}")
             }
         }
-        // One negative, always last. A model shown only positives learns that some command is
-        // always the answer, and `Tier2AccuracyTest` exists because that failure is invisible
-        // until somebody asks about the weather and a timer starts.
-        appendLine(
-            "\"${NO_COMMAND_EXAMPLE}\" -> " + Tier2Json.encode(CommandInvocation.NONE),
-        )
+        // Three negatives, not one. Each costs ~12 tokens in this format, and the failure they
+        // guard against — "wie wird das wetter" starting a timer — is the one a wall panel may
+        // not have. A model shown only positives learns that some command is always the answer.
+        for (negative in NO_COMMAND_EXAMPLES) {
+            appendLine("\"$negative\" -> ${CommandInvocation.NONE}")
+        }
     }.trimEnd() + "\n"
 
-    /** `- clock.set_timer: Stellt einen Timer … | amount: ganze Zahl; unit: …, optional` */
-    private fun describe(catalog: Tier2Catalog, command: CommandSpec): String = buildString {
-        append("- ").append(command.id).append(": ").append(command.description)
-        val params = catalog.paramsOf(command)
-        if (params.isEmpty()) return@buildString
-        append(" | ").append(params.joinToString("; ") { describe(it) })
+    /**
+     * Step 2: one user turn carrying a single command's parameter spec and examples.
+     *
+     * The rules that only matter once the command is known live here rather than in the route
+     * prompt, where they would be eighteen commands' worth of instruction nobody has asked for
+     * yet.
+     */
+    fun fillTurn(catalog: Tier2Catalog, introspection: Introspection, command: CommandSpec): String {
+        require(command.params.isNotEmpty()) {
+            "'${command.id}' has no params and needs no fill turn — route answers it whole"
+        }
+        return buildString {
+            appendLine("Befehl ${command.id}: ${command.description}")
+            appendLine("Parameter: ${catalog.paramsOf(command).joinToString("; ") { describe(it) }}")
+            // No "Zahlen stehen bereits als Ziffern im Satz" here, unlike the single-shot
+            // prompt: the `int` rule cannot emit "drei", so the instruction is an unenforceable
+            // restatement of something the grammar already guarantees — and a fill turn pays
+            // for every line on every request.
+            if (catalog.paramsOf(command).any { !it.required }) {
+                appendLine("Ein Parameter, der im Satz nicht vorkommt: null.")
+            }
+            appendLine("Fehlt ein Pflichtparameter: ${CommandInvocation.NONE}.")
+            val examples = introspection.promptExamples(command.id)
+                .filter { it.params.isNotEmpty() }
+                .take(FILL_EXAMPLES_PER_COMMAND)
+            if (examples.isNotEmpty()) {
+                appendLine(if (examples.size == 1) "Beispiel:" else "Beispiele:")
+                for (example in examples) {
+                    appendLine("${quoted(command, example)} -> ${Tier2Json.encodeParams(example.params)}")
+                }
+            }
+            append("Antworte nur mit dem JSON.")
+        }
     }
+
+    /** Every fill turn, in catalog order. For the golden file and the budget test. */
+    fun fillTurns(catalog: Tier2Catalog, introspection: Introspection): Map<String, String> =
+        catalog.withParams.associate { it.id to fillTurn(catalog, introspection, it) }
 
     private fun describe(param: ParamSpec): String = buildString {
         append(param.name).append(": ")
@@ -132,31 +193,41 @@ object PromptGenerator {
     }
 
     /**
-     * At most [EXAMPLES_PER_COMMAND] lines per command, paraphrases first.
+     * At most [EXAMPLES_PER_COMMAND] per command, paraphrases first, held-out cases never.
      *
      * Fixed rather than budget-adaptive. A selector that spent whatever budget was left would
-     * re-write the golden file every time an unrelated Sock landed, which turns the golden test
+     * rewrite the golden file every time an unrelated Sock landed, which turns the golden test
      * from a statement about this generator into noise.
      */
     private fun examplesFor(introspection: Introspection, command: CommandSpec): List<Example> =
         introspection.promptExamples(command.id).take(EXAMPLES_PER_COMMAND)
 
     /**
-     * One few-shot, rendered through [Tier2Json.encode] so it is grammar-legal by construction.
+     * An example utterance, checked.
      *
      * The `require` is the subtlest bug in this milestone made into a build failure: Tier 2 is
      * handed the *normalized* utterance, where "zwanzig" is already "20", so a few-shot written
      * in raw German teaches the model a surface form it will never be shown.
      */
-    private fun exampleLine(command: CommandSpec, example: Example): String {
+    private fun quoted(command: CommandSpec, example: Example): String {
         require(Normalizer.normalize(example.utterance) == example.utterance) {
             "'${command.id}' example \"${example.utterance}\" is not normalized — Tier 2 only ever " +
                 "sees Normalizer output, so a few-shot in raw German teaches a form the model " +
                 "will never see. Expected: \"${Normalizer.normalize(example.utterance)}\""
         }
-        return "\"${example.utterance}\" -> ${Tier2Json.encode(command.id, example.params)}"
+        return "\"${example.utterance}\""
     }
 
-    /** The negative few-shot. Normalized, like every other line. */
-    const val NO_COMMAND_EXAMPLE: String = "wie wird das wetter morgen"
+    /**
+     * The negative few-shots. Normalized, like every other line.
+     *
+     * Three rather than one, and deliberately of three different kinds: a question the panel
+     * cannot answer, a sentence addressed to a person in the room, and one that opens with a
+     * word a real command also opens with.
+     */
+    val NO_COMMAND_EXAMPLES: List<String> = listOf(
+        "wie wird das wetter morgen",
+        "hast du den müll schon rausgebracht",
+        "mach dir keinen kopf",
+    )
 }

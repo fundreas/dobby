@@ -171,27 +171,31 @@ class DobbyControllerTest {
      * that guesses when the model probably began.
      */
     private class ScriptedResolver(
-        private val replies: Map<String, String>,
+        /** Route answers by utterance: a bare command id, or `none`. */
+        private val routes: Map<String, String> = emptyMap(),
+        /** Fill answers by utterance: a params-only JSON object, or `none`. */
+        private val fills: Map<String, String> = emptyMap(),
         /** Awaited inside `generate`, so a test can inspect the panel mid-thought. */
         private val hold: kotlinx.coroutines.CompletableDeferred<Unit>? = null,
-        private val onStart: () -> Unit = {},
     ) : io.dobby.core.nlu.llm.Tier2Resolver {
         override val available: Boolean = true
         override val unavailableReason: String? = null
-        val asked: MutableList<String> = mutableListOf()
+
+        val requests: MutableList<io.dobby.core.nlu.llm.Tier2Request> = mutableListOf()
+
+        val asked: List<String> get() = requests.map { it.utterance }
 
         /** Completes as soon as `generate` is entered. */
         val started: kotlinx.coroutines.CompletableDeferred<Unit> = kotlinx.coroutines.CompletableDeferred()
 
-        override suspend fun generate(
-            utterance: String,
-            program: io.dobby.core.nlu.llm.Tier2Program,
-        ): String {
-            onStart()
-            asked += utterance
+        override suspend fun generate(request: io.dobby.core.nlu.llm.Tier2Request): String {
+            requests += request
             started.complete(Unit)
             hold?.await()
-            return replies[utterance] ?: """{"c":"none"}"""
+            return when (request.step) {
+                io.dobby.core.nlu.llm.Step.ROUTE -> routes[request.utterance] ?: "none"
+                io.dobby.core.nlu.llm.Step.FILL -> fills[request.utterance] ?: "none"
+            }
         }
     }
 
@@ -634,7 +638,8 @@ class DobbyControllerTest {
         val dobby = controller(
             voice,
             tier2 = ScriptedResolver(
-                mapOf("weck mich in 20 minuten" to """{"c":"clock.set_timer","amount":20,"unit":"minuten"}"""),
+                routes = mapOf("weck mich in 20 minuten" to "clock.set_timer"),
+                fills = mapOf("weck mich in 20 minuten" to """{"amount":20,"unit":"minuten"}"""),
             ),
         )
         dobby.start()
@@ -652,7 +657,7 @@ class DobbyControllerTest {
     @Test
     fun `a miss the model was asked about still says so in the detail line`() = runTest {
         val voice = FakeVoice("erzähl mir einen witz")
-        val dobby = controller(voice, tier2 = ScriptedResolver(emptyMap()))
+        val dobby = controller(voice, tier2 = ScriptedResolver())
         dobby.start()
         dobby.listen().join()
 
@@ -665,7 +670,7 @@ class DobbyControllerTest {
     @Test
     fun `rounds two and three of a turn skip the model`() = runTest {
         val voice = FakeVoice("bla bla", "blub blub", "noch mehr bla")
-        val resolver = ScriptedResolver(emptyMap())
+        val resolver = ScriptedResolver()
         val dobby = controller(voice, tier2 = resolver)
         dobby.start()
         dobby.listen().join()
@@ -681,7 +686,7 @@ class DobbyControllerTest {
     fun `the panel says it is thinking, and the resolver is what makes that true`() = runTest {
         val voice = FakeVoice("weck mich gleich")
         val hold = kotlinx.coroutines.CompletableDeferred<Unit>()
-        val resolver = ScriptedResolver(emptyMap(), hold = hold)
+        val resolver = ScriptedResolver(hold = hold)
         val dobby = controller(voice, tier2 = resolver)
         dobby.start()
 

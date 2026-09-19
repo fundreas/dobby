@@ -143,6 +143,12 @@ class ClockSock(
                     mapOf("amount" to 20, "unit" to "minuten"),
                     matchedByTemplates = false,
                 ),
+                // Held out: the model never sees these, and the device accuracy test measures
+                // it against them. Without them the test measures whether Qwen can repeat the
+                // two sentences its own prompt just handed it.
+                Example("sag mir in 10 minuten bescheid", mapOf("amount" to 10, "unit" to "minuten"), heldOut = true),
+                Example("in einer halben stunde bitte klingeln", mapOf("amount" to 30, "unit" to "minuten"), heldOut = true),
+                Example("ich will in 5 minuten dran erinnert werden", mapOf("amount" to 5, "unit" to "minuten"), heldOut = true),
             ),
         ),
         ExclusiveCommandSpec(
@@ -159,6 +165,9 @@ class ClockSock(
                 Example("stopp den timer"),
                 Example("brich den timer ab"),
                 Example("stopp den alarm"),
+                Example("der timer kann weg", heldOut = true),
+                Example("ich brauche den timer doch nicht mehr", heldOut = true),
+                Example("mach das gebimmel weg", heldOut = true),
             ),
         ),
         ExclusiveCommandSpec(
@@ -202,6 +211,9 @@ class ClockSock(
                 // Paraphrases Tier 1 is meant to miss — few-shots for the LLM tier (M6).
                 Example("kannst du mir sagen wie spät es ist", matchedByTemplates = false),
                 Example("hast du die genaue zeit", matchedByTemplates = false),
+                Example("was ist denn bitte gerade die uhrzeit", heldOut = true),
+                Example("wie viel uhr haben wir gerade", heldOut = true),
+                Example("weißt du zufällig wie spät wir haben", heldOut = true),
             ),
         ),
     )

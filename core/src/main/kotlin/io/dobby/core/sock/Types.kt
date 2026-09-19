@@ -105,18 +105,44 @@ data class ParamSpec(
 /**
  * An example utterance and the params it must produce.
  *
- * Examples serve two different jobs, and conflating them is a trap. Most are **Tier 1
- * regression cases**: the utterance tables from the spec, which the template matcher must
- * resolve, and which the registry asserts on every build. Some are **Tier 2 few-shots**:
- * paraphrases that Tier 1 is deliberately unable to match — that is the entire reason the LLM
- * tier exists. Marking the latter [matchedByTemplates] = false keeps them in the generated
- * system prompt without failing the collision gate.
+ * Examples serve three different jobs, and conflating them is a trap.
+ *
+ * 1. **Tier 1 regression cases** — the utterance tables from the spec, which the template
+ *    matcher must resolve and which the registry asserts on every build. The default.
+ * 2. **Tier 2 few-shots** ([matchedByTemplates] = false) — paraphrases Tier 1 is deliberately
+ *    unable to match, which is the entire reason the LLM tier exists. They go in the generated
+ *    prompt and are exempt from the collision gate.
+ * 3. **Held-out accuracy cases** ([heldOut] = true) — paraphrases the model is **never shown**
+ *    and is measured against on the device.
+ *
+ * The third exists because an accuracy test over the few-shots measures memorisation, not
+ * understanding: the model was handed those exact sentences in its prompt. A held-out case is
+ * the same kind of sentence with the crucial difference that nothing has told the model about
+ * it. The fallthrough log is where they come from — a logged line gets promoted either into a
+ * template or into one of these, and both live in the owning Sock's spec.
  */
 data class Example(
     val utterance: String,
     val params: Map<String, Any> = emptyMap(),
     val matchedByTemplates: Boolean = true,
-)
+    /**
+     * A Tier 2 accuracy case. Never rendered into a prompt; asserted on-device.
+     *
+     * Implies [matchedByTemplates] = false for the registry's purposes — see [tier2Only] —
+     * so an author writes `heldOut = true` alone rather than having to remember both.
+     */
+    val heldOut: Boolean = false,
+) {
+    /**
+     * True when Tier 1 must **not** match this utterance.
+     *
+     * Both of the Tier 2 kinds: a few-shot Tier 1 can reach is a template described to the
+     * model as though it did not exist, and a held-out case Tier 1 can reach would never get
+     * as far as the model to be measured. One property so the registry and the generators ask
+     * the question once.
+     */
+    val tier2Only: Boolean get() = !matchedByTemplates || heldOut
+}
 
 /**
  * One template, plus any params it fixes by virtue of its wording.

@@ -94,13 +94,16 @@ class SockRegistry private constructor(
         val problems = mutableListOf<String>()
         for (example in examples) {
             val match = palette.match(Normalizer.tokenize(example.utterance))
-            if (!example.matchedByTemplates) {
-                // A few-shot Tier 1 can already match is not a few-shot. It is a template that
-                // exists, described to the model as though it did not.
+            if (example.tier2Only) {
+                // A few-shot Tier 1 can already match is not a few-shot: it is a template that
+                // exists, described to the model as though it did not. A held-out case Tier 1
+                // can match is worse — it would never reach Tier 2 at all, so the accuracy
+                // number it contributes to is measuring the template matcher.
                 if (match != null) {
-                    problems += "$from: Tier 2 example \"${example.utterance}\" is matched by " +
+                    val kind = if (example.heldOut) "held-out" else "Tier 2"
+                    problems += "$from: $kind example \"${example.utterance}\" is matched by " +
                         "Tier 1 via \"${match.entry.template.source}\" → ${match.invocation.commandId}; " +
-                        "drop matchedByTemplates = false, or drop the example"
+                        "promote it to a template, or change the wording"
                 }
                 continue
             }

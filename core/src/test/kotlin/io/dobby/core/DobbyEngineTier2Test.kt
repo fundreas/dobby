@@ -46,13 +46,18 @@ class DobbyEngineTier2Test {
     private val registry = SockRegistry.buildOrThrow(listOf(sock))
     private val program = Tier2Program.of(registry)
 
+    /**
+     * @param routes normalized utterance → the command id the route step answers with.
+     * @param fills normalized utterance → the params JSON the fill step answers with.
+     */
     private fun engine(
-        vararg replies: Pair<String, String>,
+        routes: Map<String, String> = emptyMap(),
+        fills: Map<String, String> = emptyMap(),
         onFallthrough: (Fallthrough) -> Unit = {},
     ): DobbyEngine = DobbyEngine(
         registry = registry,
         onFallthrough = onFallthrough,
-        tier2 = Tier2(registry, FakeTier2Resolver(replies.toMap()), program),
+        tier2 = Tier2(registry, FakeTier2Resolver(routes, fills), program),
     )
 
     @Test
@@ -69,7 +74,8 @@ class DobbyEngineTier2Test {
     @Test
     fun `an utterance no template reaches is resolved by the model and dispatched normally`() = runTest {
         val engine = engine(
-            "weck mich in 20 minuten" to """{"c":"clock.set_timer","amount":20,"unit":"minuten"}""",
+            routes = mapOf("weck mich in 20 minuten" to "clock.set_timer"),
+            fills = mapOf("weck mich in 20 minuten" to """{"amount":20,"unit":"minuten"}"""),
         )
         engine.start(FakeSockContext(this))
 
@@ -89,7 +95,7 @@ class DobbyEngineTier2Test {
         val engine = DobbyEngine(registry, tier2 = Tier2(registry, resolver, program))
         engine.start(FakeSockContext(this))
         engine.handle("Weck mich in ZWANZIG Minuten!")
-        assertEquals(listOf("weck mich in 20 minuten"), resolver.asked)
+        assertEquals(listOf("weck mich in 20 minuten"), resolver.routed)
     }
 
     @Test
@@ -101,13 +107,13 @@ class DobbyEngineTier2Test {
         val outcome = engine.handle("timer 5 minuten")
         assertEquals(Tier.TEMPLATE, outcome.tier)
         assertNull(outcome.tier2)
-        assertEquals(emptyList(), resolver.asked, "Tier 2 ran for an utterance Tier 1 matched")
+        assertEquals(emptyList(), resolver.requests, "Tier 2 ran for an utterance Tier 1 matched")
     }
 
     @Test
     fun `none, timeout and a rejection all behave exactly like today's miss`() = runTest {
-        for (reply in listOf("""{"c":"none"}""", "Ich weiß es nicht.", """{"c":"nope.nope"}""")) {
-            val engine = engine("irgendwas" to reply)
+        for (reply in listOf("none", "Ich weiß es nicht.", "nope.nope")) {
+            val engine = engine(routes = mapOf("irgendwas" to reply))
             engine.start(FakeSockContext(this))
             val outcome = engine.handle("irgendwas")
             assertNull(outcome.invocation, "\"$reply\" produced an invocation")
@@ -129,14 +135,15 @@ class DobbyEngineTier2Test {
         // turns "it is thinking" into "it is stuck".
         val outcome = engine.handle("mach irgendwas", useTier2 = false)
         assertNull(outcome.tier2)
-        assertEquals(emptyList(), resolver.asked)
+        assertEquals(emptyList(), resolver.requests)
     }
 
     @Test
     fun `the fallthrough carries what Tier 2 made of it`() = runTest {
         val log = FallthroughLog()
         val engine = engine(
-            "weck mich in 20 minuten" to """{"c":"clock.set_timer","amount":20,"unit":"minuten"}""",
+            routes = mapOf("weck mich in 20 minuten" to "clock.set_timer"),
+            fills = mapOf("weck mich in 20 minuten" to """{"amount":20,"unit":"minuten"}"""),
             onFallthrough = log::record,
         )
         engine.start(FakeSockContext(this))
@@ -206,7 +213,8 @@ class DobbyEngineTier2Test {
             tier2 = Tier2(
                 registry,
                 FakeTier2Resolver(
-                    mapOf("weck mich gleich" to """{"c":"clock.set_timer","amount":5,"unit":"minuten"}"""),
+                    routes = mapOf("weck mich gleich" to "clock.set_timer"),
+                    fills = mapOf("weck mich gleich" to """{"amount":5,"unit":"minuten"}"""),
                 ),
                 Tier2Program.of(registry),
             ),
@@ -234,6 +242,6 @@ class DobbyEngineTier2Test {
         // No question open here, but the ordering it protects is asserted in FollowUpTest; what
         // matters for Tier 2 is that a matched utterance never reaches the model at all.
         engine.handle("timer 5 minuten")
-        assertEquals(emptyList(), resolver.asked)
+        assertEquals(emptyList(), resolver.requests)
     }
 }

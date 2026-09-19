@@ -57,6 +57,10 @@ class HelpSock(
                 Example("welche befehle gibt es"),
                 Example("welche bereiche gibt es"),
                 Example("erzähl mir mal was du so drauf hast", matchedByTemplates = false),
+                // Held out: never shown to the model, asserted on the device.
+                Example("was geht denn hier alles", heldOut = true),
+                Example("womit kann ich dich beauftragen", heldOut = true),
+                Example("sag mal was du drauf hast", heldOut = true),
             ),
         ),
         ExclusiveCommandSpec(
@@ -73,6 +77,9 @@ class HelpSock(
                 Example("was kann die uhr", mapOf("sock" to "uhr")),
                 Example("welche befehle hat die uhr", mapOf("sock" to "uhr")),
                 Example("hilfe zu spotify", mapOf("sock" to "spotify")),
+                Example("erzähl mir was die uhr so kann", mapOf("sock" to "uhr"), heldOut = true),
+                Example("womit kann mir der rechner helfen", mapOf("sock" to "rechner"), heldOut = true),
+                Example("was geht denn mit spotify", mapOf("sock" to "spotify"), heldOut = true),
             ),
         ),
     )

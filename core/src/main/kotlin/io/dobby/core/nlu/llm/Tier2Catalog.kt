@@ -23,6 +23,15 @@ class Tier2Catalog(val commands: List<CommandSpec>) {
 
     val commandIds: List<String> get() = commands.map { it.id }
 
+    /**
+     * The commands that need a fill step, in catalog order.
+     *
+     * The number that makes the two-step split cheap: everything *not* in here is answered
+     * completely by the route, with no second request, no second prefill and no second decode.
+     * At the registry as it stands that is the majority of commands.
+     */
+    val withParams: List<CommandSpec> get() = commands.filter { it.params.isNotEmpty() }
+
     /** Params in declaration order — the order the Sock author wrote, not alphabetical. */
     fun paramsOf(command: CommandSpec): List<ParamSpec> = command.params
 

@@ -1,6 +1,7 @@
 package io.dobby.core.registry
 
 import io.dobby.core.FixtureSock
+import io.dobby.core.sock.Example
 import io.dobby.core.sock.ExclusiveCommandSpec
 import io.dobby.core.sock.ParamSpec
 import io.dobby.core.sock.ParamType
@@ -210,5 +211,49 @@ class RegistryValidationTest {
             listOf("lauter", "zeit"),
             registry.checkSingleKeywordTemplates().map { it.substringAfter("single word \"").substringBefore('"') },
         )
+    }
+
+    @Test
+    fun `a held-out example Tier 1 can match is a bug`() {
+        // It would never reach Tier 2 at all, so the accuracy number it contributes to would be
+        // measuring the template matcher. Same rule as a few-shot, different reason.
+        val sock = FixtureSock(
+            id = "kitchen",
+            commands = listOf(
+                ExclusiveCommandSpec(
+                    id = "kitchen.bake",
+                    templates = patterns("backe brot"),
+                    description = "Bäckt.",
+                    examples = listOf(
+                        Example("backe brot"),
+                        Example("backe brot", heldOut = true),
+                    ),
+                ),
+            ),
+        )
+        val registry = SockRegistry.buildOrThrow(listOf(sock))
+        val problems = registry.checkExamples()
+        assertEquals(1, problems.size, problems.toString())
+        assertTrue("held-out" in problems.single(), problems.single())
+        assertTrue("backe brot" in problems.single())
+    }
+
+    @Test
+    fun `a held-out example Tier 1 cannot match is fine`() {
+        val sock = FixtureSock(
+            id = "kitchen",
+            commands = listOf(
+                ExclusiveCommandSpec(
+                    id = "kitchen.bake",
+                    templates = patterns("backe brot"),
+                    description = "Bäckt.",
+                    examples = listOf(
+                        Example("backe brot"),
+                        Example("wirf mal was in den ofen", heldOut = true),
+                    ),
+                ),
+            ),
+        )
+        assertEquals(emptyList(), SockRegistry.buildOrThrow(listOf(sock)).checkExamples())
     }
 }

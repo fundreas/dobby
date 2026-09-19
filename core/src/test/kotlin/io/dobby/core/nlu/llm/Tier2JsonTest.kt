@@ -136,4 +136,53 @@ class Tier2JsonTest {
         assertEquals(Tier2Reply("x", mapOf("n" to -5)), Tier2Json.decode("""{"c":"x","n":-5}"""))
         assertNull(Tier2Json.decode("""{"c":"x","n":-}"""))
     }
+
+    @Test
+    fun `decodeParams is decode without the command key`() {
+        // What a fill step emits: the params object alone.
+        assertEquals(
+            mapOf("amount" to 20, "unit" to "minuten"),
+            Tier2Json.decodeParams("""{"amount":20,"unit":"minuten"}"""),
+        )
+        assertEquals(emptyMap(), Tier2Json.decodeParams("{}")?.let { it } ?: emptyMap<String, Any>())
+        // Nulls are dropped here too, so ParamCoercion applies the spec's own default.
+        assertEquals(mapOf("amount" to 10), Tier2Json.decodeParams("""{"amount":10,"unit":null}"""))
+    }
+
+    @Test
+    fun `a fill reply that names a command is rejected`() {
+        // After step 1 the command is already known, so a reply that names one again is not
+        // answering the question it was asked. Rejected rather than ignored: quietly dropping
+        // it would hide a model that has fallen back to the single-shot shape.
+        assertNull(Tier2Json.decodeParams("""{"c":"clock.set_timer","amount":20}"""))
+        assertNull(Tier2Json.decodeParams("""{"c":"clock.set_timer"}"""))
+    }
+
+    @Test
+    fun `decodeParams is as hostile as decode`() {
+        for (hostile in listOf(
+            "",
+            "kein befehl",
+            "{",
+            """{"amount":}""",
+            """{"amount":[1,2]}""",
+            """{"amount":2.5}""",
+            """{"a":1,"a":2}""",
+            """{"p":{"amount":5}}""",
+        )) {
+            assertNull(Tier2Json.decodeParams(hostile), "\"$hostile\" decoded")
+        }
+    }
+
+    @Test
+    fun `encodeParams is encode without the head`() {
+        assertEquals(
+            """{"amount":20,"unit":"minuten"}""",
+            Tier2Json.encodeParams(linkedMapOf("amount" to 20, "unit" to "minuten")),
+        )
+        assertEquals("{}", Tier2Json.encodeParams(emptyMap()))
+        // Round-trips, which is what makes a few-shot grammar-legal by construction.
+        val params = mapOf("query" to "queen", "n" to 3)
+        assertEquals(params, Tier2Json.decodeParams(Tier2Json.encodeParams(params)))
+    }
 }

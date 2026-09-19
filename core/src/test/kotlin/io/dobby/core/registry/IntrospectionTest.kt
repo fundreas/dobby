@@ -179,6 +179,11 @@ class IntrospectionTest {
                             mapOf("minutes" to 20),
                             matchedByTemplates = false,
                         ),
+                        io.dobby.core.sock.Example(
+                            "wirf das brot mal für 20 minuten in den ofen",
+                            mapOf("minutes" to 20),
+                            heldOut = true,
+                        ),
                     ),
                 ),
             ),
@@ -198,6 +203,10 @@ class IntrospectionTest {
             "the paraphrase must come first — it is the case templates cannot reach",
         )
         assertEquals(mapOf("minutes" to 20), examples.first().params, "a few-shot without params is not one")
+
+        // A held-out case is never rendered into a prompt: it exists to measure the model, and
+        // a measurement the model was shown the answers to measures nothing.
+        assertTrue(examples.none { it.heldOut }, "a held-out example reached the prompt")
 
         // The spoken view still hides the paraphrase and still drops the params.
         assertEquals(listOf("backe 20 minuten"), directory.command("kitchen.bake")!!.examples)
