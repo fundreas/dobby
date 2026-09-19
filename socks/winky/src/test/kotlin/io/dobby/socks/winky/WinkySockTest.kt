@@ -33,7 +33,9 @@ class WinkyEngineTest {
     private val fellThrough = mutableListOf<String>()
     private val engine = DobbyEngine(
         registry = SockRegistry.buildOrThrow(listOf(WinkySock())),
-        onFallthrough = fellThrough::add,
+        // The callback now carries what Tier 2 made of the utterance too; this suite only
+        // cares that the utterance reached the flywheel at all.
+        onFallthrough = { fellThrough += it.utterance },
     )
 
     @Test

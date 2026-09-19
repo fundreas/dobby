@@ -2,6 +2,13 @@ package io.dobby.cli
 
 import io.dobby.core.DobbyEngine
 import io.dobby.core.EngineOutcome
+import io.dobby.core.FallthroughLog
+import io.dobby.core.Tier
+import io.dobby.core.nlu.Normalizer
+import io.dobby.core.nlu.llm.PromptGenerator
+import io.dobby.core.nlu.llm.Tier2
+import io.dobby.core.nlu.llm.Tier2Program
+import io.dobby.core.nlu.llm.TokenEstimate
 import io.dobby.core.dispatch.Dispatcher
 import io.dobby.core.dispatch.SockHealth
 import io.dobby.core.registry.Introspection
@@ -9,6 +16,7 @@ import io.dobby.core.registry.RegistryValidationException
 import io.dobby.core.registry.SockRegistry
 import io.dobby.core.sock.Sock
 import io.dobby.core.sock.SockResult
+import io.dobby.socks.calculator.CalculatorSock
 import io.dobby.socks.clock.ClockSock
 import io.dobby.socks.winky.WinkySock
 import io.dobby.socks.help.HelpSock
@@ -39,6 +47,7 @@ object DobbySocks {
             // The terminal has no SoundPool, so the chime prints itself. A timer is then just
             // as testable here as on the panel — which is the whole point of the interface.
             ClockSock(chime = { sound -> out("  🔔 ${sound.configValue}") }),
+            CalculatorSock(),
             WinkySock(),
             HelpSock { directory },
         )
@@ -56,7 +65,7 @@ object DobbySocks {
 fun main(args: Array<String>) = runBlocking {
     var verbose = args.contains("--trace")
     val scope = CoroutineScope(SupervisorJob())
-    val fallthrough = mutableListOf<String>()
+    val fallthrough = FallthroughLog()
 
     val wiring = DobbySocks.create()
     val registry = try {
@@ -84,10 +93,16 @@ fun main(args: Array<String>) = runBlocking {
     val introspection = Introspection(registry, health)
     wiring.bindDirectory(introspection)
     val discovery = Discovery(introspection)
+    // Tier 2 with the registry's own few-shots standing in for the model. The terminal will
+    // never have llama.cpp, but the grammar, the decoder and the gate are pure :core and this
+    // is where they are cheapest to exercise.
+    val program = Tier2Program.ofOrNull(registry, introspection) { System.err.println(it) }
+    val scripted = ScriptedTier2(registry, introspection)
     val engine = DobbyEngine(
         registry = registry,
         dispatcher = Dispatcher(registry, health),
-        onFallthrough = { fallthrough += it },
+        onFallthrough = fallthrough::record,
+        tier2 = program?.let { Tier2(registry, scripted, it) },
     )
     val context = ConsoleContext(scope) { verbose }
     engine.start(context)
@@ -113,10 +128,26 @@ fun main(args: Array<String>) = runBlocking {
                     println(if (argument.isEmpty()) discovery.commands() else discovery.commands(argument))
 
                 "palette" -> println(discovery.palette())
+                "grammar" -> println(program?.grammar ?: NO_TIER2)
+                "prompt" -> println(
+                    program?.let { promptView(it, registry.commands.size, argument) } ?: NO_TIER2,
+                )
+
+                "tier2" -> println(
+                    if (program == null) NO_TIER2 else tier2View(engine, scripted, argument),
+                )
                 "keywords", "keyword", "phonetics" -> println(discovery.keywords())
                 "find", "search" -> println(find(introspection, argument))
-                "fallthrough" ->
-                    println(fallthrough.ifEmpty { listOf("(none)") }.joinToString("\n") { "  $it" })
+                "fallthrough" -> {
+                    val entries = fallthrough.entries.value
+                    println(
+                        if (entries.isEmpty()) {
+                            "  (none)"
+                        } else {
+                            entries.joinToString("\n") { "  $it" }
+                        },
+                    )
+                }
 
                 "trace" -> {
                     verbose = !verbose
@@ -133,6 +164,50 @@ fun main(args: Array<String>) = runBlocking {
 
     engine.stop()
     scope.cancel()
+}
+
+private const val NO_TIER2 = "  Tier 2 is disabled — see the error printed at startup"
+
+/** `/prompt [utterance]` — the generated prompt, and how much room is left in the budget. */
+private fun promptView(program: Tier2Program, commandCount: Int, utterance: String): String {
+    val text = program.promptFor(utterance.ifEmpty { "<utterance>" })
+    val system = TokenEstimate.of(program.systemPrefix)
+    val perCommand = system.toDouble() / commandCount
+    val headroom = ((PromptGenerator.MAX_TOKENS - system) / perCommand).toInt()
+    return buildString {
+        appendLine(text)
+        appendLine("  ── estimate: $system tokens of ${PromptGenerator.MAX_TOKENS} for the system prefix")
+        appendLine("     $commandCount commands at ~${"%.0f".format(perCommand)} tokens each")
+        appendLine("     room for about $headroom more before the budget tripwire fires")
+        append("     fingerprint ${program.fingerprint}")
+    }
+}
+
+/**
+ * `/tier2 <utterance>` — the whole Tier 2 path, with the script standing in for the model.
+ *
+ * `/tier2 <utterance> = <json>` forces the reply instead, which is how a hostile one is tried:
+ * `/tier2 mach was = {"c":"nope"}` shows the gate rejecting an invented command.
+ */
+private suspend fun tier2View(engine: DobbyEngine, scripted: ScriptedTier2, argument: String): String {
+    if (argument.isEmpty()) {
+        return "  usage: /tier2 <utterance> [= <json the model would emit>]\n" +
+            "  scripted: " + scripted.utterances.sorted().joinToString("\n            ")
+    }
+    val forced = argument.substringAfter(" = ", "").ifEmpty { null }
+    val utterance = argument.substringBefore(" = ")
+    scripted.override = forced
+    return try {
+        val outcome = engine.handle(utterance)
+        buildString {
+            appendLine("  normalized: ${Normalizer.normalize(utterance)}")
+            appendLine("  model said: ${outcome.tier2?.raw ?: "(Tier 1 matched; the model was never asked)"}")
+            appendLine("  ${outcome.tier2 ?: "tier: ${outcome.tier}"}")
+            append("  → ${outcome.invocation?.let { "${it.commandId} ${it.params}" } ?: "nothing"}")
+        }
+    } finally {
+        scripted.override = null
+    }
 }
 
 private fun find(introspection: Introspection, query: String): String {
@@ -159,7 +234,10 @@ private fun help() = """
     |  /find <text>         commands matching a word
     |  /palette             every template, in the order the matcher tries them
     |  /keywords            every keyword, its phonetic code, and whether it is trusted
-    |  /fallthrough         utterances Tier 1 could not match
+    |  /grammar             the GBNF the local model is constrained to
+    |  /prompt [utterance]  the Tier 2 prompt, with its token estimate and headroom
+    |  /tier2 <utterance>   run the Tier 2 path; "<utterance> = <json>" forces the reply
+    |  /fallthrough         utterances Tier 1 could not match, and what Tier 2 made of them
     |  /trace               toggle normalizer and template output
     |  /quit                exit
 """.trimMargin()

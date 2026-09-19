@@ -157,8 +157,43 @@ class DobbyControllerTest {
         }
     }
 
-    private fun TestScope.controller(voice: FakeVoice, context: FakeSockContext = FakeSockContext()) =
-        DobbyController(backgroundScope, voice) { context }
+    private fun TestScope.controller(
+        voice: FakeVoice,
+        context: FakeSockContext = FakeSockContext(),
+        tier2: io.dobby.core.nlu.llm.Tier2Resolver? = null,
+    ) = DobbyController(backgroundScope, voice, tier2Resolver = tier2) { context }
+
+    /**
+     * A resolver that answers one utterance and reports when it started.
+     *
+     * [onStart] is how `Thinking.MODEL` is set: the real `LlamaTier2` flips the state as
+     * `generate` is entered, so the status line is true by construction rather than by a timer
+     * that guesses when the model probably began.
+     */
+    private class ScriptedResolver(
+        private val replies: Map<String, String>,
+        /** Awaited inside `generate`, so a test can inspect the panel mid-thought. */
+        private val hold: kotlinx.coroutines.CompletableDeferred<Unit>? = null,
+        private val onStart: () -> Unit = {},
+    ) : io.dobby.core.nlu.llm.Tier2Resolver {
+        override val available: Boolean = true
+        override val unavailableReason: String? = null
+        val asked: MutableList<String> = mutableListOf()
+
+        /** Completes as soon as `generate` is entered. */
+        val started: kotlinx.coroutines.CompletableDeferred<Unit> = kotlinx.coroutines.CompletableDeferred()
+
+        override suspend fun generate(
+            utterance: String,
+            program: io.dobby.core.nlu.llm.Tier2Program,
+        ): String {
+            onStart()
+            asked += utterance
+            started.complete(Unit)
+            hold?.await()
+            return replies[utterance] ?: """{"c":"none"}"""
+        }
+    }
 
     /**
      * Runs everything the controller has queued and waits for it to go quiet.
@@ -591,5 +626,89 @@ class DobbyControllerTest {
 
         /** The controller's own screen wake on detection. */
         const val WAKE_SCREEN_SECONDS = 30
+    }
+
+    @Test
+    fun `an utterance only the model can place does not buzz and does not reopen the mic`() = runTest {
+        val voice = FakeVoice("weck mich in zwanzig minuten")
+        val dobby = controller(
+            voice,
+            tier2 = ScriptedResolver(
+                mapOf("weck mich in 20 minuten" to """{"c":"clock.set_timer","amount":20,"unit":"minuten"}"""),
+            ),
+        )
+        dobby.start()
+        dobby.listen().join()
+
+        // The whole point of putting Tier 2 inside handle(): wasUnderstood is already the
+        // post-Tier-2 answer, so `respondTo` never reaches the buzz.
+        assertEquals(0, voice.buzzes, "the panel buzzed at a command it went on to execute")
+        val answer = uiState(dobby).messages.last { it.voice == Voice.DOBBY }
+        assertTrue(answer.text.startsWith("Timer läuft"), answer.text)
+        assertTrue(answer.detail!!.startsWith("tier2 "), "no Tier 2 detail line: ${answer.detail}")
+        assertTrue("clock.set_timer (amount=20, unit=minuten)" in answer.detail!!, answer.detail!!)
+    }
+
+    @Test
+    fun `a miss the model was asked about still says so in the detail line`() = runTest {
+        val voice = FakeVoice("erzähl mir einen witz")
+        val dobby = controller(voice, tier2 = ScriptedResolver(emptyMap()))
+        dobby.start()
+        dobby.listen().join()
+
+        assertTrue(voice.buzzes > 0, "a genuine miss must still buzz")
+        // "The model looked and said no" is what tells you the tier is running at all.
+        val said = uiState(dobby).messages.last { it.voice == Voice.DOBBY }
+        assertTrue(said.failed)
+    }
+
+    @Test
+    fun `rounds two and three of a turn skip the model`() = runTest {
+        val voice = FakeVoice("bla bla", "blub blub", "noch mehr bla")
+        val resolver = ScriptedResolver(emptyMap())
+        val dobby = controller(voice, tier2 = resolver)
+        dobby.start()
+        dobby.listen().join()
+
+        // Three unmatched utterances, one consultation. After a buzz the person is rephrasing
+        // toward a command they believe exists, which is Tier 1's best case — and three
+        // five-second waits in a row is a panel that looks stuck.
+        assertEquals(3, voice.buzzes)
+        assertEquals(listOf("bla bla"), resolver.asked)
+    }
+
+    @Test
+    fun `the panel says it is thinking, and the resolver is what makes that true`() = runTest {
+        val voice = FakeVoice("weck mich gleich")
+        val hold = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val resolver = ScriptedResolver(emptyMap(), hold = hold)
+        val dobby = controller(voice, tier2 = resolver)
+        dobby.start()
+
+        val turn = dobby.listen()
+        settle()
+
+        // Mid-thought: the model is inside generate() and the panel says so. The state is set
+        // by the resolver being entered, not by a timer guessing when it probably started —
+        // which is why the text is true rather than merely plausible.
+        assertTrue(resolver.started.isCompleted, "the resolver was never reached")
+        assertEquals(Phase.THINKING, dobby.state.value.phase)
+        assertEquals("Ich denke nach…", dobby.state.value.detail)
+
+        hold.complete(Unit)
+        turn.join()
+        assertEquals("", uiState(dobby).detail)
+    }
+
+    @Test
+    fun `with no resolver the panel behaves exactly as it did`() = runTest {
+        val voice = FakeVoice("erzähl mir einen witz")
+        val dobby = controller(voice)
+        dobby.start()
+        dobby.listen().join()
+
+        assertTrue(voice.buzzes > 0)
+        val said = uiState(dobby).messages.last { it.voice == Voice.DOBBY }
+        assertEquals(null, said.detail, "a miss with no Tier 2 has nothing to report")
     }
 }

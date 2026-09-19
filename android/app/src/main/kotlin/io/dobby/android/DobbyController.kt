@@ -5,8 +5,13 @@ import io.dobby.android.chat.ChatMessage
 import io.dobby.android.chat.Transcript
 import io.dobby.android.chat.detailLine
 import io.dobby.core.DobbyEngine
+import io.dobby.core.Fallthrough
+import io.dobby.core.FallthroughLog
 import io.dobby.core.dispatch.Dispatcher
 import io.dobby.core.dispatch.SockHealth
+import io.dobby.core.nlu.llm.Tier2
+import io.dobby.core.nlu.llm.Tier2Program
+import io.dobby.core.nlu.llm.Tier2Resolver
 import io.dobby.core.registry.Introspection
 import io.dobby.core.registry.SockRegistry
 import io.dobby.core.sock.SockContext
@@ -50,6 +55,23 @@ data class DobbyUiState(
     val listenCue: ListenCue = ListenCue.DEFAULT,
 )
 
+/**
+ * What the panel is busy with, when it is busy.
+ *
+ * A plain boolean was enough while thinking took milliseconds. Tier 2 takes seconds, and a
+ * spinner over nothing for four seconds is a panel that looks broken — so the state carries
+ * *which* kind of thinking it is, and the status line says so.
+ */
+enum class Thinking {
+    NO,
+
+    /** A Sock is running. Milliseconds, usually; nothing worth saying about it. */
+    DISPATCH,
+
+    /** The local model is reading the sentence. Seconds, and worth saying. */
+    MODEL,
+}
+
 enum class Phase {
     PREPARING,
     READY,
@@ -85,6 +107,14 @@ class DobbyController(
     hardware: ClockHardware? = null,
     /** Remembers the wake phrase and whether it is armed, across restarts. */
     private val settings: Settings? = null,
+    /**
+     * The local model, or null on a device that cannot run one.
+     *
+     * Constructed by the caller rather than here, because it is the caller that owns the
+     * lifecycle a 1 GB mmap needs — and because a null here is the whole of "Tier 2 degrades to
+     * Tier 1", with no branch anywhere else in this class.
+     */
+    private val tier2Resolver: Tier2Resolver? = null,
     sockContext: (announce: suspend (String) -> Unit) -> SockContext,
 ) {
     private val transcript = Transcript()
@@ -92,7 +122,15 @@ class DobbyController(
     /** Dispatch is single-file: two overlapping turns would interleave speech. */
     private val turn = Mutex()
 
-    private val thinking = MutableStateFlow(false)
+    private val thinking = MutableStateFlow(Thinking.NO)
+
+    /**
+     * Utterances Tier 1 could not match, bounded and in memory. Readable by the settings screen.
+     *
+     * See [FallthroughLog]'s KDoc for why it is bounded, why it is not persisted, and why that
+     * is a decision rather than an omission.
+     */
+    val fallthrough: FallthroughLog = FallthroughLog()
 
     private val health = SockHealth()
 
@@ -124,13 +162,18 @@ class DobbyController(
             // Never fatal: `lauter` and `stumm` are this shape and are correct. Logged so the
             // judgement behind each one stays visible (`socks.specs/README.md` §6).
             registry.checkSingleKeywordTemplates().forEach { Log.w(TAG, "single keyword: $it") }
+            // Null when a Sock declares a few-shot the prompt cannot render, and null when no
+            // resolver was supplied at all. Both leave the engine byte-for-byte what it was.
+            val program = Tier2Program.ofOrNull(registry, introspection) { Log.w(TAG, it) }
             engine = DobbyEngine(
                 registry = registry,
                 dispatcher = Dispatcher(registry, health),
-                // §5.4's flywheel, in the only form it has until Tier 2 exists: every
-                // utterance Tier 1 could not match, in logcat, ready to be promoted into a
-                // template in the owning Sock's spec.
-                onFallthrough = { Log.i(TAG, "fallthrough: $it") },
+                // §5.4's flywheel: every utterance Tier 1 could not match, with what Tier 2
+                // made of it, ready to be promoted into a template in the owning Sock's spec.
+                onFallthrough = { entry: Fallthrough ->
+                    Log.i(TAG, "fallthrough: $entry")
+                    fallthrough.record(entry)
+                },
                 log = object : SockLog {
                     override fun debug(message: String) = Unit
 
@@ -138,9 +181,41 @@ class DobbyController(
                         Log.w(TAG, message, cause)
                     }
                 },
+                tier2 = if (tier2Resolver != null && program != null) {
+                    Tier2(registry, announcing(tier2Resolver), program)
+                } else {
+                    null
+                },
             )
             summary = "${registry.socks.size} Socks · ${registry.commands.size} Befehle · " +
                 "${registry.palette.entries.size} Vorlagen"
+        }
+    }
+
+    /**
+     * Wraps a resolver so the panel says "Ich denke nach…" for exactly as long as it thinks.
+     *
+     * The state flips as `generate` is entered and back as it returns, so the text is true by
+     * construction rather than by a timer guessing when the model probably started. A decorator
+     * rather than a callback on the resolver itself, so it holds for every implementation —
+     * the real one, a scripted one in a test, and whatever replaces them.
+     *
+     * The engine stays ignorant of the UI: it sees a [Tier2Resolver] and nothing else.
+     */
+    private fun announcing(resolver: Tier2Resolver): Tier2Resolver = object : Tier2Resolver {
+        override val available: Boolean get() = resolver.available
+
+        override val unavailableReason: String? get() = resolver.unavailableReason
+
+        override suspend fun generate(utterance: String, program: Tier2Program): String? {
+            thinking.value = Thinking.MODEL
+            return try {
+                resolver.generate(utterance, program)
+            } finally {
+                // Back to DISPATCH rather than NO: handle() has not returned yet, and a Sock
+                // still has to run whatever the model just named.
+                thinking.value = Thinking.DISPATCH
+            }
         }
     }
 
@@ -171,7 +246,7 @@ class DobbyController(
         ) { voice, messages, isThinking, armed, _ ->
             DobbyUiState(
                 phase = phaseOf(voice, isThinking),
-                detail = detailOf(voice),
+                detail = detailOf(voice, isThinking),
                 messages = messages,
                 summary = summary,
                 canListen = pipeline.canListen && engine != null,
@@ -298,7 +373,12 @@ class DobbyController(
                         return@withLock
                     }
                     transcript.heard(heard)
-                    when (respondTo(heard)) {
+                    // Tier 2 on the first utterance of a turn only. After a buzz the person is
+                    // deliberately rephrasing toward a command they believe exists, which is
+                    // Tier 1's best case and not Tier 2's — and a second and third five-second
+                    // wait is what turns "it is thinking" into "it is stuck". A whole turn
+                    // stays bounded at about fifteen seconds.
+                    when (respondTo(heard, useTier2 = attempts == 0)) {
                         // Handled, and the floor stays open for whatever comes next. Back to
                         // the ordinary window: nothing is pending, so this is somebody starting
                         // a sentence again rather than answering a question.
@@ -373,13 +453,13 @@ class DobbyController(
      * "Understood" means Tier 1 matched a command, not that the command succeeded. A timer that
      * fails to start is an answer worth speaking; an utterance nothing claimed is not.
      */
-    private suspend fun respondTo(utterance: String): TurnOutcome {
+    private suspend fun respondTo(utterance: String, useTier2: Boolean = true): TurnOutcome {
         val dobby = engine ?: return TurnOutcome.CLOSED
-        thinking.value = true
+        thinking.value = Thinking.DISPATCH
         val outcome = try {
-            dobby.handle(utterance)
+            dobby.handle(utterance, useTier2 = useTier2)
         } finally {
-            thinking.value = false
+            thinking.value = Thinking.NO
         }
 
         if (!outcome.wasUnderstood) {
@@ -438,13 +518,13 @@ class DobbyController(
         return TurnOutcome.CONTINUE
     }
 
-    private fun phaseOf(voice: VoiceState, isThinking: Boolean): Phase = when {
+    private fun phaseOf(voice: VoiceState, isThinking: Thinking): Phase = when {
         engine == null -> Phase.UNAVAILABLE
         voice is VoiceState.Listening -> Phase.LISTENING
         // Transcription is thinking as far as the panel is concerned: the microphone is shut,
         // nothing is expected of the person, and something is working on what they said.
         voice is VoiceState.Transcribing -> Phase.THINKING
-        isThinking -> Phase.THINKING
+        isThinking != Thinking.NO -> Phase.THINKING
         voice is VoiceState.Speaking -> Phase.SPEAKING
         voice is VoiceState.Preparing -> Phase.PREPARING
         voice is VoiceState.Unavailable -> Phase.UNAVAILABLE
@@ -452,7 +532,7 @@ class DobbyController(
         else -> Phase.READY
     }
 
-    private fun detailOf(voice: VoiceState): String = when (voice) {
+    private fun detailOf(voice: VoiceState, thinking: Thinking): String = when (voice) {
         is VoiceState.Preparing -> voice.detail
         is VoiceState.Unavailable -> voice.reason
         is VoiceState.Waiting -> "Sag \"${voice.phrase}\""
@@ -461,7 +541,10 @@ class DobbyController(
         // walking closer.
         is VoiceState.Listening -> if (voice.speaking) "Ich höre dich…" else "Sprich jetzt"
         VoiceState.Transcribing -> "Verstehe…"
-        else -> ""
+        // The four seconds the local model takes, said out loud. The text is true by
+        // construction rather than by a timer: the resolver flips the state as it is entered,
+        // so the panel says "Ich denke nach" exactly while it is.
+        else -> if (thinking == Thinking.MODEL) "Ich denke nach…" else ""
     }
 
     private companion object {
