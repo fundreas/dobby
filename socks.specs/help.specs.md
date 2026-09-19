@@ -20,7 +20,7 @@ Discovery is a capability, so it is a Sock rather than a special case in core. T
 
 ```kotlin
 var directory: Introspection? = null
-val socks = listOf(ClockSock(), DeviSock(), HelpSock { directory })
+val socks = listOf(ClockSock(), WinkySock(), HelpSock { directory })
 val registry = SockRegistry.buildOrThrow(socks)
 directory = Introspection(registry, health)
 ```
@@ -75,7 +75,7 @@ Names every area that has at least one command, **sorted by display name** — a
 
 | Case | German |
 |---|---|
-| several areas | "Ich habe 3 Bereiche: Devi, Hilfe und Uhr. Frag zum Beispiel: Was kann Devi?" |
+| several areas | "Ich habe 3 Bereiche: Hilfe, Uhr und Winky. Frag zum Beispiel: Was kann Uhr?" |
 | exactly one | "Ich habe einen Bereich: Hilfe. Frag: Was kann Hilfe?" |
 | none | "Ich kann im Moment noch nichts." |
 
@@ -129,7 +129,7 @@ Capped at **three** phrasings; the rest are counted.
 | one command | "Uhr hat einen Befehl. Sag zum Beispiel: ‚wie spät ist es‘." |
 | several | "Uhr hat 2 Befehle. Sag zum Beispiel: ‚wie spät ist es‘ und ‚timer zehn minuten‘." |
 | more than three | "Viele hat 7 Befehle. Sag zum Beispiel: … Und 4 weitere." |
-| unknown area | "Den Bereich kenne ich nicht. Ich habe: Devi, Hilfe und Uhr." |
+| unknown area | "Den Bereich kenne ich nicht. Ich habe: Hilfe, Uhr und Winky." |
 | area with no commands | "Uhr kann im Moment nichts." |
 | no examples declared | "Uhr hat 2 Befehle, aber ich weiß gerade nicht, wie man sie sagt." |
 

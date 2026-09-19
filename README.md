@@ -28,7 +28,7 @@ Phase A was "Dobby in a terminal": everything below the microphone and above the
 | `:core` | Sock API, template engine, normalizer, registry, dispatcher + chain. **Pure Kotlin/JVM** — the module boundary is what enforces the plan's "parsing is pure" rule. Publishes test fixtures (`FakeSockContext`) used by the Socks *and* by the Android app. |
 | `:socks:clock` | **Clock** — the first product Sock, now complete: kitchen timers with an `AlarmManager` backstop and a `SoundPool` chime, the time of day in Austrian German, and the panel's clock card. Subscribes to `shared.stop`, which it wins only while the chime is ringing. |
 | `:socks:help` | **Help** — spoken discovery: "Was kannst du?", "Was kann die Uhr?" |
-| `:socks:devi` | Devi, the development Sock. Not a product Sock, and not in a release APK. |
+| `:socks:winky` | Winky, the development Sock. Not a product Sock, and not in a release APK. |
 | `:cli` | The terminal harness. Still the fastest way to work on a template. |
 | `:android:sherpa` | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), packaged: the Kotlin API vendored verbatim, the 24 MB native library downloaded and checksum-verified at build time. Upstream publishes no Maven artifact, so this module is the artifact. |
 | `:android:pipeline` | Microphone in, German text out; German text in, sound out. `AudioRecord` owner + frame router, openWakeWord, Silero VAD + Parakeet STT, Android TTS. Knows nothing about Socks. |
@@ -102,7 +102,7 @@ Two more things to know: the pre-trained models are **CC BY-NC-SA** (fine for yo
 - **Speech recognition is batch, and the VAD decides when you stopped.** Parakeet sees a finished utterance and answers once, so there is no running guess to stream into the bubble. Silero VAD watches the same frames the capture buffer gets and ends the utterance on ~800 ms of silence, with a 10 s cap for the times that silence never comes. What the panel shows instead of a live transcript is the honest thing: whether it can hear a voice, and then that it is working.
 - **The models are downloaded, not bundled.** 670 MB in the APK is 670 MB in git, in every build and every install, to save one round trip per device — and the same goes for sherpa-onnx's 24 MB native library, which `:android:sherpa` fetches at build time. Everything downloaded is verified against a pinned SHA-256, because a truncated encoder is otherwise a native load failure with no Kotlin stack behind it. The cost is that Dobby is deaf on first run until it finishes, so the download reports one size-weighted percentage into the same status line everything else uses.
 - **Nothing in a Sock changed.** `SockContext` got its Android implementations — audio focus, the screen wake lock, SharedPreferences, logcat — and Clock and Help were rebuilt against them untouched. That was the whole bet of the Phase A interfaces, and it is the first place it could have failed.
-- **Devi cannot ship.** The app's Sock list pulls development Socks from `DevSocks`, which exists twice: the debug source set returns Devi, the release source set returns nothing and does not even have `:socks:devi` on the classpath.
+- **Winky cannot ship.** The app's Sock list pulls development Socks from `DevSocks`, which exists twice: the debug source set returns Winky, the release source set returns nothing and does not even have `:socks:winky` on the classpath.
 
 ## Discovery
 
@@ -112,7 +112,7 @@ Dobby can be asked what it can do, two ways.
 
 ```
 > Was kannst du?
-  🔊 Ich habe 3 Bereiche: Devi, Hilfe und Uhr. Frag zum Beispiel: Was kann Devi?
+  🔊 Ich habe 3 Bereiche: Hilfe, Uhr und Winky. Frag zum Beispiel: Was kann Uhr?
 
 > Was kann die Uhr?
   🔊 Uhr hat 4 Befehle. Sag zum Beispiel: ‚timer zehn minuten‘, ‚timer stopp‘ und ‚wie spät ist es‘. Und 1 weitere.

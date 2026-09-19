@@ -12,8 +12,8 @@ import io.dobby.socks.help.HelpSock
  * M3 is "done when", and it holds on Android exactly as it held in the terminal.
  *
  * Development Socks are not listed here at all. They come from [DevSocks], which exists twice:
- * the debug source set returns Devi, the release source set returns nothing. The plan requires
- * that Devi cannot ship (§8, M1), and a source-set split is the only version of that rule the
+ * the debug source set returns Winky, the release source set returns nothing. The plan requires
+ * that Winky cannot ship (§8, M1), and a source-set split is the only version of that rule the
  * compiler enforces.
  */
 object DobbySocks {

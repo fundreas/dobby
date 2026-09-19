@@ -60,8 +60,8 @@ dependencies {
     implementation(project(":android:pipeline"))
     implementation(project(":socks:clock"))
     implementation(project(":socks:help"))
-    // Devi is a development Sock and must not reach a release build (dobby-plan.md §8).
-    debugImplementation(project(":socks:devi"))
+    // Winky is a development Sock and must not reach a release build (dobby-plan.md §8).
+    debugImplementation(project(":socks:winky"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

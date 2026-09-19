@@ -10,7 +10,7 @@ import io.dobby.core.registry.SockRegistry
 import io.dobby.core.sock.Sock
 import io.dobby.core.sock.SockResult
 import io.dobby.socks.clock.ClockSock
-import io.dobby.socks.devi.DeviSock
+import io.dobby.socks.winky.WinkySock
 import io.dobby.socks.help.HelpSock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -21,8 +21,8 @@ import kotlinx.coroutines.runBlocking
  * The terminal harness's Sock list.
  *
  * The app has its own in `io.dobby.android.DobbySocks`, which is the one that ships. They are
- * separate on purpose: this one always includes Devi, because a development harness with no
- * development Sock is pointless, while the app's puts Devi in the debug source set so it
+ * separate on purpose: this one always includes Winky, because a development harness with no
+ * development Sock is pointless, while the app's puts Winky in the debug source set so it
  * cannot reach a release build.
  */
 object DobbySocks {
@@ -39,7 +39,7 @@ object DobbySocks {
             // The terminal has no SoundPool, so the chime prints itself. A timer is then just
             // as testable here as on the panel — which is the whole point of the interface.
             ClockSock(chime = { sound -> out("  🔔 ${sound.configValue}") }),
-            DeviSock(),
+            WinkySock(),
             HelpSock { directory },
         )
         return Wiring(socks) { directory = it }

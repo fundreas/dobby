@@ -1,9 +1,9 @@
 package io.dobby.android
 
 import io.dobby.core.sock.Sock
-import io.dobby.socks.devi.DeviSock
+import io.dobby.socks.winky.WinkySock
 
-/** Debug build: Devi is present. */
+/** Debug build: Winky is present. */
 object DevSocks {
-    fun create(): List<Sock> = listOf(DeviSock())
+    fun create(): List<Sock> = listOf(WinkySock())
 }

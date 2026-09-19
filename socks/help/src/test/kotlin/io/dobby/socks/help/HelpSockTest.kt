@@ -43,14 +43,14 @@ private fun clockLike() = StubSock(
     ),
 )
 
-private fun deviLike() = StubSock(
-    id = "devi",
-    displayName = "Devi",
+private fun winkyLike() = StubSock(
+    id = "winky",
+    displayName = "Winky",
     commands = listOf(
         ExclusiveCommandSpec(
-            "devi.hello",
+            "winky.hello",
             patterns("hello"),
-            "Begrüßt Devi.",
+            "Begrüßt Winky.",
             examples = listOf(Example("hello")),
         ),
     ),
@@ -69,14 +69,14 @@ class HelpSockTest {
 
     @Test
     fun `overview names the areas and suggests a next question`() = runTest {
-        val (engine, _) = wire(clockLike(), deviLike())
+        val (engine, _) = wire(clockLike(), winkyLike())
 
         val outcome = engine.handle("Was kannst du?")
 
         assertEquals(HelpSock.OVERVIEW, outcome.invocation?.commandId)
         val spoken = (outcome.result as SockResult.Spoken).text
         assertEquals(
-            "Ich habe 3 Bereiche: Devi, Hilfe und Uhr. Frag zum Beispiel: Was kann Devi?",
+            "Ich habe 3 Bereiche: Hilfe, Uhr und Winky. Frag zum Beispiel: Was kann Uhr?",
             spoken,
         )
     }
@@ -93,7 +93,7 @@ class HelpSockTest {
 
     @Test
     fun `a sock's detail offers things to say, not command ids`() = runTest {
-        val (engine, _) = wire(clockLike(), deviLike())
+        val (engine, _) = wire(clockLike(), winkyLike())
 
         val outcome = engine.handle("Was kann die Uhr?")
 
@@ -108,11 +108,11 @@ class HelpSockTest {
 
     @Test
     fun `singular reads naturally`() = runTest {
-        val (engine, _) = wire(clockLike(), deviLike())
+        val (engine, _) = wire(clockLike(), winkyLike())
 
-        val spoken = (engine.handle("was kann devi").result as SockResult.Spoken).text
+        val spoken = (engine.handle("was kann winky").result as SockResult.Spoken).text
 
-        assertContains(spoken, "Devi hat einen Befehl.")
+        assertContains(spoken, "Winky hat einen Befehl.")
     }
 
     @Test
@@ -139,16 +139,16 @@ class HelpSockTest {
 
     @Test
     fun `an unknown area is answered with what does exist`() = runTest {
-        val (engine, _) = wire(clockLike(), deviLike())
+        val (engine, _) = wire(clockLike(), winkyLike())
 
         val spoken = (engine.handle("was kann das wetter").result as SockResult.Spoken).text
 
-        assertEquals("Den Bereich kenne ich nicht. Ich habe: Devi, Hilfe und Uhr.", spoken)
+        assertEquals("Den Bereich kenne ich nicht. Ich habe: Hilfe, Uhr und Winky.", spoken)
     }
 
     @Test
     fun `resolves an area through articles and STT slips`() = runTest {
-        val (engine, _) = wire(clockLike(), deviLike())
+        val (engine, _) = wire(clockLike(), winkyLike())
 
         for (utterance in listOf("was kann die uhr", "was kann uhr", "was kann der uhr", "hilfe zu uhr")) {
             val spoken = (engine.handle(utterance).result as SockResult.Spoken).text
@@ -158,7 +158,7 @@ class HelpSockTest {
 
     @Test
     fun `overview and detail do not shadow each other`() = runTest {
-        val (engine, _) = wire(clockLike(), deviLike())
+        val (engine, _) = wire(clockLike(), winkyLike())
 
         assertEquals(HelpSock.OVERVIEW, engine.handle("was kannst du").invocation?.commandId)
         assertEquals(HelpSock.OVERVIEW, engine.handle("was kannst du alles").invocation?.commandId)
@@ -168,7 +168,7 @@ class HelpSockTest {
 
     @Test
     fun `does not swallow ordinary utterances`() = runTest {
-        val (engine, _) = wire(clockLike(), deviLike())
+        val (engine, _) = wire(clockLike(), winkyLike())
 
         for (utterance in listOf("wie spät ist es", "hello", "spiele musik")) {
             val id = engine.handle(utterance).invocation?.commandId

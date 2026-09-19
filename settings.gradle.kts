@@ -16,7 +16,7 @@ dependencyResolutionManagement {
 }
 
 include(":core")
-include(":socks:devi")
+include(":socks:winky")
 include(":socks:clock")
 include(":socks:help")
 include(":cli")

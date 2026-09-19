@@ -297,8 +297,8 @@ class DobbyControllerTest {
         dobby.submit("hello").join()
 
         val answer = uiState(dobby).messages.last { it.voice == Voice.DOBBY }
-        assertEquals("Hallo, Meister", answer.text)
-        assertEquals(listOf("Hallo, Meister"), voice.spoken)
+        assertEquals("Hallo Meister", answer.text)
+        assertEquals(listOf("Hallo Meister"), voice.spoken)
     }
 
     @Test
