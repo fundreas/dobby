@@ -159,7 +159,9 @@ class DobbyEngineTier2Test {
             resolved.toString().startsWith("weck mich in 20 minuten → clock.set_timer (amount=20, unit=minuten)"),
             resolved.toString(),
         )
-        assertTrue(log.entries.value[1].toString().endsWith("→ none 0ms"))
+        // …with the per-step breakdown, so a slow line says which step was slow.
+        assertTrue(resolved.toString().endsWith("[route 0ms fill 0ms]"), resolved.toString())
+        assertTrue(log.entries.value[1].toString().endsWith("→ none 0ms [route 0ms]"), log.entries.value[1].toString())
     }
 
     @Test

@@ -51,9 +51,10 @@ data class EngineOutcome(
  * An utterance Tier 1 could not match, and what happened to it next.
  *
  * This is the flywheel's raw material: `toString()` is
- * `weck mich in 20 minuten → clock.set_timer (amount=20, unit=minuten) 1842ms`, which is enough
- * to promote a phrasing into a template by hand, in the owning Sock's spec, without re-deriving
- * what the person meant.
+ * `weck mich in 20 minuten → clock.set_timer (amount=20, unit=minuten) 1842ms [route 800ms
+ * fill 1042ms]`, which is enough to promote a phrasing into a template by hand, in the owning
+ * Sock's spec, without re-deriving what the person meant — and enough to see whether a slow
+ * line was slow at choosing the command or at filling it.
  */
 data class Fallthrough(
     /** The normalized utterance — the same string both tiers were given. */
@@ -64,6 +65,12 @@ data class Fallthrough(
     override fun toString(): String {
         val trace = tier2 ?: return utterance
         val latency = trace.latency.inWholeMilliseconds
+        // The per-step breakdown, because a slow line and a misrouted line are different
+        // problems and the total alone cannot tell them apart.
+        val steps = listOfNotNull(
+            trace.route?.let { "route ${it.latency.inWholeMilliseconds}ms" },
+            trace.fill?.let { "fill ${it.latency.inWholeMilliseconds}ms" },
+        ).let { if (it.isEmpty()) "" else " [" + it.joinToString(" ") + "]" }
         return when (val outcome = trace.outcome) {
             is Tier2Outcome.Resolved -> {
                 val params = outcome.invocation.params
@@ -72,13 +79,13 @@ data class Fallthrough(
                 } else {
                     params.entries.joinToString(", ", prefix = " (", postfix = ")") { "${it.key}=${it.value}" }
                 }
-                "$utterance → ${outcome.invocation.commandId}$rendered ${latency}ms"
+                "$utterance → ${outcome.invocation.commandId}$rendered ${latency}ms$steps"
             }
 
-            Tier2Outcome.NoCommand -> "$utterance → none ${latency}ms"
-            is Tier2Outcome.Rejected -> "$utterance → rejected (${outcome.reason}) ${latency}ms"
+            Tier2Outcome.NoCommand -> "$utterance → none ${latency}ms$steps"
+            is Tier2Outcome.Rejected -> "$utterance → rejected (${outcome.reason}) ${latency}ms$steps"
             is Tier2Outcome.Unavailable -> "$utterance → tier2 unavailable (${outcome.reason})"
-            Tier2Outcome.Timeout -> "$utterance → timeout ${latency}ms"
+            Tier2Outcome.Timeout -> "$utterance → timeout ${latency}ms$steps"
         }
     }
 }
