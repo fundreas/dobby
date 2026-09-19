@@ -197,4 +197,18 @@ class RegistryValidationTest {
         }
         assertTrue(failure.errors.size >= 3, failure.errors.toString())
     }
+
+    @Test
+    fun `single-keyword templates are listed, not rejected`() {
+        // The shape is legitimate — "lauter" and "stumm" are it — so this reports and the
+        // registry still builds. What it buys is that each one was somebody's judgement about
+        // whether another German word lands inside the tolerance (`socks.specs/README.md` §6).
+        val registry = SockRegistry.buildOrThrow(
+            listOf(sock("devi", listOf(command("devi.a", "(lauter|zeit|ab)", "sag (mir)? die zeit")))),
+        )
+        assertEquals(
+            listOf("lauter", "zeit"),
+            registry.checkSingleKeywordTemplates().map { it.substringAfter("single word \"").substringBefore('"') },
+        )
+    }
 }

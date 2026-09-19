@@ -213,7 +213,16 @@ wie spät
 (wie viel uhr|uhrzeit|die uhrzeit)
 sag (mir )?(die )?uhrzeit
 was ist die uhrzeit
+was ist die zeit
+sag (mir )?(die )?zeit
+what time is it
+(whats|what's|what is) the time( now)?
 ```
+
+This is the broadest command in the catalog on purpose. Tier 1 is the cheap tier — more
+templates enlarge a lookup table, while the expensive thing is the Tier 2 system prompt, which
+grows with `description` and `examples` and not with templates ([`dobby-plan.md`](../dobby-plan.md)
+§9). The constraint on breadth is never the count; it is the two rules below.
 
 ### Utterances → invocation
 
@@ -224,6 +233,47 @@ was ist die uhrzeit
 | wie viel uhr ist es | `whats_the_time()` |
 | uhrzeit | `whats_the_time()` |
 | sag mir die uhrzeit | `whats_the_time()` |
+| was ist die zeit | `whats_the_time()` |
+| sag mir die zeit | `whats_the_time()` |
+| whats the time | `whats_the_time()` |
+| what's the time | `whats_the_time()` |
+| whats the time now | `whats_the_time()` |
+| what time is it | `whats_the_time()` |
+
+### Why "zeit" never stands alone
+
+Every template above that uses `zeit` carries keywords around it. A **bare** `zeit` is
+deliberately absent and must stay absent: keywords are fuzzed by length, and at 4 characters
+`zeit` tolerates one edit ([`Levenshtein.tolerance`](../core/src/main/kotlin/io/dobby/core/nlu/template/Levenshtein.kt)).
+A bare template would therefore also answer **`seit`**, **`weit`** and **`zeig`** — three words
+somebody says in a kitchen without addressing the panel at all. The same goes for a bare English
+`time`.
+
+The failure mode is asymmetric, and that asymmetry is the whole argument: a missed utterance
+costs a repeat, a panel that speaks when nobody addressed it costs trust. The general form of
+this rule is in [README §6](README.md#6-template-dsl-tier-1) — `lauter` is the case where a
+single keyword is fine, `zeit` is the case where it is not.
+
+### Why English is here, and only here
+
+The recogniser is Parakeet TDT 0.6B v3, multilingual across 25 European languages with German
+and English among them ([`dobby-plan.md`](../dobby-plan.md) §4). English tokens arrive intact,
+so English templates work.
+
+They are confined to commands with **no integer and no enum slot**. The normalizer is
+German-only ([`GermanNumbers`](../core/src/main/kotlin/io/dobby/core/nlu/GermanNumbers.kt)): it
+turns "zehn" into `10` and knows nothing of "ten", so an English template feeding an
+`{x:int}` slot would match and then silently fail to coerce. `whats_the_time` takes no params
+and qualifies; `set_timer` (§3) does not, and gets no English.
+
+Apostrophes **survive** normalization — the normalizer's keep-class includes `'`, which is why
+`ich hab's gehört` is spelled with one (§4). So the English templates are written `what's`, and
+list `whats` beside it for the transcript that arrives without the apostrophe.
+
+Dobby answers in **German regardless of the language it was addressed in**. That is a product
+decision, not an oversight: the panel has one voice, and a device in an Austrian kitchen that
+switches personality because somebody phrased a question in English is a worse device. Do not
+"fix" it.
 
 ### Behavior
 
@@ -259,7 +309,9 @@ Exposed state: `StateFlow<ClockState>` = `now: LocalDateTime`, `timer: TimerStat
 
 ## 8. Utterance collision surface
 
-Exclusively claimed: `timer …`, `wecker …`, `wie spät …`, `wie viel uhr …`, `uhrzeit`, `erinner(e) mich in …`, and `stopp/beende/brich … <timer|alarm|wecker|klingeln>`.
+Exclusively claimed: `timer …`, `wecker …`, `wie spät …`, `wie viel uhr …`, `uhrzeit`, `was ist die zeit`, `sag (mir) (die) zeit`, `erinner(e) mich in …`, and `stopp/beende/brich … <timer|alarm|wecker|klingeln>`.
+
+English, claimed on `whats_the_time` alone (§6): `whats the time`, `what's the time`, `what is the time`, `whats the time now`, `what time is it` — so the keywords `whats`, `what's`, `what`, `is`, `it`, `the`, `time` and `now` are in play, but only in those sequences. **Not** claimed: a bare `zeit` or a bare `time`, for the reason in §6.
 
 Contributed to `shared.stop`, not owned: `ich hab's gehört`, `ja ja`, `ist gut` (plus the catalog's bare `stopp` / `pause` / `aus`).
 

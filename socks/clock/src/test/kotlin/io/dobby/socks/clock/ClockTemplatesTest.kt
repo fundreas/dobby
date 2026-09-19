@@ -100,6 +100,35 @@ class ClockTemplatesTest {
         assertResolves("sag mir die Uhrzeit", ClockSock.WHATS_THE_TIME)
         assertResolves("sag die Uhrzeit", ClockSock.WHATS_THE_TIME)
         assertResolves("Was ist die Uhrzeit?", ClockSock.WHATS_THE_TIME)
+        assertResolves("Was ist die Zeit?", ClockSock.WHATS_THE_TIME)
+        assertResolves("sag mir die Zeit", ClockSock.WHATS_THE_TIME)
+        assertResolves("sag die Zeit", ClockSock.WHATS_THE_TIME)
+    }
+
+    @Test
+    fun `asking for the time in English`() {
+        // Parakeet is multilingual, so English arrives intact and these templates are reachable
+        // (§6). They are safe on this command and would not be on `set_timer`: the normalizer
+        // is German-only, so an English number word would never reach an {x:int} slot.
+        assertResolves("What's the time?", ClockSock.WHATS_THE_TIME)
+        assertResolves("whats the time", ClockSock.WHATS_THE_TIME)
+        assertResolves("what is the time", ClockSock.WHATS_THE_TIME)
+        assertResolves("What's the time now?", ClockSock.WHATS_THE_TIME)
+        assertResolves("What time is it?", ClockSock.WHATS_THE_TIME)
+    }
+
+    @Test
+    fun `zeit is never claimed on its own`() {
+        // The constraint behind every "zeit" template above. At 4 chars "zeit" is fuzzed at
+        // tolerance 1, so a bare keyword would answer the clock to three ordinary German words
+        // nobody addressed the panel with. A panel that speaks unbidden costs more trust than
+        // a miss costs patience.
+        assertNull(resolve("Zeit"))
+        assertNull(resolve("seit"))
+        assertNull(resolve("weit"))
+        assertNull(resolve("zeig"))
+        // Same rule, same reason, in the English set.
+        assertNull(resolve("time"))
     }
 
     @Test

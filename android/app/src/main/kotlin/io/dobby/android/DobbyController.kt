@@ -121,6 +121,9 @@ class DobbyController(
             val introspection = Introspection(registry, health)
             wiring.bindDirectory(introspection)
             registry.checkExamples().forEach { Log.w(TAG, "palette collision: $it") }
+            // Never fatal: `lauter` and `stumm` are this shape and are correct. Logged so the
+            // judgement behind each one stays visible (`socks.specs/README.md` §6).
+            registry.checkSingleKeywordTemplates().forEach { Log.w(TAG, "single keyword: $it") }
             engine = DobbyEngine(
                 registry = registry,
                 dispatcher = Dispatcher(registry, health),

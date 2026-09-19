@@ -118,7 +118,7 @@ A question that cannot hold the floor — templates that do not compile, a `comm
 
 ## 6. Template DSL (Tier 1)
 
-Templates are German, lowercase, written against the **normalized** transcript (lowercased, punctuation stripped, whitespace collapsed, German number words → digits).
+Templates are German — English only under the rule below — lowercase, and written against the **normalized** transcript (lowercased, punctuation stripped apart from the apostrophe, whitespace collapsed, German number words → digits).
 
 | Syntax | Meaning |
 |---|---|
@@ -135,6 +135,7 @@ Rules:
 - Slot content is never fuzzy-matched — only keywords are, plus the closed candidate set of an enum slot.
 - A template with a trailing open `{query}` slot is greedy for the rest of the utterance; put such templates last.
 - A bare `{text}` slot as an entire template is rejected — it would match every utterance. A bare `{x:enum}` is fine; its candidate set is closed. That is how "lauter" works.
+- **A template a single keyword can satisfy is legitimate only when nothing else in spoken German falls inside that keyword's fuzzy tolerance.** The test is that sentence, not "is it one word" — and it bites hardest at 4–7 characters, where tolerance is 1 and a one-word utterance therefore only has to come *close*. `lauter` passes: six characters with no German neighbour at distance 1, so it is claimed as a bare template. A bare `zeit` is rejected: four characters, tolerance 1, which also hands it `seit`, `weit` and `zeig`. The asymmetry is the reason the rule is this strict — a miss costs a repeat, a panel that answers something nobody said to it costs trust. Write the keyword with something around it instead (`was ist die zeit`), and record the rejection in the Sock's spec so the next author does not read the gap as an oversight.
 - Ordering across Socks is computed, not declared: closed before open, then more keywords, then fewer text slots, then registration order.
 
 **Static params.** A template may fix params by its wording, for cases no slot can carry:
@@ -147,6 +148,10 @@ templates = listOf(
 ```
 
 A slot capture always beats a static param. Use this rather than re-parsing German in the handler.
+
+**Breadth is cheap; two things constrain it.** Tier 1 must fully cover every command every Sock declares ([`dobby-plan.md`](../dobby-plan.md) §2, core design rule 5), and more templates only enlarge a lookup table — it is the Tier 2 system prompt that is expensive, and that grows with `description` and `examples`, not with templates (same file, §9). So add phrasings liberally. What limits them is the single-keyword rule above, and this one:
+
+**English templates are allowed on commands with no `{x:int}` and no `{x:enum}` slot.** The recogniser is multilingual and English tokens arrive intact, so an English template really does fire. The *normalizer* is German-only: it turns "zehn" into `10` and knows nothing of "ten", so an English template feeding an integer slot would match and then fail to coerce, silently. Apostrophes survive normalization (`'` is in the keep class), so write `what's` — and list `whats` beside it, the way `ich hab's gehört` lists `ich habs gehört`. Dobby answers in German whatever language it was addressed in; that is deliberate, and a spec that adds English templates says so.
 
 **Exhaustiveness matters.** The registry test asserts no two Socks match the same utterance *for different commands*, so a spec that under-lists its utterances hides a collision until runtime. Templates contributed to the same `shared.*` id are exempt — that overlap is the design.
 

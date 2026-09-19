@@ -17,3 +17,10 @@ German commands survive 2–3 m of a flat (`dobby-plan.md` §8, M1).
 Keep the English-title case among them (`spiele_blinding_lights.wav` → `spotify.play_music`).
 That one is why the engine was changed at all: it is the difference between an English title
 arriving in the query slot and a phonetic guess at one.
+
+For the same reason, record the clock's English phrasings too — `whats_the_time.wav` and
+`what_time_is_it.wav`, both → `clock.whats_the_time` (`socks.specs/clock.specs.md` §6). A whole
+English sentence is a harder ask of a multilingual recogniser than an English title inside a
+German one, and a transcript that comes back German-spelled is a failure only a recording can
+show. Record a bare `seit` as well, expecting **no** match: the argument for not claiming a
+bare `zeit` is about what the recogniser really hears, so it belongs in the suite that hears.

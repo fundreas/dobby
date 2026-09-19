@@ -72,6 +72,14 @@ fun main(args: Array<String>) = runBlocking {
         collisions.forEach { System.err.println("  - $it") }
     }
 
+    // Not a failure — `lauter` and `stumm` are this shape and are correct. Listed so whoever
+    // added one looks at it again (`socks.specs/README.md` §6).
+    val singles = registry.checkSingleKeywordTemplates()
+    if (singles.isNotEmpty()) {
+        System.err.println("Single-keyword templates, worth an eyeball:")
+        singles.forEach { System.err.println("  - $it") }
+    }
+
     val health = SockHealth()
     val introspection = Introspection(registry, health)
     wiring.bindDirectory(introspection)

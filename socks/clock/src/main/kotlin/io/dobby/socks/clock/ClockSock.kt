@@ -153,6 +153,22 @@ class ClockSock(
                 "(wie viel uhr|uhrzeit|die uhrzeit)",
                 "sag (mir)? (die)? uhrzeit",
                 "was ist die uhrzeit",
+                // "zeit" appears only with keywords around it, never on its own. Bare, it is
+                // 4 chars and therefore fuzzed at tolerance 1, which would hand this command
+                // "seit", "weit" and "zeig" — all words somebody says in a kitchen without
+                // addressing the panel (`socks.specs/README.md` §6).
+                "was ist die zeit",
+                "sag (mir)? (die)? zeit",
+                // English, because Parakeet is multilingual and the tokens arrive intact
+                // (`dobby-plan.md` §4). Safe here and nowhere with an int or enum slot: the
+                // normalizer is German-only, so "ten" would never become 10. Dobby still
+                // answers in German — the panel has one voice, whoever addressed it.
+                //
+                // The normalizer keeps apostrophes (they are inside its KEEP class), so
+                // "what's" survives as one token and is spelled out rather than relied upon to
+                // fuzz into "whats" — the same reason `ich hab's gehört` lists both forms.
+                "what time is it",
+                "(whats|what's|what is) the time (now)?",
             ),
             description = "Sagt die aktuelle Uhrzeit.",
             examples = listOf(
@@ -161,6 +177,12 @@ class ClockSock(
                 Example("wie spät"),
                 Example("uhrzeit"),
                 Example("sag mir die uhrzeit"),
+                Example("was ist die zeit"),
+                Example("sag mir die zeit"),
+                Example("whats the time"),
+                Example("what's the time"),
+                Example("whats the time now"),
+                Example("what time is it"),
                 // Paraphrases Tier 1 is meant to miss — few-shots for the LLM tier (M6).
                 Example("kannst du mir sagen wie spät es ist", matchedByTemplates = false),
                 Example("hast du die genaue zeit", matchedByTemplates = false),

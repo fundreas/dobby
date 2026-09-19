@@ -4,6 +4,7 @@ import io.dobby.core.nlu.Normalizer
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -110,6 +111,27 @@ class SpecPaletteTest {
 
         assertResolves("Wie spät ist es", "clock.whats_the_time")
         assertResolves("Uhrzeit", "clock.whats_the_time")
+        assertResolves("Was ist die Zeit?", "clock.whats_the_time")
+        assertResolves("sag mir die Zeit", "clock.whats_the_time")
+    }
+
+    @Test
+    fun `the clock answers English without any other Sock hearing it`() {
+        // Parakeet is multilingual and English tokens arrive intact, so these are reachable —
+        // and with the whole catalog registered, nothing else claims them.
+        assertResolves("What's the time?", "clock.whats_the_time")
+        assertResolves("what time is it", "clock.whats_the_time")
+    }
+
+    @Test
+    fun `a single word inside zeit's fuzzy tolerance reaches nothing`() {
+        // Why the clock never claims a bare "zeit": at 4 chars it is fuzzed at tolerance 1, and
+        // "seit", "weit" and "zeig" are all ordinary German. The rule is in `README.md` §6 and
+        // this is what it is worth across the full catalog, not just inside the Clock Sock.
+        assertNull(registry.palette.match(Normalizer.tokenize("Zeit")))
+        assertNull(registry.palette.match(Normalizer.tokenize("seit")))
+        assertNull(registry.palette.match(Normalizer.tokenize("weit")))
+        assertNull(registry.palette.match(Normalizer.tokenize("zeig")))
     }
 
     @Test

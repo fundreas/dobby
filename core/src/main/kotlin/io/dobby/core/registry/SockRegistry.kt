@@ -2,6 +2,7 @@ package io.dobby.core.registry
 
 import io.dobby.core.nlu.Normalizer
 import io.dobby.core.nlu.template.CompiledTemplate
+import io.dobby.core.nlu.template.Levenshtein
 import io.dobby.core.nlu.template.Node
 import io.dobby.core.nlu.template.SlotKind
 import io.dobby.core.nlu.template.TemplateSyntaxException
@@ -83,8 +84,41 @@ class SockRegistry private constructor(
         return problems
     }
 
+    /**
+     * Templates a single spoken word can satisfy, where that word is long enough to be fuzzed.
+     *
+     * A warning and never an error: `lauter`, `leiser` and `stumm` are correct uses of exactly
+     * this shape. The point is that each one is a judgement — "does anything else in spoken
+     * German land inside this keyword's tolerance" (`socks.specs/README.md` §6) — and a
+     * judgement is worth listing so a reviewer makes it deliberately. A bare `zeit` is the case
+     * that fails it: four characters, tolerance 1, and `seit`, `weit` and `zeig` come with it.
+     */
+    fun checkSingleKeywordTemplates(): List<String> =
+        palette.entries.flatMap { entry ->
+            soleKeywords(entry.template.root)
+                .filter { it.length in FUZZED_ALONE }
+                .map { keyword ->
+                    "${entry.command.id}: template \"${entry.template.source}\" can be matched by " +
+                        "the single word \"$keyword\" at tolerance ${Levenshtein.tolerance(keyword.length)}"
+                }
+        }
+
+    /** The keywords that alone satisfy [node]; empty when it needs more than one word. */
+    private fun soleKeywords(node: Node): List<String> = when (node) {
+        is Node.Word -> listOf(node.text)
+        is Node.Alt -> node.options.flatMap(::soleKeywords)
+        is Node.Seq -> node.nodes.filterNot { it is Node.Opt }.singleOrNull()
+            ?.let(::soleKeywords).orEmpty()
+
+        // An omitted optional contributes nothing, and a slot is not a keyword.
+        is Node.Opt, is Node.Slot -> emptyList()
+    }
+
     companion object {
         private val SOCK_ID = Regex("[a-z][a-z0-9_]*")
+
+        /** Tolerance 1: long enough to be fuzzed, short enough to have close neighbours. */
+        private val FUZZED_ALONE = 4..7
 
         fun buildOrThrow(socks: List<Sock>): SockRegistry {
             val build = build(socks)
