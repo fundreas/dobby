@@ -6,6 +6,8 @@ import io.dobby.socks.calculator.CalculatorSock
 import io.dobby.socks.clock.ClockSock
 import io.dobby.socks.conversation.ConversationSock
 import io.dobby.socks.help.HelpSock
+import io.dobby.socks.radio.RadioPlayer
+import io.dobby.socks.radio.RadioSock
 import io.dobby.socks.spotify.MusicSearch
 import io.dobby.socks.spotify.SpotifyCredentials
 import io.dobby.socks.spotify.SpotifyPlayer
@@ -38,6 +40,8 @@ object DobbySocks {
         val clock: ClockSock,
         /** Same reason: the panel draws what is playing (`spotify.specs.md` §7). */
         val spotify: SpotifySock,
+        /** And the station, and its ICY title (`radio.specs.md` §7). */
+        val radio: RadioSock,
         val bindDirectory: (Introspection) -> Unit,
     )
 
@@ -50,11 +54,15 @@ object DobbySocks {
      *   which keeps the palette complete and the utterance tables assertable with no device.
      * @param system `AudioManager`. Null off-device, same bargain as the two above: the System
      *   Sock is `Unavailable`, every template still compiles and every utterance still routes.
+     * @param radio the Media3 player and its turn-duck registration. Null off-device, where the
+     *   Sock falls back to [RadioPlayer.NONE] — the station table, the resolver and the whole
+     *   command surface still work, and only the sound is missing.
      */
     fun create(
         hardware: ClockHardware? = null,
         spotify: SpotifyHardware? = null,
         system: SystemHardware? = null,
+        radio: RadioHardware? = null,
     ): Wiring {
         var directory: Introspection? = null
         val clock = if (hardware == null) {
@@ -68,15 +76,17 @@ object DobbySocks {
             credentials = spotify?.credentials ?: SpotifyCredentials.NONE,
             fallback = spotify?.fallback ?: IntentFallback.NONE,
         )
+        val tuner = RadioSock(player = radio?.player ?: RadioPlayer.NONE)
         val socks = buildList {
             add(clock)
             add(music)
+            add(tuner)
             add(SystemSock(system?.volume ?: VolumeControl.NONE))
             add(CalculatorSock())
             add(ConversationSock())
             add(HelpSock { directory })
             addAll(DevSocks.create())
         }
-        return Wiring(socks, clock, music) { directory = it }
+        return Wiring(socks, clock, music, tuner) { directory = it }
     }
 }

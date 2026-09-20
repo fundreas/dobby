@@ -52,8 +52,8 @@ android {
             "\"${localProperties["spotify.redirect.uri"] as? String ?: "dobby://spotify-callback"}\"",
         )
         ndk {
-            // The device is a OnePlus Nord CE; nothing else needs the ONNX Runtime and
-            // sherpa-onnx native libraries, which are most of the APK.
+            // The device is a vivo IV2201 (MediaTek MT6877); nothing else needs the ONNX
+            // Runtime and sherpa-onnx native libraries, which are most of the APK.
             abiFilters += "arm64-v8a"
         }
     }
@@ -71,7 +71,7 @@ android {
             // targetSdk and compileSdk are already the newest platform the SDK offers.
             "OldTargetApi",
             "GradleDependency",
-            // arm64-v8a only, on purpose: the device is a Nord CE (dobby-plan.md §4).
+            // arm64-v8a only, on purpose: the device is a vivo IV2201 (dobby-plan.md §4).
             "ChromeOsAbiSupport",
             // There is nothing to back up — the model is re-downloadable and config is local.
             "DataExtractionRules",
@@ -103,11 +103,15 @@ dependencies {
     implementation(project(":socks:help"))
     implementation(project(":socks:conversation"))
     implementation(project(":socks:spotify"))
+    implementation(project(":socks:radio"))
     implementation(project(":socks:system"))
     // The App Remote, behind the interfaces :socks:spotify declares.
     implementation(project(":android:spotify"))
     // Winky is a development Sock and must not reach a release build (dobby-plan.md §8).
     debugImplementation(project(":socks:winky"))
+
+    // The only place Media3 is named. Behind the RadioPlayer interface :socks:radio declares.
+    implementation(libs.androidx.media3.exoplayer)
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

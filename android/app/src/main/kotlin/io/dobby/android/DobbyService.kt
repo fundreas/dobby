@@ -56,6 +56,9 @@ class DobbyService : Service() {
     /** `AudioManager` for the System Sock. Nothing to release — it is a system service. */
     private var systemHardware: SystemHardware? = null
 
+    /** And the same rule again for the ExoPlayer: whoever built it releases it. */
+    private var radioHardware: RadioHardware? = null
+
     /** The local model, once it has loaded. Null on every device and every path that cannot. */
     private var tier2: LlamaTier2? = null
 
@@ -112,6 +115,14 @@ class DobbyService : Service() {
         spotifyHardware = SpotifyHardware(this, scope)
         systemHardware = SystemHardware(this)
         val settings = Settings(this)
+        // Built here rather than inline at the call site below, because [RadioHardware] has to
+        // register its player with **this** object's `InProcessPlayers` and not a second one
+        // (`radio-plan.md` §D5). A second registry compiles, runs, and ducks nothing.
+        //
+        // The mode is read per turn rather than captured, so a change to the setting takes
+        // effect on the next turn instead of on the next restart.
+        val turnAudio = AndroidTurnAudio(this, mode = { settings.turnDuck })
+        radioHardware = RadioHardware(this, turnAudio.players)
         val resolver = buildTier2(settings)
         controller = DobbyController(
             scope = scope,
@@ -127,11 +138,10 @@ class DobbyService : Service() {
             hardware = clockHardware,
             spotifyHardware = spotifyHardware,
             systemHardware = systemHardware,
+            radioHardware = radioHardware,
             settings = settings,
             tier2Resolver = resolver,
-            // The mode is read per turn rather than captured, so a change to the setting
-            // takes effect on the next turn instead of on the next restart.
-            turnAudio = AndroidTurnAudio(this, mode = { settings.turnDuck }),
+            turnAudio = turnAudio,
         )
         scope.launch { controller.start() }
 
@@ -175,7 +185,7 @@ class DobbyService : Service() {
         }
 
         val build = SockRegistry.build(
-            DobbySocks.create(clockHardware, spotifyHardware, systemHardware).socks,
+            DobbySocks.create(clockHardware, spotifyHardware, systemHardware, radioHardware).socks,
         )
         val registry = build.registry ?: return null
         val program = Tier2Program.ofOrNull(registry, Introspection(registry)) { Log.w(TAG, it) }
@@ -253,6 +263,8 @@ class DobbyService : Service() {
         clockHardware = null
         spotifyHardware?.release()
         spotifyHardware = null
+        radioHardware?.release()
+        radioHardware = null
         scope.cancel()
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null

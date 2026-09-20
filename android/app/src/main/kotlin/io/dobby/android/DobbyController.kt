@@ -29,6 +29,7 @@ import io.dobby.pipeline.tts.VoiceOption
 import io.dobby.pipeline.wakeword.WakeWordOption
 import io.dobby.socks.clock.ClockState
 import io.dobby.socks.spotify.PlayerSnapshot
+import io.dobby.socks.radio.RadioState
 import io.dobby.socks.spotify.SpotifyConfig
 import io.dobby.pipeline.VoiceIo
 import io.dobby.pipeline.VoiceState
@@ -141,6 +142,11 @@ class DobbyController(
      * `Unavailable` and every volume command says so instead of pretending to have worked.
      */
     systemHardware: SystemHardware? = null,
+    /**
+     * The Media3 player and its turn-duck registration. Null in tests and off-device, where the
+     * Radio Sock plays nothing and every other part of it still works.
+     */
+    radioHardware: RadioHardware? = null,
     /** Remembers the wake phrase and whether it is armed, across restarts. */
     private val settings: Settings? = null,
     /**
@@ -187,13 +193,22 @@ class DobbyController(
 
     private val health = SockHealth()
 
-    private val wiring = DobbySocks.create(hardware, spotifyHardware, systemHardware)
+    private val wiring = DobbySocks.create(hardware, spotifyHardware, systemHardware, radioHardware)
 
     /** The panel's clock and timer countdown, straight from the Sock that owns them. */
     val clock: StateFlow<ClockState> get() = wiring.clock.state
 
     /** What is playing, straight from the Sock that owns it (`spotify.specs.md` §7). */
     val spotify: StateFlow<PlayerSnapshot?> get() = wiring.spotify.nowPlaying
+
+    /**
+     * The station and its ICY title (`radio.specs.md` §7).
+     *
+     * Unlike Spotify there is no artwork and so no second source to combine: everything the
+     * card draws is already in the JVM module, and the card takes a `RadioState` and nothing
+     * else.
+     */
+    val radio: StateFlow<RadioState> get() = wiring.radio.state
 
     /**
      * The cover, which comes from the hardware rather than the Sock.

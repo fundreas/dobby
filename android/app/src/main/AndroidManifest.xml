@@ -7,8 +7,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- dobby-plan.md §7.1: CPU stays awake with the screen off. The panel is mains-powered. -->
+    <!-- dobby-plan.md §7.1: CPU stays awake with the screen off. The panel is mains-powered.
+         Also what Media3's WAKE_MODE_NETWORK needs to keep a stream alive with the screen off. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- radio.specs.md §1: internet radio streams. No cleartext exception — every station in
+         the table is reachable over HTTPS, including Kronehit (radio-plan.md §B3). -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <!-- clock.specs.md §3: the AlarmManager backstop behind a running timer. A kitchen timer is
          USE_EXACT_ALARM-class use, so it is granted at install; SCHEDULE_EXACT_ALARM is declared
          alongside it for the user-revocable path, and the Clock Sock degrades if it is denied. -->

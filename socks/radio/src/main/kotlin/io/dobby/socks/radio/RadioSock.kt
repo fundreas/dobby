@@ -82,7 +82,10 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
                 "radio {station}",
                 "radio (an|ein)?",
             ),
-            description = "Spielt einen Radiosender ab. Ohne Sendername den Standardsender.",
+            // One line, and the second sentence the spec's §2 table carries lives in
+            // `help.detail` instead. A description is paid for by the token in every Tier 2
+            // route prompt; `detail` is written for a person and costs nothing (`Types.kt`).
+            description = "Spielt einen Radiosender ab.",
             help = CommandHelp(
                 title = "Radio hören",
                 detail = "Spielt einen der eingebauten Sender als Internet-Stream. Ohne " +
@@ -119,7 +122,7 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
                 "(mach|schalt|schalte|stopp|stoppe) (das|den)? radio (aus|ab)",
                 "(stopp|stoppe|beende) (das|den)? radio",
             ),
-            description = "Beendet die Radiowiedergabe — explizit adressiert.",
+            description = "Beendet die Radiowiedergabe.",
             help = CommandHelp(
                 title = "Radio ausschalten",
                 detail = "Beendet den Stream. Das bloße „Stopp“ steht hier nicht — das " +

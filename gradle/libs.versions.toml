@@ -19,6 +19,7 @@ androidxTestRunner = "1.7.0"
 androidxTestJunit = "1.3.0"
 junit4 = "4.13.2"
 onnxruntime = "1.30.0"
+media3 = "1.11.1"
 
 # Not on Maven Central — Spotify publishes the App Remote SDK as a bare .aar on its GitHub
 # releases page, which :android:spotify fetches and verifies at build time. The AAR needs Gson
@@ -53,6 +54,12 @@ compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
 compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
 
 onnxruntime-android = { module = "com.microsoft.onnxruntime:onnxruntime-android", version.ref = "onnxruntime" }
+
+# radio.specs.md §1. Progressive MP3 with ICY metadata, which is all the station table
+# holds: no media3-exoplayer-hls, and no media3-session — a wall panel has no lock screen
+# to put transport controls on, and a MediaSession would be a second, unarbitrated way to
+# start audio that PlaybackCoordinator knows nothing about (radio-plan.md §B3, §D3).
+androidx-media3-exoplayer = { module = "androidx.media3:media3-exoplayer", version.ref = "media3" }
 
 # Instrumented tests only — the STT suite needs a device, the model and a microphone-less
 # room. Everything else in this project is tested on the JVM with JUnit 5.
