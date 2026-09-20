@@ -50,6 +50,9 @@ class DobbyService : Service() {
     /** Owned here, not by the Sock: whoever creates a `SoundPool` is the one who releases it. */
     private var clockHardware: ClockHardware? = null
 
+    /** Same rule for the App Remote: whoever opens a Binder connection closes it. */
+    private var spotifyHardware: SpotifyHardware? = null
+
     /** The local model, once it has loaded. Null on every device and every path that cannot. */
     private var tier2: LlamaTier2? = null
 
@@ -100,6 +103,10 @@ class DobbyService : Service() {
             .apply { acquire() }
 
         clockHardware = ClockHardware(this)
+        // Constructed, not connected: the App Remote connects lazily on the first music
+        // command (`spotify.specs.md` §3). A panel that has not been asked for music should
+        // not be holding a Binder connection into another app.
+        spotifyHardware = SpotifyHardware(this, scope)
         val settings = Settings(this)
         val resolver = buildTier2(settings)
         controller = DobbyController(
@@ -114,6 +121,7 @@ class DobbyService : Service() {
             ),
             sockContext = { announce -> AndroidSockContext(this, scope, announce) },
             hardware = clockHardware,
+            spotifyHardware = spotifyHardware,
             settings = settings,
             tier2Resolver = resolver,
             // The mode is read per turn rather than captured, so a change to the setting
@@ -161,7 +169,7 @@ class DobbyService : Service() {
             return null
         }
 
-        val build = SockRegistry.build(DobbySocks.create(clockHardware).socks)
+        val build = SockRegistry.build(DobbySocks.create(clockHardware, spotifyHardware).socks)
         val registry = build.registry ?: return null
         val program = Tier2Program.ofOrNull(registry, Introspection(registry)) { Log.w(TAG, it) }
             ?: return null
@@ -236,6 +244,8 @@ class DobbyService : Service() {
         tier2 = null
         clockHardware?.release()
         clockHardware = null
+        spotifyHardware?.release()
+        spotifyHardware = null
         scope.cancel()
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null

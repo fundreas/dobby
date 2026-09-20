@@ -19,3 +19,6 @@ android/sherpa/src/main/jniLibs/
 
 # CMake/NDK intermediates for :android:llama (the .cxx tree AGP creates next to the module)
 android/llama/.cxx/
+
+# Spotify App Remote AAR, fetched by :android:spotify at build time
+android/spotify/libs/

@@ -6,6 +6,11 @@ import io.dobby.socks.calculator.CalculatorSock
 import io.dobby.socks.clock.ClockSock
 import io.dobby.socks.conversation.ConversationSock
 import io.dobby.socks.help.HelpSock
+import io.dobby.socks.spotify.MusicSearch
+import io.dobby.socks.spotify.SpotifyCredentials
+import io.dobby.socks.spotify.SpotifyPlayer
+import io.dobby.socks.spotify.SpotifySock
+import io.dobby.socks.spotify.IntentFallback
 
 /**
  * The one place that knows which Socks exist.
@@ -29,6 +34,8 @@ object DobbySocks {
         val socks: List<Sock>,
         /** Kept by name because the panel draws its clock and its timer (`clock.specs.md` §7). */
         val clock: ClockSock,
+        /** Same reason: the panel draws what is playing (`spotify.specs.md` §7). */
+        val spotify: SpotifySock,
         val bindDirectory: (Introspection) -> Unit,
     )
 
@@ -36,21 +43,31 @@ object DobbySocks {
      * @param hardware `AlarmManager` and `SoundPool` for the Clock Sock. Null off-device — the
      *   timer then runs off its coroutine alone and chimes silently, which is exactly what a
      *   unit test wants and what the terminal harness gets.
+     * @param spotify the App Remote and the Web API search. Null off-device, where the Sock
+     *   reports `Unavailable` and fails every command with the spoken line from its spec —
+     *   which keeps the palette complete and the utterance tables assertable with no device.
      */
-    fun create(hardware: ClockHardware? = null): Wiring {
+    fun create(hardware: ClockHardware? = null, spotify: SpotifyHardware? = null): Wiring {
         var directory: Introspection? = null
         val clock = if (hardware == null) {
             ClockSock()
         } else {
             ClockSock(alarm = hardware.alarm, chime = hardware.chime)
         }
+        val music = SpotifySock(
+            player = spotify?.player ?: SpotifyPlayer.NONE,
+            search = spotify?.search ?: MusicSearch.NONE,
+            credentials = spotify?.credentials ?: SpotifyCredentials.NONE,
+            fallback = spotify?.fallback ?: IntentFallback.NONE,
+        )
         val socks = buildList {
             add(clock)
+            add(music)
             add(CalculatorSock())
             add(ConversationSock())
             add(HelpSock { directory })
             addAll(DevSocks.create())
         }
-        return Wiring(socks, clock) { directory = it }
+        return Wiring(socks, clock, music) { directory = it }
     }
 }

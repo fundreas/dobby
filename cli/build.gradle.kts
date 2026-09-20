@@ -10,6 +10,7 @@ dependencies {
     implementation(project(":socks:calculator"))
     implementation(project(":socks:help"))
     implementation(project(":socks:conversation"))
+    implementation(project(":socks:spotify"))
 }
 
 application {

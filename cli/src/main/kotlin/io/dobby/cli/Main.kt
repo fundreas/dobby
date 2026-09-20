@@ -19,6 +19,7 @@ import io.dobby.core.sock.SockResult
 import io.dobby.socks.calculator.CalculatorSock
 import io.dobby.socks.clock.ClockSock
 import io.dobby.socks.conversation.ConversationSock
+import io.dobby.socks.spotify.SpotifySock
 import io.dobby.socks.winky.WinkySock
 import io.dobby.socks.help.HelpSock
 import kotlinx.coroutines.CoroutineScope
@@ -50,6 +51,11 @@ object DobbySocks {
             ClockSock(chime = { sound -> out("  🔔 ${sound.configValue}") }),
             CalculatorSock(),
             ConversationSock(),
+            // No App Remote and no credentials in a terminal, so every command fails with the
+            // spoken line from the spec — which is the point: the palette is complete, the
+            // utterance tables are asserted, and "spiele blinding lights" routes correctly
+            // long before a device is involved.
+            SpotifySock(),
             WinkySock(),
             HelpSock { directory },
         )

@@ -50,6 +50,11 @@ private class ConsolePlayback : PlaybackCoordinator {
 
     override suspend fun requestTransientFocus(sockId: String): Boolean = true
 
+    override suspend fun claimExternal(sockId: String): Boolean {
+        holder = sockId
+        return true
+    }
+
     override suspend fun releaseFocus(sockId: String) {
         if (holder == sockId) holder = null
     }

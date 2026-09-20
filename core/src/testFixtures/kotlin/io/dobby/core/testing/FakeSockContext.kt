@@ -86,9 +86,21 @@ class FakePlaybackCoordinator : PlaybackCoordinator {
         return true
     }
 
+    /** Who claimed the channel for another app's audio, if anyone. Never a real focus request. */
+    var externalHolder: String? = null
+        private set
+
+    override suspend fun claimExternal(sockId: String): Boolean {
+        if (!grantFocus) return false
+        holder = sockId
+        externalHolder = sockId
+        return true
+    }
+
     override suspend fun releaseFocus(sockId: String) {
         if (holder == sockId) holder = null
         if (duckedBy == sockId) duckedBy = null
+        if (externalHolder == sockId) externalHolder = null
     }
 }
 

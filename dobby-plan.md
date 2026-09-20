@@ -115,6 +115,7 @@ Anything not on `SockContext` is off-limits — this is what keeps Socks unit-te
 ### 3.3 Cross-Sock coordination
 
 - `PlaybackCoordinator` arbitrates the audio channel: any Sock that wants to produce sustained audio requests focus; granting focus pauses the current holder. Spotify and Radio can therefore never play at once, and TTS ducks both.
+  - **Unless the sound comes out of another app's process**, which is the Spotify case. The App Remote only *tells* `com.spotify.music` to play, and that process holds its own focus — so requesting `AUDIOFOCUS_GAIN` on Dobby's behalf would send `AUDIOFOCUS_LOSS` to Spotify and pause the music one instant before asking it to start. `claimExternal(sockId)` is that case: bookkeeping only, no Android focus request, and the coordinator still knows who holds the channel, which is what the arbitration above and the dashboard actually read. The eviction happens anyway, one layer down, because Spotify's own focus request reaches our ExoPlayer through the OS. Transient ducking is unaffected — `GAIN_TRANSIENT_MAY_DUCK` is cross-process.
 - `ScreenController` owns the screen-on wake locks. Socks request "wake the screen for N seconds", they do not hold locks themselves.
 
 ### 3.4 Shared commands & chain dispatch
@@ -214,7 +215,7 @@ One markdown file per Sock in [`socks.specs/`](socks.specs/), authored against [
 
 | Sock | Spec | Exclusive commands | Shared chains |
 |---|---|---|---|
-| Spotify | [`spotify.specs.md`](socks.specs/spotify.specs.md) | `play_music`, `pause`, `resume`, `skip_next` | `shared.stop`, `shared.resume` |
+| Spotify | [`spotify.specs.md`](socks.specs/spotify.specs.md) | `play_music`, `pause`, `resume`, `skip_next`, `skip_previous`, `restart_song` | `shared.stop`, `shared.resume` |
 | Radio | [`radio.specs.md`](socks.specs/radio.specs.md) | `play_radio`, `stop_radio` | `shared.stop`, `shared.resume` |
 | Clock | [`clock.specs.md`](socks.specs/clock.specs.md) | `set_timer`, `cancel_timer`, `cancel_all_timers`, `timer_remaining`, `whats_the_time` | `shared.stop` |
 | System | [`system.specs.md`](socks.specs/system.specs.md) | `volume`, `mute`, `turn_on_screen`, `turn_off_screen` | — |

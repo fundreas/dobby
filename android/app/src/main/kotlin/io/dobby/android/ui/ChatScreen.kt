@@ -43,8 +43,10 @@ import androidx.compose.ui.unit.dp
 import io.dobby.android.DobbyUiState
 import io.dobby.android.Phase
 import io.dobby.android.chat.ChatMessage
+import android.graphics.Bitmap
 import io.dobby.android.chat.Voice
 import io.dobby.socks.clock.ClockState
+import io.dobby.socks.spotify.PlayerSnapshot
 
 /**
  * What Dobby heard and what Dobby answered.
@@ -58,6 +60,8 @@ import io.dobby.socks.clock.ClockState
 fun ChatScreen(
     state: DobbyUiState,
     clock: ClockState,
+    nowPlaying: PlayerSnapshot?,
+    artwork: Bitmap?,
     onListen: () -> Unit,
     onSettings: () -> Unit,
     modifier: Modifier = Modifier,
@@ -67,6 +71,9 @@ fun ChatScreen(
         // The Clock Sock owns the panel's clock, so the panel asks it rather than the system
         // (`clock.specs.md` §7). It is also where a running timer becomes visible.
         ClockCard(clock)
+        // Drawn only while something is loaded, so a panel nobody has asked for music keeps
+        // the clock at the top of the screen where it belongs (`spotify.specs.md` §7).
+        NowPlayingCard(nowPlaying, artwork)
         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
         Conversation(state.messages, Modifier.weight(1f))
         Composer(state, onListen)

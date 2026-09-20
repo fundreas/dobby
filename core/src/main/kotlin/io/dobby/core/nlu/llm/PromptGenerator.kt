@@ -76,8 +76,24 @@ object PromptGenerator {
      */
     const val FILL_TURN_MAX_TOKENS: Int = 180
 
-    /** At most this many worked examples per command in the route prompt. Paraphrases first. */
-    const val EXAMPLES_PER_COMMAND: Int = 2
+    /**
+     * At most this many worked examples per command in the route prompt. Paraphrases first.
+     *
+     * **Two until the Spotify Sock landed.** Six more commands put the shipped route prompt at
+     * 1630 estimated tokens against [MAX_TOKENS] = 1500, and this is the first of the three
+     * levers `PromptBudgetTest` lists for exactly that moment — ahead of rewriting every Sock's
+     * German description, and a long way ahead of sharding the route by Sock, which is a third
+     * prompt and should not be built before the device accuracy test says the two-step split is
+     * working.
+     *
+     * What it costs: each command now contributes its single best example rather than two, and
+     * [io.dobby.core.registry.Introspection.promptExamples] orders paraphrases first — so what
+     * is dropped is the *second* paraphrase, never the only one. What it buys is ~270 tokens,
+     * which is about three Socks of headroom.
+     *
+     * The number to watch is the one `Tier2RegistryTest` prints on every build.
+     */
+    const val EXAMPLES_PER_COMMAND: Int = 1
 
     /**
      * And at most this many in a fill turn, which is fewer, because a fill turn is expensive.

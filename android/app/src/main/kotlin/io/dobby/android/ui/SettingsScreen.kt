@@ -57,6 +57,9 @@ fun SettingsScreen(
     onListenCue: (ListenCue) -> Unit,
     onTurnDuck: (TurnDuck) -> Unit,
     onMicProfile: (MicProfile) -> Unit,
+    onSpotifyMarket: (String) -> Unit,
+    onSpotifyPreferTrack: (Boolean) -> Unit,
+    onSpotifyAskWhenUnsure: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier.fillMaxSize()) {
@@ -199,10 +202,53 @@ fun SettingsScreen(
                 )
             }
 
+            item {
+                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                SectionLabel("Spotify")
+                SwitchRow(
+                    title = "Bei mehreren Versionen nachfragen",
+                    // The switch exists because the trigger is a guess about human patience,
+                    // and this is the sentence that says what turning it off costs.
+                    subtitle = "Aus: Dobby spielt einfach den wahrscheinlichsten Treffer.",
+                    checked = state.spotifyAskWhenUnsure,
+                    onCheckedChange = onSpotifyAskWhenUnsure,
+                )
+                SwitchRow(
+                    title = "Titel vor Künstler",
+                    subtitle = "Aus: \"Spiele Queen\" spielt die Band, nicht den gleichnamigen Song.",
+                    checked = state.spotifyPreferTrack,
+                    onCheckedChange = onSpotifyPreferTrack,
+                )
+                SectionLabel("Land")
+            }
+
+            items(MARKETS, key = { it.first }) { (code, name) ->
+                ChoiceRow(
+                    title = name,
+                    // Said where it is chosen, because a wrong market is invisible until it
+                    // is not: the search succeeds and the track then refuses to play.
+                    subtitle = if (code == state.spotifyMarket) "Suche im Katalog von $name." else null,
+                    selected = code == state.spotifyMarket,
+                    onSelect = { onSpotifyMarket(code) },
+                )
+            }
+
             item { Spacer(Modifier.size(16.dp)) }
         }
     }
 }
+
+/**
+ * The countries the panel's catalogue can come from.
+ *
+ * A short list rather than every ISO code: the panel hangs in one kitchen, and the honest set
+ * of answers is "here, or one of the neighbours somebody actually has an account in".
+ */
+private val MARKETS: List<Pair<String, String>> = listOf(
+    "AT" to "Österreich",
+    "DE" to "Deutschland",
+    "CH" to "Schweiz",
+)
 
 private val ListenCue.title: String
     get() = when (this) {
@@ -241,6 +287,36 @@ private val MicProfile.subtitle: String
         MicProfile.RECOGNITION -> "Unbearbeitet. Am besten im ruhigen Raum — hört aber auch sich selbst."
         MicProfile.COMMUNICATION -> "Telefonie-Kette: Echounterdrückung, Entrauschen, Pegelregelung."
     }
+
+/** A titled switch, for the Sock settings that are genuinely two-valued. */
+@Composable
+private fun SwitchRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
 
 @Composable
 private fun SectionLabel(text: String) {

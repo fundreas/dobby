@@ -195,7 +195,7 @@ Keep German user-facing strings **in the spec**, verbatim. They are product copy
 | Sock | Spec | Exclusive commands | Chains | Milestone |
 |---|---|---|---|---|
 | **Help** ✅ | [help.specs.md](help.specs.md) | `overview`, `sock_commands` | — | M1 |
-| Spotify | [spotify.specs.md](spotify.specs.md) | `play_music`, `pause`, `resume`, `skip_next` | `shared.stop`, `shared.resume` | M1 |
+| **Spotify** ✅ | [spotify.specs.md](spotify.specs.md) | `play_music`, `pause`, `resume`, `skip_next`, `skip_previous`, `restart_song` | `shared.stop`, `shared.resume` | M1 |
 | **Clock** ✅ | [clock.specs.md](clock.specs.md) | `set_timer`, `cancel_timer`, `cancel_all_timers`, `timer_remaining`, `whats_the_time` | `shared.stop` | M3 |
 | **Conversation** ✅ | [conversation.specs.md](conversation.specs.md) | `dismiss` | — | M2b |
 | **Calculator** ✅ | [calculator.specs.md](calculator.specs.md) | `calculate`, `continue_with`, `last_result`, `clear` | — | M3 |

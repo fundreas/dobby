@@ -38,6 +38,26 @@ interface PlaybackCoordinator {
 
     suspend fun requestTransientFocus(sockId: String): Boolean
 
+    /**
+     * Claims the audio channel for a Sock whose sound is produced by **another app**.
+     *
+     * Bookkeeping only: no Android audio focus is requested, because the playing process
+     * requests its own and taking `AUDIOFOCUS_GAIN` here would stop it. Spotify is the case
+     * (`spotify.specs.md` §3) — the audio comes out of `com.spotify.music`, and a Sock that
+     * asked for focus in the ordinary way would pause the music one instant before asking the
+     * App Remote to play it.
+     *
+     * The coordinator still learns who holds the channel, which is the half that matters to
+     * everyone else: Radio-vs-Spotify arbitration and the dashboard both read [holder], and a
+     * holder that lies is worse than no coordinator at all. The eviction that `requestFocus`
+     * would have done happens anyway, one layer down — Spotify's own focus request reaches
+     * Dobby's ExoPlayer through the OS.
+     *
+     * Turn ducking is untouched: [requestTransientFocus] is cross-process, so the other app
+     * ducks while Dobby speaks and comes back up by itself.
+     */
+    suspend fun claimExternal(sockId: String): Boolean
+
     suspend fun releaseFocus(sockId: String)
 }
 

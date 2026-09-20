@@ -1,5 +1,6 @@
 package io.dobby.android
 
+import android.graphics.Bitmap
 import android.util.Log
 import io.dobby.android.chat.ChatMessage
 import io.dobby.android.chat.Transcript
@@ -27,6 +28,8 @@ import io.dobby.pipeline.tts.VoiceModelState
 import io.dobby.pipeline.tts.VoiceOption
 import io.dobby.pipeline.wakeword.WakeWordOption
 import io.dobby.socks.clock.ClockState
+import io.dobby.socks.spotify.PlayerSnapshot
+import io.dobby.socks.spotify.SpotifyConfig
 import io.dobby.pipeline.VoiceIo
 import io.dobby.pipeline.VoiceState
 import kotlinx.coroutines.CoroutineScope
@@ -71,6 +74,10 @@ data class DobbyUiState(
     val voiceId: String = "",
     /** A voice download, so the row that started one can show it. */
     val voiceState: VoiceModelState = VoiceModelState.Absent,
+    /** The Spotify Sock's three settings (`spotify.specs.md` §9), read out of its config store. */
+    val spotifyMarket: String = SpotifyConfig.DEFAULT_MARKET,
+    val spotifyPreferTrack: Boolean = true,
+    val spotifyAskWhenUnsure: Boolean = true,
 )
 
 /**
@@ -123,6 +130,12 @@ class DobbyController(
      * device half does not exist; the timer then still counts, it just chimes into the void.
      */
     hardware: ClockHardware? = null,
+    /**
+     * The App Remote and the Web API search. Null in tests and off-device; the Spotify Sock is
+     * then `Unavailable` and says so, which is the same code path as a panel with no Spotify
+     * app on it.
+     */
+    private val spotifyHardware: SpotifyHardware? = null,
     /** Remembers the wake phrase and whether it is armed, across restarts. */
     private val settings: Settings? = null,
     /**
@@ -160,10 +173,23 @@ class DobbyController(
 
     private val health = SockHealth()
 
-    private val wiring = DobbySocks.create(hardware)
+    private val wiring = DobbySocks.create(hardware, spotifyHardware)
 
     /** The panel's clock and timer countdown, straight from the Sock that owns them. */
     val clock: StateFlow<ClockState> get() = wiring.clock.state
+
+    /** What is playing, straight from the Sock that owns it (`spotify.specs.md` §7). */
+    val spotify: StateFlow<PlayerSnapshot?> get() = wiring.spotify.nowPlaying
+
+    /**
+     * The cover, which comes from the hardware rather than the Sock.
+     *
+     * It is an Android `Bitmap`, and `:socks:spotify` is a plain JVM module that must not see
+     * one. This is the layer where the snapshot and the bitmap are both already in scope, so
+     * this is where they meet.
+     */
+    val spotifyArtwork: StateFlow<Bitmap?>
+        get() = spotifyHardware?.artwork ?: SpotifyHardware.NO_ARTWORK
 
     private val registry: SockRegistry?
     private val engine: DobbyEngine?
@@ -285,6 +311,15 @@ class DobbyController(
     private val settingsChanges =
         combine(refresh, pipeline.voiceState) { count, voice -> count to voice }
 
+    /**
+     * The Spotify Sock's settings, read through the same store the Sock reads.
+     *
+     * Not through [settings], which is the panel's own file and namespaced by nobody: a Sock's
+     * configuration lives under its id in `SockConfigStore`, and the settings screen writes to
+     * exactly the keys the Sock reads.
+     */
+    private val spotifyConfig = SpotifyConfig(this.sockContext.config)
+
     val state: StateFlow<DobbyUiState> =
         combine(
             pipeline.state,
@@ -311,6 +346,9 @@ class DobbyController(
                 voices = voiceOptions,
                 voiceId = pipeline.selectedVoiceId,
                 voiceState = voiceDownload,
+                spotifyMarket = spotifyConfig.market,
+                spotifyPreferTrack = spotifyConfig.preferTrackOverArtist,
+                spotifyAskWhenUnsure = spotifyConfig.askWhenUnsure,
             )
         }.stateIn(
             scope,
@@ -387,6 +425,30 @@ class DobbyController(
      */
     fun setMicProfile(profile: MicProfile) {
         settings?.micProfile = profile
+        refresh.value = refresh.value + 1
+    }
+
+    /**
+     * The three Spotify settings (`spotify.specs.md` §9).
+     *
+     * Written straight into the Sock's own config store, which the Sock reads at the moment it
+     * uses them — so a change takes effect on the next command, not on the next restart.
+     * `ask_when_unsure` in particular exists to be switched off without a rebuild: its trigger
+     * is a guess about human patience, and the honest way to find out whether the guess is
+     * right is to be able to turn it off in the room.
+     */
+    fun setSpotifyMarket(market: String) {
+        sockContext.config.put(SpotifyConfig.MARKET, market)
+        refresh.value = refresh.value + 1
+    }
+
+    fun setSpotifyPreferTrack(prefer: Boolean) {
+        sockContext.config.put(SpotifyConfig.PREFER_TRACK, prefer.toString())
+        refresh.value = refresh.value + 1
+    }
+
+    fun setSpotifyAskWhenUnsure(ask: Boolean) {
+        sockContext.config.put(SpotifyConfig.ASK_WHEN_UNSURE, ask.toString())
         refresh.value = refresh.value + 1
     }
 

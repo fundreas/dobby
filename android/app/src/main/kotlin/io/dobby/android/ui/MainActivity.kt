@@ -86,6 +86,9 @@ class MainActivity : ComponentActivity() {
                         else -> {
                             val state by connected.controller.state.collectAsStateWithLifecycle()
                             val clock by connected.controller.clock.collectAsStateWithLifecycle()
+                            val nowPlaying by connected.controller.spotify.collectAsStateWithLifecycle()
+                            val artwork by connected.controller.spotifyArtwork
+                                .collectAsStateWithLifecycle()
                             var settingsOpen by remember { mutableStateOf(false) }
 
                             if (settingsOpen) {
@@ -99,11 +102,20 @@ class MainActivity : ComponentActivity() {
                                     onListenCue = { connected.controller.setListenCue(it) },
                                     onTurnDuck = { connected.controller.setTurnDuck(it) },
                                     onMicProfile = { connected.controller.setMicProfile(it) },
+                                    onSpotifyMarket = { connected.controller.setSpotifyMarket(it) },
+                                    onSpotifyPreferTrack = {
+                                        connected.controller.setSpotifyPreferTrack(it)
+                                    },
+                                    onSpotifyAskWhenUnsure = {
+                                        connected.controller.setSpotifyAskWhenUnsure(it)
+                                    },
                                 )
                             } else {
                                 ChatScreen(
                                     state = state,
                                     clock = clock,
+                                    nowPlaying = nowPlaying,
+                                    artwork = artwork,
                                     onListen = { connected.controller.listen() },
                                     onSettings = { settingsOpen = true },
                                 )

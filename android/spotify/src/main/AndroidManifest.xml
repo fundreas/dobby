@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Declared by the module that actually needs it, so the app manifest stays about the app.
+         The Web API search and the token request are the only network this Sock makes; the App
+         Remote itself is a Binder connection to an app on the same device. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Android 11+ package visibility. The App Remote AAR ships its own <queries> for the
+         four Spotify package names, which covers the connection; this one is for the
+         MEDIA_PLAY_FROM_SEARCH fallback, which resolves an activity rather than a service. -->
+    <queries>
+        <intent>
+            <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />
+        </intent>
+    </queries>
+</manifest>

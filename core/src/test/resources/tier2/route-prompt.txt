@@ -27,9 +27,7 @@ Befehle:
 
 Beispiele:
 "weiter" -> shared.resume
-"mach weiter" -> shared.resume
 "hör bitte auf damit" -> shared.stop
-"stopp" -> shared.stop
 "wie wird das wetter morgen" -> none
 "hast du den müll schon rausgebracht" -> none
 "mach dir keinen kopf" -> none

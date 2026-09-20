@@ -22,8 +22,10 @@ The anti-pattern this replaces: "bare *stopp* belongs to Spotify, everyone else 
 
 | Shared command | Params | Chain mode | Subscribers |
 |---|---|---|---|
-| `shared.stop` | — | `FIRST_CONSUMER` | Clock (100), Radio (50), Spotify (50) |
-| `shared.resume` | — | `FIRST_CONSUMER` | Spotify (50), Radio (40) |
+| `shared.stop` | — | `FIRST_CONSUMER` | Clock ✅ (100), Radio (50), Spotify ✅ (50) |
+| `shared.resume` | — | `FIRST_CONSUMER` | Spotify ✅ (50), Radio (40) |
+
+✅ = built. Radio arrives in M4; until then both chains are real but short.
 
 Numbers in brackets are `priority` — used **only** to break ties between Socks reporting the same `SockActivity`.
 
@@ -68,9 +70,9 @@ Plus per-Sock `extraTemplates`, listed in §3.3.
 
 | Sock | Priority | `ACTIVE` when | `IDLE` when | Consumes by | Extra templates |
 |---|---|---|---|---|---|
-| **Clock** | **100** | the timer chime is **ringing** | never | silencing the chime, releasing transient audio focus → `Silent` | `(ich hab's gehört\|ich habs gehört\|ja ja\|ist gut)` |
+| **Clock** ✅ | **100** | the timer chime is **ringing** | never | silencing the chime, releasing transient audio focus → `Silent` | `(ich hab's gehört\|ich habs gehört\|ja ja\|ist gut)` |
 | **Radio** | 50 | ExoPlayer is playing or buffering | never | stopping + releasing the player and its focus → `Silent` | — |
-| **Spotify** | 50 | App Remote reports a playing track | App Remote connected, track loaded but paused | `playerApi.pause()` → `Silent` | — |
+| **Spotify** ✅ | 50 | the cached `PlayerState` has a track and `isPaused == false` | a track is loaded but paused | `playerApi.pause()` → `Silent` | — |
 
 Rules that make this behave the way a person expects:
 
@@ -78,6 +80,11 @@ Rules that make this behave the way a person expects:
 - **Clock's priority 100** wins the Clock-ringing-and-radio-playing tie. A ringing alarm is the most salient thing in the room; silencing it is what "stopp" means then.
 - **Spotify reports `IDLE`, never `ACTIVE`, when its track is already paused**, and then returns `NotForMe` — pausing an already-paused player is not "consuming" anything, and it would swallow the command from a Sock further down.
 - Every subscriber returns `NotForMe` when `INACTIVE`, **without I/O** (plan §3.4).
+- **Spotify's activity is a read of a cached subscription, never a Binder call.** A silently
+  dead App Remote therefore leaves a stale cache, and the Sock can claim a command it cannot
+  execute; it then fails with its normal message rather than passing down the chain
+  ([spotify.specs.md](spotify.specs.md) §6). Accepted — the alternative is a round trip on
+  every "stopp".
 
 ### Worked scenarios
 
@@ -129,7 +136,7 @@ That third row is the one that justifies the whole design.
 
 | Sock | Priority | `ACTIVE` when | `IDLE` when | Consumes by |
 |---|---|---|---|---|
-| **Spotify** | 50 | never (resuming something already playing is a no-op) | App Remote connected and a paused track exists | `playerApi.resume()` → `Silent` |
+| **Spotify** ✅ | 50 | never (resuming something already playing is a no-op) | a track is loaded and paused | `playerApi.resume()` → `Silent` |
 | **Radio** | 40 | never | a station was stopped **in this session** | restarting that station → `Spoken("{displayName}.")` |
 
 - Neither Sock is ever `ACTIVE` for this command, so ranking falls through to priority: **Spotify is asked first.** This matches expectation — "weiter" after pausing a song means that song.
@@ -143,6 +150,11 @@ That third row is the one that justifies the whole design.
 Owned by `core/dispatch`, not by any Sock. The suite is a **matrix**, not a list of examples:
 
 - Axes: Spotify ∈ {playing, paused, disconnected} × Radio ∈ {playing, stopped-with-history, cold} × Clock ∈ {ringing, counting, idle}, for each of `shared.stop` and `shared.resume`. Assert the expected consumer, not just the observable side effect.
+
+> With Spotify built, both chains have a **real second subscriber** for the first time rather
+> than a documented intention. The rows worth running by hand on the device are the ones no fake
+> can reach: a timer ringing over playing music, and "weiter" after a song was paused by "stopp"
+> ([spotify.specs.md](spotify.specs.md) §11).
 - Priority tie-breaks: two Socks both `ACTIVE`, verify the higher priority consumes and the loser's handler is **never invoked** (`FIRST_CONSUMER` must short-circuit).
 - Nobody consumes → exact `unconsumedResponse` string.
 - A subscriber throws, and a subscriber times out → chain continues, Sock marked `Degraded`, the next Sock consumes.

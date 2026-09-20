@@ -43,14 +43,23 @@ class AndroidSockContext(
 /**
  * Audio focus, wrapped so a Sock never sees an [AudioManager].
  *
- * There is nothing to arbitrate yet — Clock and Help make no sound of their own. It is
- * implemented now anyway because the interface is already public to every Sock, and a
- * coordinator that silently does nothing would be discovered by Radio and Spotify in M4 at
- * the worst possible moment.
+ * Two kinds of claim, and the difference is which process makes the sound. [requestFocus] is
+ * for a Sock that plays audio itself — Radio's ExoPlayer, in this process — and asks Android
+ * for `AUDIOFOCUS_GAIN`. [claimExternal] is for a Sock whose audio comes out of another app,
+ * which is Spotify: the App Remote only tells `com.spotify.music` to play, and that process
+ * holds its own focus. Asking for GAIN on Dobby's behalf there would send `AUDIOFOCUS_LOSS` to
+ * Spotify — stopping the music one instant before asking it to start (`spotify.specs.md` §3).
  */
 private class AndroidPlayback(context: Context) : PlaybackCoordinator {
     private val audio = context.getSystemService(AudioManager::class.java)
     private var request: AudioFocusRequest? = null
+
+    /**
+     * Whether the current claim was an external one, so [releaseFocus] does the right one of
+     * two things. A field rather than a lookup on [request] because "no request" is also the
+     * state before anything has ever claimed, and those two must not be confused.
+     */
+    private var external = false
 
     override var holder: String? = null
         private set
@@ -60,15 +69,33 @@ private class AndroidPlayback(context: Context) : PlaybackCoordinator {
     override suspend fun requestTransientFocus(sockId: String): Boolean =
         grant(sockId, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
 
-    override suspend fun releaseFocus(sockId: String) {
-        if (holder != sockId) return
+    /**
+     * Bookkeeping, and deliberately nothing else.
+     *
+     * Any focus request Dobby holds is abandoned first: the channel is changing hands, and
+     * leaving Radio's GAIN standing while Spotify plays would make [holder] and the OS
+     * disagree. Always granted — there is nothing that could refuse it.
+     */
+    override suspend fun claimExternal(sockId: String): Boolean {
         request?.let { audio.abandonAudioFocusRequest(it) }
         request = null
+        external = true
+        holder = sockId
+        return true
+    }
+
+    override suspend fun releaseFocus(sockId: String) {
+        if (holder != sockId) return
+        // Nothing to abandon for an external claim — nothing was ever requested.
+        if (!external) request?.let { audio.abandonAudioFocusRequest(it) }
+        request = null
+        external = false
         holder = null
     }
 
     private fun grant(sockId: String, durationHint: Int): Boolean {
         request?.let { audio.abandonAudioFocusRequest(it) }
+        external = false
         val next = AudioFocusRequest.Builder(durationHint)
             .setAudioAttributes(
                 AudioAttributes.Builder()
