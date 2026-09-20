@@ -10,7 +10,14 @@ import io.dobby.pipeline.stt.ParakeetRecognizer
 import io.dobby.pipeline.stt.SpeechModelStore
 import io.dobby.pipeline.stt.SpeechVad
 import io.dobby.pipeline.tts.Earcon
+import io.dobby.pipeline.tts.EspeakData
+import io.dobby.pipeline.tts.PiperSpeaker
+import io.dobby.pipeline.tts.PlatformSpeaker
 import io.dobby.pipeline.tts.Speaker
+import io.dobby.pipeline.tts.VoiceCatalogue
+import io.dobby.pipeline.tts.VoiceModelState
+import io.dobby.pipeline.tts.VoiceOption
+import io.dobby.pipeline.tts.VoiceStore
 import io.dobby.pipeline.wakeword.WakeWordDetector
 import io.dobby.pipeline.wakeword.WakeWordOption
 import io.dobby.pipeline.wakeword.WakeWordModelStore
@@ -95,14 +102,41 @@ class VoicePipeline(
      * a panel that is measured by standing in front of it is often enough.
      */
     private val micProfile: MicProfile = MicProfile.DEFAULT,
-    modelRoot: File = context.filesDir,
+    /** The voice chosen in settings, or null for the catalogue default. */
+    private var selectedVoice: String? = null,
+    private val modelRoot: File = context.filesDir,
     private val utteranceTimeout: Duration = UTTERANCE_TIMEOUT,
 ) : VoiceIo {
     private val appContext = context.applicationContext
     private val audio = AudioSource(scope, micProfile)
     private val models = SpeechModelStore(modelRoot)
     private val wakeWordModels = WakeWordModelStore(modelRoot)
-    private val speaker = Speaker(appContext)
+    private val voices = VoiceStore(modelRoot)
+
+    /**
+     * The phone's own voice: the first-run voice, the fallback, and the way back.
+     *
+     * Constructed once and kept for the life of the pipeline even when a Piper voice is
+     * speaking. It costs an idle `TextToSpeech` connection, and it buys a sentence that is
+     * never dropped — a graph freed under memory pressure or a download behind a captive
+     * portal is a voice that changes, not a panel that goes quiet.
+     */
+    private val platformSpeaker = PlatformSpeaker(appContext)
+
+    @Volatile
+    private var speaker: Speaker = platformSpeaker
+
+    /** The loaded Piper voice, when one is speaking. Null while the system voice is selected. */
+    private var piper: PiperSpeaker? = null
+
+    /**
+     * Held for the length of a sentence, and taken again to swap voices.
+     *
+     * So a sentence in flight finishes in the voice it started in and the next one starts in
+     * the new one — rather than a swap landing between two `AudioTrack` writes.
+     */
+    private val speaking = Mutex()
+
     private val earcon = Earcon()
     private val haptics = Haptics(appContext)
 
@@ -180,13 +214,93 @@ class VoicePipeline(
         }
 
         prepareWakeWord()
+        prepareVoice()
 
-        if (!speaker.awaitReady()) {
+        // Either voice will do. The Piper one is the better of the two and the platform one is
+        // always there, so the only failure left is a phone with no German voice *and* a first
+        // run that could not fetch Thorsten — which is mute, and worth saying out loud.
+        if (!speaker.awaitReady() && !platformSpeaker.awaitReady()) {
             // Hearing without speaking is still useful: the chat view shows every answer.
             _state.value = VoiceState.Unavailable("Keine deutsche Stimme installiert")
             return
         }
         _state.value = VoiceState.Ready
+    }
+
+    /**
+     * Fetches and loads the chosen voice, after the wake word and before the panel says Ready.
+     *
+     * Last of the three downloads on purpose: first-run order is what the panel can do soonest.
+     * Hearing comes before speaking, hands-free before either, and until Thorsten's 114 MB
+     * lands the phone's own voice answers — so the panel is never mute on first run, which it
+     * is today on a device with no German platform voice.
+     *
+     * Never throws and never leaves the panel without a voice: every way out of here leaves
+     * [platformSpeaker] speaking, with the reason in [voiceState].
+     */
+    private suspend fun prepareVoice() {
+        val option = VoiceCatalogue.of(selectedVoice)
+        if (option.isSystem) return
+
+        _state.value = VoiceState.Preparing("Lade Stimme…")
+        val loaded = load(option) ?: return
+        swap(loaded)
+    }
+
+    /**
+     * Downloads, unpacks and opens one voice, showing the download where a person can see it.
+     *
+     * Returns null for every failure — a download that could not finish, phoneme data that
+     * could not be copied, a graph that will not open — because the caller's answer to all
+     * three is the same: keep the voice that is speaking.
+     */
+    private suspend fun load(option: VoiceOption): PiperSpeaker? {
+        val progress = scope.launch {
+            voices.state.collect {
+                if (it is VoiceModelState.Downloading) {
+                    _state.value = VoiceState.Preparing("Lade ${it.name}… ${it.percent} %")
+                }
+            }
+        }
+        val files = try {
+            voices.ensureAvailable(option)
+        } finally {
+            progress.cancel()
+        }
+        if (files == null) return null
+
+        _state.value = VoiceState.Preparing("Lade Stimme…")
+        // espeak-ng wants its 355 files by path, so they are copied out of the assets once.
+        // Without them the graph loads and says nothing, which is why this is not optional.
+        val phonemes = EspeakData.ensure(appContext, modelRoot) ?: run {
+            voices.failed("Aussprachedaten fehlen")
+            return null
+        }
+
+        val next = PiperSpeaker(files, phonemes, option.gain)
+        if (!next.awaitReady()) {
+            next.shutdown()
+            voices.failed("Stimme nicht lesbar")
+            return null
+        }
+        return next
+    }
+
+    /**
+     * Puts [next] in front, under the sentence lock, and disposes of whatever it replaced.
+     *
+     * Only one voice is ever resident: a Piper graph is ~150 MB, and two of them on a phone
+     * that is also holding Parakeet and a gigabyte of Tier 2 is the memory this milestone does
+     * not have. [platformSpeaker] is the exception and is never shut down — it is the fallback.
+     */
+    private suspend fun swap(next: Speaker) {
+        val previous = speaking.withLock {
+            val current = speaker
+            speaker = next
+            piper = next as? PiperSpeaker
+            current
+        }
+        if (previous !== platformSpeaker) previous.shutdown()
     }
 
     private suspend fun prepareWakeWord() {
@@ -241,6 +355,61 @@ class VoicePipeline(
         prepareWakeWord()
         if (wasArmed) startHandsFree() else _state.value = idleState()
     }
+
+    /** Everything settings can offer: the catalogue plus any voice pushed to the device. */
+    override fun voiceOptions(): List<VoiceOption> = voices.options()
+
+    override val selectedVoiceId: String get() = resolveVoice(selectedVoice).id
+
+    override val voiceState: StateFlow<VoiceModelState> = voices.state
+
+    /**
+     * Switches the voice, downloading it the first time it is chosen.
+     *
+     * Then says one sentence in it, because a voice is chosen by ear: a radio button that
+     * changes nothing audible until the next timer fires is a setting nobody trusts.
+     *
+     * **A failure changes nothing.** The voice that was speaking keeps speaking and the
+     * selection stays where it was, so a Cori download that died behind a captive portal does
+     * not leave the panel selected onto a voice it does not have. The reason is in [voiceState],
+     * which is the line under the row that was tapped.
+     */
+    override suspend fun selectVoice(id: String) {
+        val option = resolveVoice(id)
+        // Already chosen *and* already speaking. The second half matters on first run: the
+        // selection can be Thorsten while the phone's voice is still covering the download.
+        val active = if (option.isSystem) speaker === platformSpeaker else piper != null
+        if (option.id == selectedVoiceId && active) return
+
+        if (option.isSystem) {
+            selectedVoice = option.id
+            swap(platformSpeaker)
+        } else {
+            val loaded = load(option) ?: run {
+                _state.value = idleState()
+                return
+            }
+            selectedVoice = option.id
+            swap(loaded)
+        }
+        _state.value = idleState()
+        say(option.spokenGreeting)
+    }
+
+    /**
+     * Gives the loaded graph's ~150 MB back, keeping the voice selected.
+     *
+     * Under the sentence lock, so it never frees a pointer a synthesis is still using. Fire and
+     * forget: the caller is `onTrimMemory`, which is not a place to suspend.
+     */
+    override fun releaseVoice() {
+        val loaded = piper ?: return
+        scope.launch { speaking.withLock { loaded.release() } }
+    }
+
+    /** The catalogue, a sideloaded directory, or — for anything unknown — the default. */
+    private fun resolveVoice(id: String?): VoiceOption =
+        voices.options().firstOrNull { it.id == id } ?: VoiceCatalogue.DEFAULT
 
     /**
      * Arms the wake word: the microphone stays open and every 80 ms frame is scored.
@@ -406,7 +575,15 @@ class VoicePipeline(
         val previous = _state.value
         _state.value = VoiceState.Speaking(text)
         try {
-            speaker.say(text)
+            // One sentence is spoken by one voice: the lock is what keeps a swap from landing
+            // between two writes of the same answer.
+            speaking.withLock {
+                val active = speaker
+                // False means this voice said nothing — a graph freed under memory pressure,
+                // or a platform engine with no German voice. The phone's own voice is what
+                // stands behind both, and a sentence in the wrong voice beats a silent panel.
+                if (!active.say(text) && active !== platformSpeaker) platformSpeaker.say(text)
+            }
         } finally {
             _state.value = if (previous is VoiceState.Unavailable) previous else idleState()
             // Dobby has been talking into an open microphone. Whatever the detector heard of
@@ -426,7 +603,9 @@ class VoicePipeline(
         pausedWakeWord = null
         audio.stop()
         earcon.close()
-        speaker.shutdown()
+        piper?.shutdown()
+        piper = null
+        platformSpeaker.shutdown()
         releaseStt()
         wakeWord?.close()
         wakeWord = null

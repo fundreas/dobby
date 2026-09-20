@@ -11,17 +11,51 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.resume
 
 /**
- * Dobby's voice.
+ * Dobby's voice, whichever one is speaking.
  *
- * Android's [TextToSpeech] is callback-shaped and initialises asynchronously, so everything
- * above it would otherwise have to be callback-shaped too. [say] is a suspend function that
- * returns when the sentence has actually finished playing — which the caller needs, because
- * the microphone must not reopen while Dobby is still talking.
+ * Two implementations: [PlatformSpeaker] over Android's `TextToSpeech`, and [PiperSpeaker] over
+ * a Piper voice through sherpa-onnx. The seam exists so that swapping one for the other is a
+ * field assignment in [io.dobby.pipeline.VoicePipeline] rather than a branch at every call site.
+ *
+ * [say] suspending until the sentence has finished *playing* is the whole contract, and the
+ * reason it is a suspend function rather than a callback: the microphone must not reopen while
+ * Dobby is still talking, and the controller relies on the return to know that it has stopped.
  */
-class Speaker(
+interface Speaker {
+
+    /** False when this voice cannot speak at all — no German voice, or no graph. */
+    suspend fun awaitReady(): Boolean
+
+    /**
+     * Speaks [text] and returns once it has finished playing.
+     *
+     * **False means nothing was said**, and that is the fallback's cue. A platform engine with
+     * no German voice and a Piper graph that was freed under memory pressure are the same
+     * situation to the caller: this sentence needs another voice. Returning a boolean rather
+     * than throwing keeps that an ordinary answer, because it is one.
+     */
+    suspend fun say(text: String): Boolean
+
+    /** Stops whatever is playing now. Safe from any thread. */
+    fun stop()
+
+    fun shutdown()
+}
+
+/**
+ * The phone's own `TextToSpeech`.
+ *
+ * What spoke before M2c, unchanged apart from the interface and the name: it is still the
+ * first-run voice while Thorsten downloads, the fallback when a Piper voice will not load, and
+ * the way back if espeak-ng reads something worse than Google did.
+ *
+ * Android's `TextToSpeech` is callback-shaped and initialises asynchronously, so everything
+ * above it would otherwise have to be callback-shaped too.
+ */
+class PlatformSpeaker(
     context: Context,
     private val preferred: List<Locale> = DEFAULT_LOCALES,
-) {
+) : Speaker {
     private val initialised = CompletableDeferred<Boolean>()
     private val pending = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
     private val nextId = AtomicLong()
@@ -51,12 +85,12 @@ class Speaker(
         })
     }
 
-    /** False when no German voice could be found — Dobby then runs mute rather than in English. */
-    suspend fun awaitReady(): Boolean = initialised.await()
+    /** False when no German voice could be found — Dobby is then mute rather than English. */
+    override suspend fun awaitReady(): Boolean = initialised.await()
 
     /** Speaks [text] and returns once it has finished playing. */
-    suspend fun say(text: String) {
-        if (text.isBlank() || !awaitReady()) return
+    override suspend fun say(text: String): Boolean {
+        if (text.isBlank() || !awaitReady()) return false
 
         val id = "dobby-${nextId.incrementAndGet()}"
         val done = CompletableDeferred<Unit>()
@@ -65,7 +99,7 @@ class Speaker(
         val queued = tts.speak(text, TextToSpeech.QUEUE_ADD, null, id)
         if (queued != TextToSpeech.SUCCESS) {
             pending.remove(id)
-            return
+            return false
         }
 
         suspendCancellableCoroutine { continuation ->
@@ -75,14 +109,15 @@ class Speaker(
             }
             done.invokeOnCompletion { continuation.resume(Unit) }
         }
+        return true
     }
 
-    fun stop() {
+    override fun stop() {
         tts.stop()
         pending.keys.forEach { pending.remove(it)?.complete(Unit) }
     }
 
-    fun shutdown() {
+    override fun shutdown() {
         stop()
         tts.shutdown()
     }

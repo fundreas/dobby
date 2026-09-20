@@ -4,6 +4,7 @@ import io.dobby.android.chat.Voice
 import io.dobby.core.testing.FakeSockContext
 import io.dobby.pipeline.ListenCue
 import io.dobby.pipeline.VoiceState
+import io.dobby.pipeline.tts.VoiceModelState
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -478,6 +479,67 @@ class DobbyControllerTest {
         dobby.selectWakeWord("hey_jarvis").join()
 
         assertTrue(!uiState(dobby).handsFree, "choosing a phrase re-armed the microphone")
+    }
+
+    @Test
+    fun `choosing a voice switches what the panel speaks with, and it says so`() = runTest {
+        val voice = FakeVoice()
+        val dobby = controller(voice)
+        dobby.start()
+        assertEquals("thorsten", uiState(dobby).voiceId, "Thorsten is the default")
+        // The list settings renders comes from the pipeline, so a voice pushed to the device
+        // while the app was running is offered without a restart.
+        assertEquals(listOf("Thorsten", "Cori", "Android-Stimme"), uiState(dobby).voices.map { it.name })
+
+        dobby.selectVoice("cori").join()
+
+        assertEquals("cori", uiState(dobby).voiceId)
+        // A voice is chosen by ear. A radio button that changes nothing audible until the next
+        // timer fires is a setting nobody trusts, so the new voice introduces itself.
+        assertEquals(listOf("Hello, I'm Cori."), voice.spoken)
+    }
+
+    @Test
+    fun `a voice that could not be fetched leaves the previous one selected`() = runTest {
+        // What is persisted is what the pipeline ended up with, not what was asked for: a
+        // download that died behind a captive portal must not leave the next start trying to
+        // load a voice that is not on the device.
+        val voice = FakeVoice()
+        val dobby = controller(voice)
+        dobby.start()
+        voice.failNextVoice = "kein Netz"
+
+        dobby.selectVoice("cori").join()
+
+        assertEquals("thorsten", uiState(dobby).voiceId, "a failed download changed the selection")
+        assertEquals(VoiceModelState.Failed("kein Netz"), uiState(dobby).voiceState)
+        assertTrue(voice.spoken.isEmpty(), "a voice that never loaded introduced itself")
+    }
+
+    @Test
+    fun `the download reaches the row that started it`() = runTest {
+        // 114 MB over a flat's wifi is a minute of a panel that otherwise looks like it ignored
+        // the tap. The state is a flow for exactly this: the row has to update while it runs.
+        val voice = FakeVoice()
+        val dobby = controller(voice)
+        dobby.start()
+
+        voice.emitVoiceState(VoiceModelState.Downloading("Cori", 37))
+
+        assertEquals(VoiceModelState.Downloading("Cori", 37), uiState(dobby).voiceState)
+    }
+
+    @Test
+    fun `memory pressure gives the voice back`() = runTest {
+        // `dobby-plan.md` §9's order of retreat, one line below Tier 2's KV cache. The service
+        // is what hears `onTrimMemory`; this is the forwarding it does.
+        val voice = FakeVoice()
+        val dobby = controller(voice)
+        dobby.start()
+
+        dobby.releaseVoice()
+
+        assertEquals(1, voice.voiceReleases)
     }
 
     @Test

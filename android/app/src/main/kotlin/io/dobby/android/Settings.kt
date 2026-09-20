@@ -25,6 +25,18 @@ class Settings(context: Context) {
         set(value) = preferences.edit { putString(KEY_WAKE_WORD, value) }
 
     /**
+     * The chosen voice's id, or null to let the catalogue default stand.
+     *
+     * Read back through `VoiceCatalogue.of()` rather than trusted, for the same reason
+     * [listenCue] is read through `ListenCue.of()`: a sideloaded voice that was deleted and a
+     * value written by an older build are both ids nothing answers to, and a settings file is
+     * the one input that can arrive from a version of the app that no longer exists.
+     */
+    var voiceId: String?
+        get() = preferences.getString(KEY_VOICE, null)
+        set(value) = preferences.edit { putString(KEY_VOICE, value) }
+
+    /**
      * Whether the wake word should arm itself at startup.
      *
      * Remembered because switching it off is a deliberate act — someone who turned the
@@ -97,6 +109,7 @@ class Settings(context: Context) {
 
     private companion object {
         const val KEY_WAKE_WORD = "wakeword.id"
+        const val KEY_VOICE = "voice.id"
         const val KEY_HANDS_FREE = "wakeword.armed"
         const val KEY_LISTEN_CUE = "listen.cue"
         const val KEY_TURN_DUCK = "turn.duck"

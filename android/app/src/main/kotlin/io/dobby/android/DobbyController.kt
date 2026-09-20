@@ -22,6 +22,8 @@ import io.dobby.core.sock.SockLog
 import io.dobby.core.sock.SockResult
 import io.dobby.pipeline.ListenCue
 import io.dobby.pipeline.audio.MicProfile
+import io.dobby.pipeline.tts.VoiceModelState
+import io.dobby.pipeline.tts.VoiceOption
 import io.dobby.pipeline.wakeword.WakeWordOption
 import io.dobby.socks.clock.ClockState
 import io.dobby.pipeline.VoiceIo
@@ -63,6 +65,11 @@ data class DobbyUiState(
     val turnDuck: TurnDuck = TurnDuck.DEFAULT,
     /** Which microphone is open. Changing it takes effect at the next start. */
     val micProfile: MicProfile = MicProfile.DEFAULT,
+    /** Every voice settings offers, and which of them is speaking. */
+    val voices: List<VoiceOption> = emptyList(),
+    val voiceId: String = "",
+    /** A voice download, so the row that started one can show it. */
+    val voiceState: VoiceModelState = VoiceModelState.Absent,
 )
 
 /**
@@ -255,7 +262,19 @@ class DobbyController(
      * that into something [combine] notices.
      */
     private var wakeWordOptions: List<WakeWordOption> = emptyList()
+    private var voiceOptions: List<VoiceOption> = emptyList()
     private val refresh = MutableStateFlow(0)
+
+    /**
+     * The counter and the voice download, as one flow.
+     *
+     * [combine] takes five typed flows and this is the sixth thing the state is built from, so
+     * the two that change least often travel together. They belong together anyway: both are
+     * about what settings is showing, and a download's percentage has to reach the screen
+     * between two taps of the counter.
+     */
+    private val settingsChanges =
+        combine(refresh, pipeline.voiceState) { count, voice -> count to voice }
 
     val state: StateFlow<DobbyUiState> =
         combine(
@@ -263,8 +282,8 @@ class DobbyController(
             transcript.messages,
             thinking,
             pipeline.handsFree,
-            refresh,
-        ) { voice, messages, isThinking, armed, _ ->
+            settingsChanges,
+        ) { voice, messages, isThinking, armed, (_, voiceDownload) ->
             DobbyUiState(
                 phase = phaseOf(voice, isThinking),
                 detail = detailOf(voice, isThinking),
@@ -280,6 +299,9 @@ class DobbyController(
                 // construction and cannot change it, and the duck is not the pipeline's at all.
                 turnDuck = settings?.turnDuck ?: TurnDuck.DEFAULT,
                 micProfile = settings?.micProfile ?: MicProfile.DEFAULT,
+                voices = voiceOptions,
+                voiceId = pipeline.selectedVoiceId,
+                voiceState = voiceDownload,
             )
         }.stateIn(
             scope,
@@ -304,6 +326,7 @@ class DobbyController(
 
         pipeline.prepare()
         wakeWordOptions = pipeline.wakeWordOptions()
+        voiceOptions = pipeline.voiceOptions()
         refresh.value = refresh.value + 1
 
         // Armed unless someone deliberately turned it off: switching the microphone off is a
@@ -376,6 +399,33 @@ class DobbyController(
         wakeWordOptions = pipeline.wakeWordOptions()
         refresh.value = refresh.value + 1
     }
+
+    /**
+     * Switches the voice the panel speaks with.
+     *
+     * The first use of a voice downloads 114 MB, so this suspends for as long as that takes on
+     * the connection in the room; the settings row shows the pipeline's own progress while it
+     * does, and the panel keeps answering in the voice it already had.
+     *
+     * What is persisted is what the pipeline ended up with, not what was asked for: a download
+     * that failed leaves the previous voice selected, and writing the failed choice to settings
+     * would make the next start try to load a voice that is not there.
+     */
+    fun selectVoice(id: String): Job = scope.launch {
+        pipeline.selectVoice(id)
+        settings?.voiceId = pipeline.selectedVoiceId
+        voiceOptions = pipeline.voiceOptions()
+        refresh.value = refresh.value + 1
+    }
+
+    /**
+     * Gives the loaded voice's memory back, under pressure.
+     *
+     * Forwarded rather than reached for directly, because the service holds a controller and
+     * not a pipeline — and because §9's order of retreat is a product decision that should be
+     * readable in one place alongside the rest of the turn.
+     */
+    fun releaseVoice() = pipeline.releaseVoice()
 
     /**
      * Push to talk: one utterance, dispatched and answered.

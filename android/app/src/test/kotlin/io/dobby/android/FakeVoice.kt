@@ -3,6 +3,9 @@ package io.dobby.android
 import io.dobby.pipeline.ListenCue
 import io.dobby.pipeline.VoiceIo
 import io.dobby.pipeline.VoiceState
+import io.dobby.pipeline.tts.VoiceCatalogue
+import io.dobby.pipeline.tts.VoiceModelState
+import io.dobby.pipeline.tts.VoiceOption
 import io.dobby.pipeline.wakeword.WakeWordOption
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -103,6 +106,55 @@ internal class FakeVoice(vararg utterances: String?) : VoiceIo {
         selectedWakeWordId = id
         wakePhrase = option.phrase
         if (_handsFree.value) _state.value = VoiceState.Waiting(option.phrase)
+    }
+
+    /**
+     * The catalogue, as the pipeline would offer it with nothing sideloaded.
+     *
+     * The real store also reads a directory; here the list is fixed, because what the
+     * controller has to get right is which id reaches settings and which one comes back — not
+     * what is on disk.
+     */
+    override fun voiceOptions(): List<VoiceOption> = VoiceCatalogue.ALL
+
+    override var selectedVoiceId: String = VoiceCatalogue.DEFAULT.id
+        private set
+
+    private val _voiceState = MutableStateFlow<VoiceModelState>(VoiceModelState.Absent)
+    override val voiceState: StateFlow<VoiceModelState> = _voiceState.asStateFlow()
+
+    /**
+     * Set to make the next [selectVoice] fail, as a download behind a captive portal does.
+     *
+     * The interesting half of choosing a voice is the half that does not work: the selection
+     * has to stay where it was, because persisting a voice that is not on the device is a next
+     * start with nothing to load.
+     */
+    var failNextVoice: String? = null
+
+    override suspend fun selectVoice(id: String) {
+        val option = voiceOptions().firstOrNull { it.id == id } ?: VoiceCatalogue.DEFAULT
+        failNextVoice?.let { reason ->
+            failNextVoice = null
+            _voiceState.value = VoiceModelState.Failed(reason)
+            return
+        }
+        selectedVoiceId = option.id
+        _voiceState.value = VoiceModelState.Ready(option.name)
+        say(option.spokenGreeting)
+    }
+
+    /** Drives the download state directly, for the percentage the settings row renders. */
+    fun emitVoiceState(state: VoiceModelState) {
+        _voiceState.value = state
+    }
+
+    /** One entry per call, so §9's order of retreat is assertable without a phone. */
+    var voiceReleases: Int = 0
+        private set
+
+    override fun releaseVoice() {
+        voiceReleases++
     }
 
     override fun startHandsFree(): Boolean {

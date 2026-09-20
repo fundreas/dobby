@@ -31,11 +31,14 @@ import io.dobby.android.DobbyUiState
 import io.dobby.core.audio.TurnDuck
 import io.dobby.pipeline.ListenCue
 import io.dobby.pipeline.audio.MicProfile
+import io.dobby.pipeline.tts.VoiceModelState
+import io.dobby.pipeline.tts.VoiceOption
 import io.dobby.pipeline.wakeword.WakeWordOption
 
 /**
- * The panel's settings: which phrase wakes it, whether it is listening at all, how it says so
- * when it starts, and what it does to the music while somebody is talking to it.
+ * The panel's settings: which phrase wakes it, which voice answers, whether it is listening at
+ * all, how it says so when it starts, and what it does to the music while somebody is talking
+ * to it.
  *
  * One screen, no nesting. A wall panel is not a phone — whoever is standing in front of it
  * wants to change the one thing they came for and get back to the conversation.
@@ -50,6 +53,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onHandsFree: (Boolean) -> Unit,
     onSelect: (String) -> Unit,
+    onSelectVoice: (String) -> Unit,
     onListenCue: (ListenCue) -> Unit,
     onTurnDuck: (TurnDuck) -> Unit,
     onMicProfile: (MicProfile) -> Unit,
@@ -129,6 +133,20 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                SectionLabel("Stimme")
+            }
+
+            items(state.voices, key = { it.id }) { option ->
+                VoiceRow(
+                    option = option,
+                    selected = option.id == state.voiceId,
+                    download = state.voiceState,
+                    onSelect = { onSelectVoice(option.id) },
+                )
+            }
+
+            item {
                 HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
                 SectionLabel("Wenn Dobby zu hören beginnt")
             }
@@ -244,6 +262,36 @@ private fun WakeWordRow(option: WakeWordOption, selected: Boolean, onSelect: () 
         selected = selected,
         onSelect = onSelect,
     )
+}
+
+/**
+ * One voice, with its download where it can be watched.
+ *
+ * The subtitle is the voice's own line until something is happening to it, and then it is that
+ * — a percentage, or the reason there is no voice. A 114 MB download started by a tap is a
+ * minute of a panel that looks like it ignored the tap, unless the row says otherwise.
+ */
+@Composable
+private fun VoiceRow(
+    option: VoiceOption,
+    selected: Boolean,
+    download: VoiceModelState,
+    onSelect: () -> Unit,
+) {
+    ChoiceRow(
+        title = option.name,
+        subtitle = if (selected) download.subtitle(option) else option.description,
+        selected = selected,
+        onSelect = onSelect,
+    )
+}
+
+/** What the selected row says under its name while a download is in flight, or has failed. */
+private fun VoiceModelState.subtitle(option: VoiceOption): String = when (this) {
+    is VoiceModelState.Downloading -> "Wird geladen… $percent %"
+    VoiceModelState.Verifying -> "Wird geprüft…"
+    is VoiceModelState.Failed -> "Fehlgeschlagen: $reason"
+    VoiceModelState.Absent, is VoiceModelState.Ready -> option.description
 }
 
 /** One radio option, big enough to hit from a step back with a wet hand. */

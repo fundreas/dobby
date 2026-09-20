@@ -1,5 +1,7 @@
 package io.dobby.pipeline
 
+import io.dobby.pipeline.tts.VoiceModelState
+import io.dobby.pipeline.tts.VoiceOption
 import io.dobby.pipeline.wakeword.WakeWordOption
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -51,6 +53,37 @@ interface VoiceIo {
 
     /** Switches the active phrase, fetching its classifier the first time it is chosen. */
     suspend fun selectWakeWord(id: String)
+
+    /** Every voice settings can offer: the catalogue, plus anything pushed to the device. */
+    fun voiceOptions(): List<VoiceOption>
+
+    /**
+     * The voice that is speaking. Never null — an id nothing answers to resolves to the default.
+     *
+     * It changes only when a voice has actually loaded: a download that failed leaves the
+     * previous selection standing, and [voiceState] is where the reason is.
+     */
+    val selectedVoiceId: String
+
+    /**
+     * How far along getting the chosen voice we are, so the settings row can show it.
+     *
+     * A flow rather than a return value because the row that starts a 114 MB download is the
+     * row that has to show it, and the person choosing is looking at it while it runs.
+     */
+    val voiceState: StateFlow<VoiceModelState>
+
+    /** Switches the voice, fetching it the first time it is chosen. */
+    suspend fun selectVoice(id: String)
+
+    /**
+     * Gives the loaded voice's ~150 MB back.
+     *
+     * `dobby-plan.md` §9's order of retreat: Tier 2's KV cache goes first, then this, and the
+     * recogniser is never touched. The next sentence is spoken by the phone's own voice while
+     * the graph reloads behind it. Does nothing when the system voice is the one selected.
+     */
+    fun releaseVoice()
 
     /** Arms the wake word. Returns false when there is no model, leaving push-to-talk. */
     fun startHandsFree(): Boolean

@@ -1,7 +1,9 @@
 # `:android:sherpa` — vendored sherpa-onnx
 
-[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) is the STT runtime (`dobby-plan.md` §4).
-It publishes no Maven artifact, so it arrives here in two halves.
+[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) is the STT **and TTS** runtime
+(`dobby-plan.md` §4): Parakeet's offline recogniser and Piper's `OfflineTts` are the same
+library, and espeak-ng is inside it. It publishes no Maven artifact, so it arrives here in two
+halves.
 
 **The Kotlin API** — `src/main/kotlin/com/k2fsa/sherpa/onnx/*.kt`, copied **verbatim** from
 `sherpa-onnx/kotlin-api/` at the pinned tag. These are not ordinary Kotlin files: the JNI layer
@@ -12,7 +14,12 @@ diff on the next version bump. That is also why this module opts out of the proj
 `allWarningsAsErrors`: the alternative is editing them.
 
 Only the files the pipeline actually needs are vendored: `OfflineRecognizer`, `OfflineStream`,
-`Vad`, `FeatureConfig`, `QnnConfig`, `HomophoneReplacerConfig`, `WaveReader`.
+`Vad`, `FeatureConfig`, `QnnConfig`, `HomophoneReplacerConfig`, `WaveReader`, `Tts`.
+
+`Tts.kt` brings the whole of upstream's TTS catalogue — Matcha, Kokoro, Kitten, ZipVoice,
+Pocket, Supertonic — and only `OfflineTtsVitsModelConfig` is used. Those are the "unused demo
+catalogues" the paragraph above means: deleting them is what makes the next version bump
+undiffable.
 
 **The native library** — `libsherpa-onnx-jni.so`, ~24 MB, downloaded and checksum-verified by
 `fetchSherpaJni` in `build.gradle.kts` into `build/sherpa-jni/arm64-v8a/`. Same rule as the
@@ -37,13 +44,14 @@ each other.
    ```
 3. Re-copy the Kotlin files from the same tag:
    ```sh
-   for f in FeatureConfig HomophoneReplacerConfig QnnConfig OfflineStream OfflineRecognizer Vad WaveReader; do
+   for f in FeatureConfig HomophoneReplacerConfig QnnConfig OfflineStream OfflineRecognizer Vad WaveReader Tts; do
      curl -fL -o "android/sherpa/src/main/kotlin/com/k2fsa/sherpa/onnx/$f.kt" \
        "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v$V/sherpa-onnx/kotlin-api/$f.kt"
    done
    ```
 4. Read the diff. A changed field name in a config class is a silent breakage in
-   `io.dobby.pipeline.stt`.
+   `io.dobby.pipeline.stt` or `io.dobby.pipeline.tts` — the JNI reads those fields by name, so
+   nothing complains at compile time.
 
 ## Licence
 

@@ -110,6 +110,7 @@ class DobbyService : Service() {
                 settings.wakeWordId,
                 settings.listenCue,
                 settings.micProfile,
+                settings.voiceId,
             ),
             sockContext = { announce -> AndroidSockContext(this, scope, announce) },
             hardware = clockHardware,
@@ -198,6 +199,13 @@ class DobbyService : Service() {
     @Suppress("DEPRECATION")
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
+        if (level >= TRIM_MEMORY_RUNNING_CRITICAL && ::controller.isInitialized) {
+            // §9's second line, after the KV cache: a loaded Piper graph is ~150 MB, and the
+            // sentence that would have used it is spoken by the phone's own voice while it
+            // reloads. Before the Tier 2 branch below, because this one runs whether or not
+            // there is a Tier 2 to release — STT is never touched either way.
+            controller.releaseVoice()
+        }
         val resolver = tier2 ?: return
         when {
             level >= TRIM_MEMORY_RUNNING_CRITICAL -> scope.launch {

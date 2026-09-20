@@ -32,8 +32,8 @@ Phase A was "Dobby in a terminal": everything below the microphone and above the
 | `:socks:conversation` | **Conversation** — "OK", and the turn is over: the microphone closes and the wake word comes back, instead of the person waiting out the five-second window in front of an open mic. One command, no dependencies, and the first Sock to return `SockResult.Ended`. |
 | `:socks:winky` | Winky, the development Sock. Not a product Sock, and not in a release APK. |
 | `:cli` | The terminal harness. Still the fastest way to work on a template. |
-| `:android:sherpa` | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), packaged: the Kotlin API vendored verbatim, the 24 MB native library downloaded and checksum-verified at build time. Upstream publishes no Maven artifact, so this module is the artifact. |
-| `:android:pipeline` | Microphone in, German text out; German text in, sound out. `AudioRecord` owner + frame router, openWakeWord, Silero VAD + Parakeet STT, Android TTS. Knows nothing about Socks. |
+| `:android:sherpa` | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), packaged: the Kotlin API vendored verbatim, the 24 MB native library downloaded and checksum-verified at build time. One library, two jobs — Parakeet's recogniser and Piper's `OfflineTts`, with espeak-ng inside it. Upstream publishes no Maven artifact, so this module is the artifact. |
+| `:android:pipeline` | Microphone in, German text out; German text in, sound out. `AudioRecord` owner + frame router, openWakeWord, Silero VAD + Parakeet STT, Piper voices through sherpa-onnx with Android TTS as the fallback. Knows nothing about Socks. |
 | `:android:app` | The foreground service, the Android `SockContext`, the chat view, and the one place that knows which Socks exist. |
 
 Not yet built: the LLM tier, the remaining Socks (Spotify, Radio, System, Departures), and the rest of the dashboard — Clock brought the first card with it, Calculator the second. See [`dobby-plan.md`](dobby-plan.md) §8.
@@ -41,7 +41,7 @@ Not yet built: the LLM tier, the remaining Socks (Spotify, Radio, System, Depart
 ## Run it
 
 ```sh
-./gradlew build                      # 468 tests, all JVM, no emulator
+./gradlew build                      # 488 tests, all JVM, no emulator
 ./gradlew :cli:run -q                # the terminal harness
 ./gradlew :android:app:installDebug  # the phone
 ```
@@ -102,6 +102,47 @@ The panel hears its own speaker. `VOICE_RECOGNITION` — the microphone source M
 
 **The wake word still cannot be heard over loud music**, and nothing above helps: it has to be heard *before* there is a turn to duck. Only echo cancellation fixes that, and on this device only the platform's — Spotify's samples never enter this process, so there is no reference signal for a software canceller to subtract. So the microphone source is now a setting: `RECOGNITION` (unprocessed, what M2 shipped) or `COMMUNICATION` (the telephony chain, where the hardware echo canceller lives, plus `AcousticEchoCanceler` and `NoiseSuppressor` where the device offers them). **The default has not moved**, because moving it before measuring is how you trade a known quiet-room panel for an unknown one. Wake-word threshold and patience hang off the profile for the same reason: a number measured through one microphone means nothing through the other.
 
+### The voice
+
+Dobby used to speak with whatever the phone's `TextToSpeech` offered, which on this device is
+Google TTS — network-trained, cloud-updated, absent on a phone without Google services, and the
+one part of the audio path the panel did not own. It now speaks with **Thorsten**
+(`de_DE-thorsten-high`, CC0), with **Cori** (`en_GB-cori-high`, public domain) as the second
+voice and the phone's own as the third.
+
+- **No new runtime.** [Piper](https://github.com/rhasspy/piper) voices are single ONNX graphs,
+  and sherpa-onnx's `OfflineTts` is already inside the `libsherpa-onnx-jni.so` that Parakeet
+  uses — espeak-ng and all. What M2c adds is one vendored Kotlin file, the voice files, the
+  phoneme data, and the project's first `AudioTrack`.
+- **Streaming by sentence.** `maxNumSentences = 1` means one synthesis callback per sentence,
+  written straight to a playing track. A three-sentence Help answer starts speaking after the
+  first sentence is synthesised rather than after the third, and `say()` still returns only when
+  the audio has finished playing — which is what keeps the microphone shut while Dobby talks.
+- **On one dedicated thread**, because synthesis blocks and a blocking `AudioTrack.write` on a
+  shared worker would starve the wake word's inference.
+- **The Android voice is a catalogue entry, not dead code.** It speaks on first run while
+  Thorsten's 114 MB downloads, it covers a sentence when the graph has been freed under memory
+  pressure, and it is the way back if espeak-ng reads something worse than Google did. First run
+  grows from 670 MB to 784 MB and the panel is never mute while it happens.
+- **espeak-ng's phoneme data ships in the APK** — 7 MB compressed, 355 files, one copy shared by
+  every voice — because espeak-ng opens those files with `fopen` and an APK asset has no path.
+  It is fetched and checksum-verified at build time, then copied to `filesDir` once, stamped
+  with the archive's SHA-256 so the second run does no work at all.
+- **The voice is a setting**, under *Stimme*, and choosing one makes the panel say a sentence in
+  it immediately. A voice is chosen by ear; a radio button that changes nothing you can hear
+  until the next timer fires is a setting nobody trusts.
+- **Sideloaded voices are first-class**, like sideloaded wake words: any directory under
+  `files/voices/` with an `.onnx` and a `tokens.txt` is offered in settings.
+- **What has not changed is what is said.** Every Sock answers in German, so Cori reads German
+  sentences with English phonemes — the settings row says so where she is chosen. Answering in
+  English is a language setting and a strings table in every Sock, which is `m2c-plan.md` Part E
+  and deliberately not this milestone.
+
+**Not yet measured on the device.** `high` is the default because it was asked for and because
+the host numbers say it is affordable; whether two Cortex-A78 cores agree is what
+`PiperVoiceDeviceTest` answers, and the fallback if they do not — `thorsten-medium` as the
+default, `high` kept as an option — is decided in advance in `m2c-plan.md`'s *Measured*.
+
 ### Before you trust it
 
 A wake word trained on speech nobody ever spoke has accuracy you cannot predict from the code, only measure. Two measurements are outstanding, and they answer different questions.
@@ -130,7 +171,7 @@ Two more things to know: the pre-trained models are **CC BY-NC-SA** (fine for yo
 - **The wake word sits out the turn.** The moment it fires it comes off the stream, and it goes back on only when the turn is finished — dispatched, answered and spoken. Command audio is not wake-word audio, and a detector left running through your sentence and through Dobby's reply is one threshold away from a panel that wakes itself. The capture sink joins before the detector leaves, so the microphone never closes in the gap.
 - **One way through, two ways in.** The wake word does not run its own turn — it emits a signal, and the same `listen()` the button calls picks it up. A second path is how the two drift apart.
 - **Speech recognition is batch, and the VAD decides when you stopped.** Parakeet sees a finished utterance and answers once, so there is no running guess to stream into the bubble. Silero VAD watches the same frames the capture buffer gets and ends the utterance on ~800 ms of silence, with a 10 s cap for the times that silence never comes. What the panel shows instead of a live transcript is the honest thing: whether it can hear a voice, and then that it is working.
-- **The models are downloaded, not bundled.** 670 MB in the APK is 670 MB in git, in every build and every install, to save one round trip per device — and the same goes for sherpa-onnx's 24 MB native library, which `:android:sherpa` fetches at build time. Everything downloaded is verified against a pinned SHA-256, because a truncated encoder is otherwise a native load failure with no Kotlin stack behind it. The cost is that Dobby is deaf on first run until it finishes, so the download reports one size-weighted percentage into the same status line everything else uses.
+- **The models are downloaded, not bundled.** 784 MB in the APK is 784 MB in git, in every build and every install, to save one round trip per device — and the same goes for sherpa-onnx's 24 MB native library, which `:android:sherpa` fetches at build time. Everything downloaded is verified against a pinned SHA-256, because a truncated encoder is otherwise a native load failure with no Kotlin stack behind it. The cost is that Dobby is deaf on first run until it finishes, so the download reports one size-weighted percentage into the same status line everything else uses.
 - **Nothing in a Sock changed.** `SockContext` got its Android implementations — audio focus, the screen wake lock, SharedPreferences, logcat — and Clock and Help were rebuilt against them untouched. That was the whole bet of the Phase A interfaces, and it is the first place it could have failed.
 - **Winky cannot ship.** The app's Sock list pulls development Socks from `DevSocks`, which exists twice: the debug source set returns Winky, the release source set returns nothing and does not even have `:socks:winky` on the classpath.
 
@@ -194,7 +235,7 @@ own few-shots.
 
 ## What the tests cover
 
-All 468 tests are plain JVM tests. Nothing needs an emulator, including the wake word.
+All 488 tests are plain JVM tests. Nothing needs an emulator, including the wake word.
 
 - `GermanNumbersTest`, `NormalizerTest` — German cardinals, and why `ein` is left alone while `eins` is not.
 - `TemplateParserTest`, `TemplateMatcherTest`, `SpecificityTest` — the DSL, backtracking, fuzzy tolerance, palette ordering.
@@ -208,6 +249,9 @@ All 468 tests are plain JVM tests. Nothing needs an emulator, including the wake
 - **`DobbyControllerTest`** — *(Phase B, extended in M2)* the join, end to end: an utterance goes through the real registry to the real Clock Sock, and the answer is both shown and spoken, as the same sentence. Also that a Sock reaches the `SockContext` built on the Android side, that saying nothing leaves no trace, that typing takes the identical path — and that the wake word takes *that same path*, wakes the screen first, and that losing the wake word model leaves a working push-to-talk panel rather than a broken one. And the shape of a turn: five seconds for a voice to start, whether it is the first utterance or the retry after a not-understood buzz; two buzzes instead of the spoken apology; an answer if the second try lands; a bound, so a television cannot hold the microphone open all evening; and that the wake word's acknowledgement — buzz, pip or nothing — is a setting the pipeline acts on and the screen shows. Testable at all because the hardware sits behind `VoiceIo` and the context behind a factory — the Phase A trick, one layer up.
 - **`TranscriptTest`** — *(Phase B)* the chat model's awkward parts: a live bubble becoming a transcript in place, an answer replacing a bubble nobody filled, bounded scrollback for a panel that runs for weeks.
 - **`CaptureBufferTest`** — *(STT)* the arithmetic between the microphone and the recogniser: 16-bit PCM landing inside −1..1, only the requested samples converted, and the 10 s cap truncating inside a frame rather than overrunning it. Neither half can fail loudly — a scale mistake is a recogniser that works and is quietly worse.
+- **`VoiceCatalogueTest`** — *(M2c)* the voices settings offers: every file pinned by size and lowercase checksum, every Hugging Face URL pinned to a revision rather than a branch, ids unique and stable because they are what settings stores, an unknown id falling back to Thorsten instead of throwing, and Cori's row saying out loud that she reads German with English phonemes. Plus the naming of a sideloaded directory, which is the only thing that decides what a pushed voice is called on screen.
+- **`EspeakDataTest`** — *(M2c)* the stamp that decides whether 18 MB of phoneme data is copied again: missing, matching, stale and unreadable. And both pins asserted against literals, because the same two numbers live in the build file and a bump that changes one without the other is a device that either re-copies 355 files on every start or trusts a directory it has not seen.
+- **`PiperVoiceDeviceTest`** — *(M2c, instrumented)* every voice on the device, synthesising the sentences Dobby actually says — a German time, a calculation read back, a three-sentence Help answer, a departures line, an English title in a German sentence. It asserts what cannot throw: a graph loaded with the wrong token table or a phoneme directory that copied 300 of 355 files produces *silence*, not an exception. It is also the instrument: load time, first-chunk latency, real-time factor and RSS go to logcat under `DobbyVoice` and into `m2c-plan.md`'s *Measured* table. Skips itself when no voice is on the device.
 - **`SpeechModelsTest`** — *(STT)* the first-run download as the person waiting on it sees it: every file pinned by size and checksum, Hugging Face URLs pinned to a revision rather than a branch, and a percentage weighted by bytes so it never stalls and never jumps back.
 - **`SttTemplateTest`** — *(STT, instrumented)* recorded German commands through the real recogniser into the real palette, one per Tier-1 template. The only test that can see a wrong `model_type` or a token table that does not belong to its encoder: none of those throw, they just return text no template matches. Skips itself when the model or the recordings are absent.
 - **`OutcomeDetailTest`** — *(Phase B)* the trace line under each answer, including the three-Sock chain case it exists for.
@@ -222,6 +266,8 @@ Lint runs with `warningsAsErrors`, as the Kotlin compiler does across every modu
 ## Next
 
 **Measure the wake word on the device** (above) — now a 2×2 of microphone profile against a room with and without music, which also settles whether this hardware can hear past its own speaker at all. Then train "Hey Dobby" and drop it in.
+
+**And measure the voice**, which is the same kind of outstanding number: `PiperVoiceDeviceTest` reads Thorsten's real-time factor, first-chunk latency and resident memory off the phone, and that is what decides whether `high` stays the default (`m2c-plan.md`, *Measured*).
 
 After that, §8's order stands: **M3–M4** more Socks, **M5** the dashboard cards, **M6** the LLM fallback tier, **M7** hardening — boot notification, watchdog, and the week of unattended uptime that decides whether any of this actually lives on a wall.
 
