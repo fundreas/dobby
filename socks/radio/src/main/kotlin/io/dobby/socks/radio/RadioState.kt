@@ -28,13 +28,18 @@ sealed interface RadioState {
      * not a good answer to "weiter" — the user can name it again in four words.
      */
     data class Error(val station: Station, val reason: String) : RadioState
-
-    /** The station this state is about, whichever shape it has. Null only when nothing ever ran. */
-    val station: Station?
-        get() = when (this) {
-            is Idle -> lastStation
-            is Buffering -> station
-            is Playing -> station
-            is Error -> station
-        }
 }
+
+/**
+ * The station this state is about, whichever shape it has.
+ *
+ * An extension rather than a member, because `Idle` calls its own `lastStation` and a member
+ * of the same name would shadow it in every subtype.
+ */
+val RadioState.stationOrNull: Station?
+    get() = when (this) {
+        is RadioState.Idle -> lastStation
+        is RadioState.Buffering -> station
+        is RadioState.Playing -> station
+        is RadioState.Error -> station
+    }
