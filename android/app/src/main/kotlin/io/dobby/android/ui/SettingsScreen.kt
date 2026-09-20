@@ -29,6 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.dobby.android.DobbyUiState
 import io.dobby.core.audio.TurnDuck
+import io.dobby.socks.radio.Stations
 import io.dobby.pipeline.ListenCue
 import io.dobby.pipeline.audio.MicProfile
 import io.dobby.pipeline.tts.VoiceModelState
@@ -60,6 +61,7 @@ fun SettingsScreen(
     onSpotifyMarket: (String) -> Unit,
     onSpotifyPreferTrack: (Boolean) -> Unit,
     onSpotifyAskWhenUnsure: (Boolean) -> Unit,
+    onRadioStation: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier.fillMaxSize()) {
@@ -230,6 +232,26 @@ fun SettingsScreen(
                     subtitle = if (code == state.spotifyMarket) "Suche im Katalog von $name." else null,
                     selected = code == state.spotifyMarket,
                     onSelect = { onSpotifyMarket(code) },
+                )
+            }
+
+            item {
+                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                SectionLabel("Radio")
+            }
+
+            // The one place the UI enumerates stations, and the reason `Stations.ALL` is a list
+            // with a stable order rather than a map.
+            items(Stations.ALL, key = { it.id }) { station ->
+                ChoiceRow(
+                    title = station.displayName,
+                    subtitle = if (station.id == state.radioStation) {
+                        "„Radio an“ spielt diesen Sender."
+                    } else {
+                        null
+                    },
+                    selected = station.id == state.radioStation,
+                    onSelect = { onRadioStation(station.id) },
                 )
             }
 

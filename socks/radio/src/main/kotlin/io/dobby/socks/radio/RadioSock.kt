@@ -66,6 +66,9 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
     /** Watches the player for a mid-stream drop. Lives as long as the Sock is started. */
     private var watchdog: Job? = null
 
+    /** Feeds the ICY title into [RadioState.Playing]. Same lifetime as [watchdog]. */
+    private var titles: Job? = null
+
     override val commands: List<ExclusiveCommandSpec> = listOf(
         ExclusiveCommandSpec(
             id = PLAY_RADIO,
@@ -185,6 +188,16 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
                 }
             }
         }
+        // Many titles arrive a few seconds after the sound does, and a station change clears
+        // the old one, so the card is fed rather than asked.
+        titles = ctx.scope.launch {
+            player.streamTitle.collect { raw ->
+                val current = state.value
+                if (current is RadioState.Playing) {
+                    _state.value = current.copy(nowPlaying = NowPlaying.clean(raw, current.station))
+                }
+            }
+        }
     }
 
     /**
@@ -194,6 +207,8 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
     override suspend fun onStop() {
         watchdog?.cancel()
         watchdog = null
+        titles?.cancel()
+        titles = null
         reconnect?.cancel()
         reconnect = null
         player.release()

@@ -89,6 +89,7 @@ class MainActivity : ComponentActivity() {
                             val nowPlaying by connected.controller.spotify.collectAsStateWithLifecycle()
                             val artwork by connected.controller.spotifyArtwork
                                 .collectAsStateWithLifecycle()
+                            val radio by connected.controller.radio.collectAsStateWithLifecycle()
                             var settingsOpen by remember { mutableStateOf(false) }
                             var helpOpen by remember { mutableStateOf(false) }
 
@@ -117,6 +118,7 @@ class MainActivity : ComponentActivity() {
                                     onSpotifyAskWhenUnsure = {
                                         connected.controller.setSpotifyAskWhenUnsure(it)
                                     },
+                                    onRadioStation = { connected.controller.setRadioStation(it) },
                                 )
                             } else {
                                 ChatScreen(
@@ -124,6 +126,7 @@ class MainActivity : ComponentActivity() {
                                     clock = clock,
                                     nowPlaying = nowPlaying,
                                     artwork = artwork,
+                                    radio = radio,
                                     onListen = { connected.controller.listen() },
                                     onAbort = { connected.controller.stopListening() },
                                     onSettings = { settingsOpen = true },

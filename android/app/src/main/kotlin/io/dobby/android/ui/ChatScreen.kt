@@ -48,6 +48,7 @@ import io.dobby.android.chat.ChatMessage
 import android.graphics.Bitmap
 import io.dobby.android.chat.Voice
 import io.dobby.socks.clock.ClockState
+import io.dobby.socks.radio.RadioState
 import io.dobby.socks.spotify.PlayerSnapshot
 
 /**
@@ -64,6 +65,7 @@ fun ChatScreen(
     clock: ClockState,
     nowPlaying: PlayerSnapshot?,
     artwork: Bitmap?,
+    radio: RadioState,
     onListen: () -> Unit,
     onAbort: () -> Unit,
     onSettings: () -> Unit,
@@ -78,6 +80,9 @@ fun ChatScreen(
         // Drawn only while something is loaded, so a panel nobody has asked for music keeps
         // the clock at the top of the screen where it belongs (`spotify.specs.md` §7).
         NowPlayingCard(nowPlaying, artwork)
+        // Same rule, and the coordinator guarantees these two are never both drawn: only one
+        // Sock can hold the channel (`radio.specs.md` §7).
+        RadioCard(radio)
         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
         Conversation(state.messages, Modifier.weight(1f))
         Composer(state, onListen, onAbort, onHelp)

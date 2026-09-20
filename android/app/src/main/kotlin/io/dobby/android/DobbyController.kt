@@ -29,6 +29,7 @@ import io.dobby.pipeline.tts.VoiceOption
 import io.dobby.pipeline.wakeword.WakeWordOption
 import io.dobby.socks.clock.ClockState
 import io.dobby.socks.spotify.PlayerSnapshot
+import io.dobby.socks.radio.RadioConfig
 import io.dobby.socks.radio.RadioState
 import io.dobby.socks.spotify.SpotifyConfig
 import io.dobby.pipeline.VoiceIo
@@ -79,6 +80,8 @@ data class DobbyUiState(
     val spotifyMarket: String = SpotifyConfig.DEFAULT_MARKET,
     val spotifyPreferTrack: Boolean = true,
     val spotifyAskWhenUnsure: Boolean = true,
+    /** The Radio Sock's default station id (`radio.specs.md` §9), for the settings dropdown. */
+    val radioStation: String = "",
 )
 
 /**
@@ -360,6 +363,9 @@ class DobbyController(
      */
     private val spotifyConfig = SpotifyConfig(this.sockContext.config)
 
+    /** The Radio Sock's settings, read through the same store the Sock reads (§9). */
+    private val radioConfig = RadioConfig(this.sockContext.config)
+
     val state: StateFlow<DobbyUiState> =
         combine(
             pipeline.state,
@@ -389,6 +395,7 @@ class DobbyController(
                 spotifyMarket = spotifyConfig.market,
                 spotifyPreferTrack = spotifyConfig.preferTrackOverArtist,
                 spotifyAskWhenUnsure = spotifyConfig.askWhenUnsure,
+                radioStation = radioConfig.defaultStation.id,
             )
         }.stateIn(
             scope,
@@ -489,6 +496,18 @@ class DobbyController(
 
     fun setSpotifyAskWhenUnsure(ask: Boolean) {
         sockContext.config.put(SpotifyConfig.ASK_WHEN_UNSURE, ask.toString())
+        refresh.value = refresh.value + 1
+    }
+
+    /**
+     * Which station "radio an" means (`radio.specs.md` §9).
+     *
+     * Read per invocation by the Sock, so it takes effect on the next command. An id that names
+     * nothing falls back to the table's own default rather than failing — which is also what
+     * happens to a station removed from the table under a stored preference.
+     */
+    fun setRadioStation(stationId: String) {
+        sockContext.config.put(RadioConfig.DEFAULT_STATION, stationId)
         refresh.value = refresh.value + 1
     }
 
