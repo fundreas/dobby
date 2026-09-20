@@ -6,7 +6,10 @@ import io.dobby.core.sock.Example
 import io.dobby.core.sock.ExclusiveCommandSpec
 import io.dobby.core.sock.ParamSpec
 import io.dobby.core.sock.ParamType
+import io.dobby.core.sock.SharedCommands
+import io.dobby.core.sock.SharedSubscription
 import io.dobby.core.sock.Sock
+import io.dobby.core.sock.SockActivity
 import io.dobby.core.sock.SockContext
 import io.dobby.core.sock.SockResult
 import io.dobby.core.sock.patterns
@@ -137,6 +140,20 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
         ),
     )
 
+    /**
+     * Both chains (`radio.specs.md` §5, `shared-commands.specs.md` §3.3 and §4.3).
+     *
+     * 50 on `shared.stop` is a tie with Spotify that `PlaybackCoordinator` is supposed to make
+     * unreachable — only one of them can be `ACTIVE` — and is written down anyway so the
+     * ordering is deterministic if that invariant ever breaks. 40 on `shared.resume` is below
+     * Spotify's 50, because a paused song is a far likelier referent of "weiter" than a station
+     * stopped an hour ago.
+     */
+    override val shared: List<SharedSubscription> = listOf(
+        SharedSubscription(SharedCommands.STOP, priority = STOP_PRIORITY),
+        SharedSubscription(SharedCommands.RESUME, priority = RESUME_PRIORITY),
+    )
+
     override suspend fun onStart(ctx: SockContext) {
         context = ctx
     }
@@ -152,10 +169,42 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
         context = null
     }
 
+    /**
+     * Ranks this Sock in the two chains — a pure read of [state] and nothing else.
+     *
+     * No player call, no network, no config: one field off a `StateFlow`, which trivially
+     * satisfies the under-5 ms contract (`socks.specs/README.md` §4). `Buffering` counts as
+     * `ACTIVE` because somebody who says "stopp" two seconds after "radio fm4" means the thing
+     * that is currently connecting.
+     */
+    override fun activityFor(invocation: CommandInvocation): SockActivity =
+        when (invocation.commandId) {
+            // Never IDLE. A released player has nothing to stop, and claiming the command for
+            // it would starve whoever further down the chain really is running (§5).
+            SharedCommands.STOP.id -> when (state.value) {
+                is RadioState.Playing, is RadioState.Buffering -> SockActivity.ACTIVE
+                else -> SockActivity.INACTIVE
+            }
+
+            // IDLE iff a station was stopped in *this* session. `Idle(null)` — a cold service —
+            // is INACTIVE, which is what keeps 3 a.m. quiet. `Error` is INACTIVE too: a station
+            // that just failed is a poor answer to "weiter", and naming it again is four words.
+            SharedCommands.RESUME.id -> when (val current = state.value) {
+                is RadioState.Idle ->
+                    if (current.lastStation != null) SockActivity.IDLE else SockActivity.INACTIVE
+
+                else -> SockActivity.INACTIVE
+            }
+
+            else -> SockActivity.INACTIVE
+        }
+
     override suspend fun handle(invocation: CommandInvocation): SockResult =
         when (invocation.commandId) {
             PLAY_RADIO -> playRadio(invocation)
             STOP_RADIO -> stopRadio()
+            SharedCommands.STOP.id -> stopChain()
+            SharedCommands.RESUME.id -> resumeChain()
             // Unreachable in practice: the dispatcher only routes commands this Sock owns.
             else -> SockResult.NotForMe
         }
@@ -210,6 +259,33 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
     }
 
     /**
+     * `shared.stop` — a bare "stopp" that turned out to mean the radio.
+     *
+     * The state check repeats [activityFor] rather than trusting it, because a Sock that
+     * reported anything but `ACTIVE` must pass the command on **without performing I/O**, and
+     * that rule is easier to keep when the guard sits next to the I/O it guards.
+     */
+    private suspend fun stopChain(): SockResult {
+        val current = state.value
+        if (current !is RadioState.Playing && current !is RadioState.Buffering) {
+            return SockResult.NotForMe
+        }
+        release(remember = true)
+        return SockResult.Silent
+    }
+
+    /**
+     * `shared.resume` — a bare "weiter" that reached this far down the chain.
+     *
+     * **Speaks**, unlike Spotify's silent resume, and the spec says why: a radio stream takes a
+     * second to buffer, and silence would read as a no-op.
+     */
+    private suspend fun resumeChain(): SockResult {
+        val last = (state.value as? RadioState.Idle)?.lastStation ?: return SockResult.NotForMe
+        return tuneTo(last, RadioConfig(started().config))
+    }
+
+    /**
      * Stops the stream and gives the channel back.
      *
      * @param remember whether the station survives in [RadioState.Idle], which is what
@@ -235,6 +311,12 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
     companion object {
         const val PLAY_RADIO: String = "radio.play_radio"
         const val STOP_RADIO: String = "radio.stop_radio"
+
+        /** Tied with Spotify on `shared.stop`, behind the Clock's 100 (§5). */
+        const val STOP_PRIORITY: Int = 50
+
+        /** Behind Spotify's 50 on `shared.resume` (§5). */
+        const val RESUME_PRIORITY: Int = 40
 
         /** German copy, verbatim from the spec (§3). */
         const val UNKNOWN_STATION: String = "Den Sender kenne ich nicht."

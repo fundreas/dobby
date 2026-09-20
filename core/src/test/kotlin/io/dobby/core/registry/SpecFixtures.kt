@@ -74,6 +74,17 @@ object SpecFixtures {
         handler = { SockResult.Silent },
     )
 
+    /**
+     * Radio is built (`io.dobby.socks.radio.RadioSock`), and this stays for the same reason
+     * [clock] does: `:core` cannot depend on a Sock module, so the fixture is how Radio stays
+     * in the cross-Sock collision matrix — which is where the "spiele radio fm4" must not be
+     * Spotify" regression lives.
+     *
+     * The **templates** are copied verbatim, character for character, because they are what the
+     * matrix tests. The one-line descriptions are not: they feed the Tier 2 prompt goldens in
+     * this same module, which have no business re-recording themselves every time a Sock
+     * rewords its help text. If the templates drift apart, this file is the one that is wrong.
+     */
     fun radio(): Sock = FixtureSock(
         id = "radio",
         commands = listOf(
@@ -81,11 +92,13 @@ object SpecFixtures {
                 id = "radio.play_radio",
                 params = listOf(ParamSpec("station", text, required = false, default = "")),
                 templates = patterns(
+                    "(spiele|spiel|mach|schalt|schalte) (den)? (sender|radiosender) {station} (an|ein)",
+                    "(spiele|spiel|mach|schalt|schalte) (das|den)? radio {station} (an|ein)",
+                    "(spiele|spiel|mach|schalt|schalte) (den)? (sender|radiosender) {station}",
+                    "(spiele|spiel|mach|schalt|schalte) (das|den)? radio {station}",
                     "(spiele|spiel|mach|schalt|schalte) (das|den)? radio (an|ein)?",
-                    "(spiele|spiel|mach|schalt|schalte) (den)? (sender|radiosender) {station}( an| ein)?",
-                    "(spiele|spiel|mach|schalt|schalte) (das|den)? radio {station}( an| ein)?",
-                    "radio (an|ein)?",
                     "radio {station}",
+                    "radio (an|ein)?",
                 ),
                 description = "Spielt einen Radiosender ab.",
             ),

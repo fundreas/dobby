@@ -94,10 +94,13 @@ class IntrospectionTest {
         // Clock's chime phrasings are marked, so it is visible that they are not catalog-level.
         assertTrue(stop.templates.any { it.contains("(+clock)") }, stop.templates.toString())
 
+        // Exact, not `contains`: since M4 the fixture also carries
+        // "… radio {station} (an|ein)", a *closed* template that a substring probe for
+        // "radio {station}" would find first and read as the open one.
         val radio = introspection.command("radio.play_radio")!!
-        val closed = radio.templates.indexOfFirst { it.contains("radio (an|ein)?") }
-        val open = radio.templates.indexOfFirst { it.contains("radio {station}") }
-        assertTrue(closed < open, "listing must reflect the real match order: $radio")
+        val closed = radio.templates.indexOf("radio (an|ein)?")
+        val open = radio.templates.indexOf("radio {station}")
+        assertTrue(closed in 0..<open, "listing must reflect the real match order: $radio")
     }
 
     @Test
