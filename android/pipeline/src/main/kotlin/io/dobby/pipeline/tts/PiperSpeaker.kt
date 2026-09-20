@@ -167,7 +167,11 @@ class PiperSpeaker(
             output.play()
             // One callback per sentence, because maxNumSentences is 1. Returning 0 is how the
             // native side is told to stop, and it is the only way out of a long answer.
-            engine.generateWithCallback(text) { samples ->
+            //
+            // A [SynthesisCallback] and **never** a lambda here: the JNI resolves this object's
+            // `invoke([F)Ljava/lang/Integer;` by name, an indy lambda does not have one, and the
+            // native side aborts the process rather than reporting it. See that class.
+            val sink = SynthesisCallback { samples ->
                 if (stopped) {
                     0
                 } else {
@@ -175,10 +179,18 @@ class PiperSpeaker(
                     1
                 }
             }
+            engine.generateWithCallback(text, callback = sink)
             if (!stopped) drain(output, frames, rate)
         } catch (e: RuntimeException) {
             // sherpa-onnx reports anything it cannot synthesise as a plain runtime exception
             // from JNI. One sentence in the fallback voice beats a crashed service.
+            return false
+        } catch (e: LinkageError) {
+            // A missing native symbol on a device whose .so is not the one this was built
+            // against. Not what took M2c's first cut down — that abort happens inside the JNI
+            // and no Kotlin catch can see it — but the same class of problem, and the same
+            // right answer: give this voice up rather than the service.
+            loadFailed = true
             return false
         } finally {
             track = null

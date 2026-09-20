@@ -41,7 +41,7 @@ Not yet built: the LLM tier, the remaining Socks (Spotify, Radio, System, Depart
 ## Run it
 
 ```sh
-./gradlew build                      # 488 tests, all JVM, no emulator
+./gradlew build                      # 491 tests, all JVM, no emulator
 ./gradlew :cli:run -q                # the terminal harness
 ./gradlew :android:app:installDebug  # the phone
 ```
@@ -235,7 +235,7 @@ own few-shots.
 
 ## What the tests cover
 
-All 488 tests are plain JVM tests. Nothing needs an emulator, including the wake word.
+All 491 tests are plain JVM tests. Nothing needs an emulator, including the wake word.
 
 - `GermanNumbersTest`, `NormalizerTest` — German cardinals, and why `ein` is left alone while `eins` is not.
 - `TemplateParserTest`, `TemplateMatcherTest`, `SpecificityTest` — the DSL, backtracking, fuzzy tolerance, palette ordering.
@@ -250,6 +250,7 @@ All 488 tests are plain JVM tests. Nothing needs an emulator, including the wake
 - **`TranscriptTest`** — *(Phase B)* the chat model's awkward parts: a live bubble becoming a transcript in place, an answer replacing a bubble nobody filled, bounded scrollback for a panel that runs for weeks.
 - **`CaptureBufferTest`** — *(STT)* the arithmetic between the microphone and the recogniser: 16-bit PCM landing inside −1..1, only the requested samples converted, and the 10 s cap truncating inside a frame rather than overrunning it. Neither half can fail loudly — a scale mistake is a recogniser that works and is quietly worse.
 - **`VoiceCatalogueTest`** — *(M2c)* the voices settings offers: every file pinned by size and lowercase checksum, every Hugging Face URL pinned to a revision rather than a branch, ids unique and stable because they are what settings stores, an unknown id falling back to Thorsten instead of throwing, and Cori's row saying out loud that she reads German with English phonemes. Plus the naming of a sideloaded directory, which is the only thing that decides what a pushed voice is called on screen.
+- **`SynthesisCallbackTest`** — *(M2c)* one method descriptor, asserted reflectively. sherpa-onnx's TTS JNI resolves the per-sentence callback by hand — `GetMethodID(cls, "invoke", "([F)Ljava/lang/Integer;")` — and does not check for a pending exception afterwards, so an object without that exact method aborts the process instead of throwing. A Kotlin lambda compiles through `invokedynamic` and does not have it; that is what took the first cut of M2c down on the phone, as a `SIGABRT` no `catch` could see. The fix is one class, and the thing that would silently undo it is a Kotlin version bump — which is why the check is a JVM test and not a device.
 - **`EspeakDataTest`** — *(M2c)* the stamp that decides whether 18 MB of phoneme data is copied again: missing, matching, stale and unreadable. And both pins asserted against literals, because the same two numbers live in the build file and a bump that changes one without the other is a device that either re-copies 355 files on every start or trusts a directory it has not seen.
 - **`PiperVoiceDeviceTest`** — *(M2c, instrumented)* every voice on the device, synthesising the sentences Dobby actually says — a German time, a calculation read back, a three-sentence Help answer, a departures line, an English title in a German sentence. It asserts what cannot throw: a graph loaded with the wrong token table or a phoneme directory that copied 300 of 355 files produces *silence*, not an exception. It is also the instrument: load time, first-chunk latency, real-time factor and RSS go to logcat under `DobbyVoice` and into `m2c-plan.md`'s *Measured* table. Skips itself when no voice is on the device.
 - **`SpeechModelsTest`** — *(STT)* the first-run download as the person waiting on it sees it: every file pinned by size and checksum, Hugging Face URLs pinned to a revision rather than a branch, and a percentage weighted by bytes so it never stalls and never jumps back.
