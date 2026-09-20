@@ -53,6 +53,9 @@ class DobbyService : Service() {
     /** Same rule for the App Remote: whoever opens a Binder connection closes it. */
     private var spotifyHardware: SpotifyHardware? = null
 
+    /** `AudioManager` for the System Sock. Nothing to release — it is a system service. */
+    private var systemHardware: SystemHardware? = null
+
     /** The local model, once it has loaded. Null on every device and every path that cannot. */
     private var tier2: LlamaTier2? = null
 
@@ -107,6 +110,7 @@ class DobbyService : Service() {
         // command (`spotify.specs.md` §3). A panel that has not been asked for music should
         // not be holding a Binder connection into another app.
         spotifyHardware = SpotifyHardware(this, scope)
+        systemHardware = SystemHardware(this)
         val settings = Settings(this)
         val resolver = buildTier2(settings)
         controller = DobbyController(
@@ -122,6 +126,7 @@ class DobbyService : Service() {
             sockContext = { announce -> AndroidSockContext(this, scope, announce) },
             hardware = clockHardware,
             spotifyHardware = spotifyHardware,
+            systemHardware = systemHardware,
             settings = settings,
             tier2Resolver = resolver,
             // The mode is read per turn rather than captured, so a change to the setting
@@ -169,7 +174,9 @@ class DobbyService : Service() {
             return null
         }
 
-        val build = SockRegistry.build(DobbySocks.create(clockHardware, spotifyHardware).socks)
+        val build = SockRegistry.build(
+            DobbySocks.create(clockHardware, spotifyHardware, systemHardware).socks,
+        )
         val registry = build.registry ?: return null
         val program = Tier2Program.ofOrNull(registry, Introspection(registry)) { Log.w(TAG, it) }
             ?: return null

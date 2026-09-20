@@ -11,6 +11,8 @@ import io.dobby.socks.spotify.SpotifyCredentials
 import io.dobby.socks.spotify.SpotifyPlayer
 import io.dobby.socks.spotify.SpotifySock
 import io.dobby.socks.spotify.IntentFallback
+import io.dobby.socks.system.SystemSock
+import io.dobby.socks.system.VolumeControl
 
 /**
  * The one place that knows which Socks exist.
@@ -46,8 +48,14 @@ object DobbySocks {
      * @param spotify the App Remote and the Web API search. Null off-device, where the Sock
      *   reports `Unavailable` and fails every command with the spoken line from its spec —
      *   which keeps the palette complete and the utterance tables assertable with no device.
+     * @param system `AudioManager`. Null off-device, same bargain as the two above: the System
+     *   Sock is `Unavailable`, every template still compiles and every utterance still routes.
      */
-    fun create(hardware: ClockHardware? = null, spotify: SpotifyHardware? = null): Wiring {
+    fun create(
+        hardware: ClockHardware? = null,
+        spotify: SpotifyHardware? = null,
+        system: SystemHardware? = null,
+    ): Wiring {
         var directory: Introspection? = null
         val clock = if (hardware == null) {
             ClockSock()
@@ -63,6 +71,7 @@ object DobbySocks {
         val socks = buildList {
             add(clock)
             add(music)
+            add(SystemSock(system?.volume ?: VolumeControl.NONE))
             add(CalculatorSock())
             add(ConversationSock())
             add(HelpSock { directory })

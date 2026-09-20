@@ -42,6 +42,7 @@ include(":socks:calculator")
 include(":socks:help")
 include(":socks:conversation")
 include(":socks:spotify")
+include(":socks:system")
 include(":cli")
 
 // Phase B — everything that only exists on the device.

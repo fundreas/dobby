@@ -11,6 +11,7 @@ dependencies {
     implementation(project(":socks:help"))
     implementation(project(":socks:conversation"))
     implementation(project(":socks:spotify"))
+    implementation(project(":socks:system"))
 }
 
 application {
