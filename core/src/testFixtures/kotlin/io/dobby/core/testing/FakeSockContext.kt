@@ -1,5 +1,6 @@
 package io.dobby.core.testing
 
+import io.dobby.core.sock.FocusLoss
 import io.dobby.core.sock.PlaybackCoordinator
 import io.dobby.core.sock.ScreenController
 import io.dobby.core.sock.SockConfigStore
@@ -73,9 +74,27 @@ class FakePlaybackCoordinator : PlaybackCoordinator {
 
     val transientRequests: MutableList<String> = mutableListOf()
 
-    override suspend fun requestFocus(sockId: String): Boolean {
+    /** The holder's loss callback, if it asked for one. One slot, because there is one claim. */
+    private var onLost: (suspend (FocusLoss) -> Unit)? = null
+
+    /**
+     * Drives the loss path by hand, which is the only way to reach it without a device.
+     *
+     * `coordinator.loseFocus(FocusLoss.SYSTEM)` is an incoming phone call;
+     * [FocusLoss.EVICTED] arrives by itself when another sock id claims.
+     */
+    suspend fun loseFocus(reason: FocusLoss) {
+        val previous = onLost
+        onLost = null
+        holder = null
+        previous?.invoke(reason)
+    }
+
+    override suspend fun requestFocus(sockId: String, onLost: (suspend (FocusLoss) -> Unit)?): Boolean {
+        evict(sockId)
         if (!grantFocus) return false
         holder = sockId
+        this.onLost = onLost
         return true
     }
 
@@ -90,17 +109,30 @@ class FakePlaybackCoordinator : PlaybackCoordinator {
     var externalHolder: String? = null
         private set
 
-    override suspend fun claimExternal(sockId: String): Boolean {
+    override suspend fun claimExternal(sockId: String, onLost: (suspend (FocusLoss) -> Unit)?): Boolean {
+        evict(sockId)
         if (!grantFocus) return false
         holder = sockId
         externalHolder = sockId
+        this.onLost = onLost
         return true
     }
 
     override suspend fun releaseFocus(sockId: String) {
-        if (holder == sockId) holder = null
+        if (holder == sockId) {
+            holder = null
+            onLost = null
+        }
         if (duckedBy == sockId) duckedBy = null
         if (externalHolder == sockId) externalHolder = null
+    }
+
+    /** The same rule the Android coordinator applies: a re-claim by the holder is not a loss. */
+    private suspend fun evict(sockId: String) {
+        if (holder == null || holder == sockId) return
+        val previous = onLost
+        onLost = null
+        previous?.invoke(FocusLoss.EVICTED)
     }
 }
 

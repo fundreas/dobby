@@ -1,5 +1,6 @@
 package io.dobby.cli
 
+import io.dobby.core.sock.FocusLoss
 import io.dobby.core.sock.PlaybackCoordinator
 import io.dobby.core.sock.ScreenController
 import io.dobby.core.sock.SockConfigStore
@@ -43,20 +44,36 @@ private class ConsolePlayback : PlaybackCoordinator {
     override var holder: String? = null
         private set
 
-    override suspend fun requestFocus(sockId: String): Boolean {
+    /** The holder's loss callback. Kept so the terminal really does evict, as the device does. */
+    private var onLost: (suspend (FocusLoss) -> Unit)? = null
+
+    override suspend fun requestFocus(sockId: String, onLost: (suspend (FocusLoss) -> Unit)?): Boolean {
+        evict(sockId)
         holder = sockId
+        this.onLost = onLost
         return true
     }
 
     override suspend fun requestTransientFocus(sockId: String): Boolean = true
 
-    override suspend fun claimExternal(sockId: String): Boolean {
+    override suspend fun claimExternal(sockId: String, onLost: (suspend (FocusLoss) -> Unit)?): Boolean {
+        evict(sockId)
         holder = sockId
+        this.onLost = onLost
         return true
     }
 
     override suspend fun releaseFocus(sockId: String) {
-        if (holder == sockId) holder = null
+        if (holder != sockId) return
+        holder = null
+        onLost = null
+    }
+
+    private suspend fun evict(sockId: String) {
+        if (holder == null || holder == sockId) return
+        val previous = onLost
+        onLost = null
+        previous?.invoke(FocusLoss.EVICTED)
     }
 }
 

@@ -7,12 +7,14 @@ import android.media.AudioManager
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.content.edit
+import io.dobby.core.sock.FocusLoss
 import io.dobby.core.sock.PlaybackCoordinator
 import io.dobby.core.sock.ScreenController
 import io.dobby.core.sock.SockConfigStore
 import io.dobby.core.sock.SockContext
 import io.dobby.core.sock.SockLog
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 /**
  * The Phase B half of `SockContext`.
@@ -29,7 +31,7 @@ class AndroidSockContext(
 
     private val appContext = context.applicationContext
 
-    override val playback: PlaybackCoordinator = AndroidPlayback(appContext)
+    override val playback: PlaybackCoordinator = AndroidPlayback(appContext, scope)
 
     override val screen: ScreenController = AndroidScreen(appContext)
 
@@ -49,10 +51,33 @@ class AndroidSockContext(
  * which is Spotify: the App Remote only tells `com.spotify.music` to play, and that process
  * holds its own focus. Asking for GAIN on Dobby's behalf there would send `AUDIOFOCUS_LOSS` to
  * Spotify — stopping the music one instant before asking it to start (`spotify.specs.md` §3).
+ *
+ * **Losing the channel is a callback** (`radio-plan.md` §A2). One optional `onLost` slot,
+ * because the coordinator holds exactly one claim, invoked from two places: [evict], when
+ * another Sock takes the channel, and the focus listener on the request built in [grant], when
+ * another app does. Without it the arbitration is one-way — starting Spotify over the radio
+ * would leave Dobby's own ExoPlayer streaming, because the request it would have lost was
+ * abandoned a line earlier and carried no listener anyway.
  */
-private class AndroidPlayback(context: Context) : PlaybackCoordinator {
+private class AndroidPlayback(context: Context, private val scope: CoroutineScope) : PlaybackCoordinator {
     private val audio = context.getSystemService(AudioManager::class.java)
     private var request: AudioFocusRequest? = null
+
+    /** The current holder's loss callback, if it wanted one. One slot, one claim. */
+    private var onLost: (suspend (FocusLoss) -> Unit)? = null
+
+    /**
+     * The transient claim, which is a **second** slot and not the standing one.
+     *
+     * A duck is not a change of holder — that is the whole difference between ducking and
+     * stopping, and `FakePlaybackCoordinator` has said so since Phase A. Folding the Clock's
+     * chime into [request] was harmless while nothing listened for a loss; with [onLost] in the
+     * picture it would hand Radio's callback to the chime and release it two seconds later.
+     * The row this protects is a timer ringing over the radio: the chime stops, the stream does
+     * not (`shared-commands.specs.md` §3.4, `radio-plan.md` §K3 row 7).
+     */
+    private var transient: AudioFocusRequest? = null
+    private var transientHolder: String? = null
 
     /**
      * Whether the current claim was an external one, so [releaseFocus] does the right one of
@@ -64,10 +89,18 @@ private class AndroidPlayback(context: Context) : PlaybackCoordinator {
     override var holder: String? = null
         private set
 
-    override suspend fun requestFocus(sockId: String): Boolean = grant(sockId, AudioManager.AUDIOFOCUS_GAIN)
+    override suspend fun requestFocus(sockId: String, onLost: (suspend (FocusLoss) -> Unit)?): Boolean =
+        grant(sockId, onLost)
 
-    override suspend fun requestTransientFocus(sockId: String): Boolean =
-        grant(sockId, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+    override suspend fun requestTransientFocus(sockId: String): Boolean {
+        transient?.let { audio.abandonAudioFocusRequest(it) }
+        val next = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+            .setAudioAttributes(mediaAttributes())
+            .build()
+        transient = next
+        transientHolder = sockId
+        return audio.requestAudioFocus(next) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+    }
 
     /**
      * Bookkeeping, and deliberately nothing else.
@@ -76,38 +109,84 @@ private class AndroidPlayback(context: Context) : PlaybackCoordinator {
      * leaving Radio's GAIN standing while Spotify plays would make [holder] and the OS
      * disagree. Always granted — there is nothing that could refuse it.
      */
-    override suspend fun claimExternal(sockId: String): Boolean {
+    override suspend fun claimExternal(sockId: String, onLost: (suspend (FocusLoss) -> Unit)?): Boolean {
+        evict(sockId)
         request?.let { audio.abandonAudioFocusRequest(it) }
         request = null
         external = true
         holder = sockId
+        this.onLost = onLost
         return true
     }
 
     override suspend fun releaseFocus(sockId: String) {
+        if (transientHolder == sockId) {
+            transient?.let { audio.abandonAudioFocusRequest(it) }
+            transient = null
+            transientHolder = null
+        }
         if (holder != sockId) return
         // Nothing to abandon for an external claim — nothing was ever requested.
         if (!external) request?.let { audio.abandonAudioFocusRequest(it) }
         request = null
         external = false
         holder = null
+        onLost = null
     }
 
-    private fun grant(sockId: String, durationHint: Int): Boolean {
+    private suspend fun grant(sockId: String, onLost: (suspend (FocusLoss) -> Unit)?): Boolean {
+        evict(sockId)
         request?.let { audio.abandonAudioFocusRequest(it) }
         external = false
-        val next = AudioFocusRequest.Builder(durationHint)
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                    .build(),
-            )
+        val next = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+            .setAudioAttributes(mediaAttributes())
+            .setOnAudioFocusChangeListener { change ->
+                // Permanent loss only. A transient loss is either AndroidTurnAudio ducking us
+                // for our own turn — which InProcessPlayers already handles, at a volume rather
+                // than a stop — or somebody else's nav prompt, which is over before a reconnect
+                // would finish. Stopping a stream for either is worse than riding it out, and
+                // filtering here makes "does the OS deliver in-app focus changes" moot: neither
+                // turn mode can produce a permanent loss, so a turn can never look like one.
+                if (change == AudioManager.AUDIOFOCUS_LOSS) notifyLost(FocusLoss.SYSTEM)
+            }
             .build()
         request = next
         val granted = audio.requestAudioFocus(next) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         holder = if (granted) sockId else null
+        this.onLost = if (granted) onLost else null
         return granted
+    }
+
+    private fun mediaAttributes(): AudioAttributes = AudioAttributes.Builder()
+        .setUsage(AudioAttributes.USAGE_MEDIA)
+        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+        .build()
+
+    /**
+     * Tells the standing holder the channel is gone, unless it is the one asking.
+     *
+     * The same sock id claiming twice is a re-tune — "radio ö3" over FM4 — and a callback there
+     * would release the player the Sock is one line away from handing a new URL.
+     */
+    private suspend fun evict(sockId: String) {
+        if (holder == null || holder == sockId) return
+        val previous = onLost
+        onLost = null
+        previous?.invoke(FocusLoss.EVICTED)
+    }
+
+    /**
+     * The system's half, from the focus listener — which is not a coroutine and never will be.
+     *
+     * Launched on the context's scope rather than blocked on: the listener runs on the main
+     * looper, and a Sock releasing an ExoPlayer from underneath it must not stall the thread
+     * that delivers focus changes to the rest of the app.
+     */
+    private fun notifyLost(reason: FocusLoss) {
+        val previous = onLost ?: return
+        onLost = null
+        holder = null
+        scope.launch { previous.invoke(reason) }
     }
 }
 
