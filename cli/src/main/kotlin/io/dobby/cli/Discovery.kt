@@ -68,7 +68,7 @@ class Discovery(private val introspection: Introspection) {
                 appendLine()
                 val marker = if (command.kind == CommandKind.SHARED) "  [chain] " else "  "
                 appendLine("$marker${command.signature}")
-                appendLine("      ${command.description}")
+                appendLine("      ${command.title} — ${command.detail}")
                 if (command.kind == CommandKind.SHARED) {
                     appendLine("      ${chainOf(command)}")
                 }
@@ -79,6 +79,10 @@ class Discovery(private val introspection: Introspection) {
                 appendLine("      say:")
                 command.examples.ifEmpty { listOf("(no examples declared)") }
                     .forEach { appendLine("        \"$it\"") }
+                command.hints.forEach { appendLine("      note: $it") }
+                // The same rendering the panel's help screen draws, from the same grammar.
+                appendLine("      syntax:")
+                command.syntax.forEach { appendLine("        $it") }
                 appendLine("      templates (match order):")
                 command.templates.forEach { appendLine("        $it") }
             }

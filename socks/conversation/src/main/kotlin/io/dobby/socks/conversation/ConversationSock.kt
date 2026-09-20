@@ -1,5 +1,6 @@
 package io.dobby.socks.conversation
 
+import io.dobby.core.sock.CommandHelp
 import io.dobby.core.sock.CommandInvocation
 import io.dobby.core.sock.Example
 import io.dobby.core.sock.ExclusiveCommandSpec
@@ -49,6 +50,13 @@ class ConversationSock : Sock {
                 "(schon gut|passt schon|passt so|lass gut sein)",
             ),
             description = "Beendet das Gespräch, ohne sonst etwas zu tun.",
+            help = CommandHelp(
+                title = "Gespräch beenden",
+                detail = "Nach einem Befehl bleibt das Mikrofon ein paar Sekunden offen, weil " +
+                    "meistens noch etwas kommt. Das hier sagt: es kommt nichts mehr. Ich " +
+                    "antworte nicht, ich höre auf zuzuhören.",
+                aliases = listOf("gespräch beenden", "danke", "ok"),
+            ),
             examples = listOf(
                 Example("ok"),
                 Example("okay"),

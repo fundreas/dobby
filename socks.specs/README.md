@@ -167,6 +167,36 @@ Two consequences for how you write a template:
 
 **Exhaustiveness matters.** The registry test asserts no two Socks match the same utterance *for different commands*, so a spec that under-lists its utterances hides a collision until runtime. Templates contributed to the same `shared.*` id are exempt — that overlap is the design.
 
+## 6a. Explaining a command
+
+`description` is written for the Tier 2 prompt: one German line, rendered as a tool definition and paid for by the token. It is not an explanation for a person, and the panel's help screen and `help.explain_command` both need one. That is `CommandHelp`, declared beside the command:
+
+```kotlin
+ExclusiveCommandSpec(
+    id = SET_TIMER,
+    templates = patterns(…),
+    description = "Stellt einen Timer für eine bestimmte Dauer, auf Wunsch unter einem Namen.",
+    help = CommandHelp(
+        title = "Timer stellen",
+        detail = "Stellt einen Küchentimer. Mehrere gleichzeitig sind erlaubt — dann lohnt " +
+            "sich ein Name, damit du den richtigen wieder abbrechen kannst.",
+        hints = listOf("Ohne Einheit frage ich nach: Sekunden, Minuten oder Stunden?"),
+        aliases = listOf("timer", "wecker", "timer stellen"),
+    ),
+)
+```
+
+| Field | For | Notes |
+|---|---|---|
+| `title` | heading, and the name `help.explain_command` resolves | short German noun phrase; falls back to the command id |
+| `detail` | the help screen and the spoken explanation | falls back to `description` |
+| `hints` | what is optional, what happens when something is missing | the screen shows all; **only the first is spoken** |
+| `aliases` | resolution only | what somebody might call this command instead |
+
+**What is not in it is the usage line.** That is derived from the templates by `Syntax` — `stell [einen] timer auf <amount> <unit>`, with `( )` an alternation, `[ ]` optional and `< >` a slot — because a usage line written by hand is a second copy of the grammar that nothing keeps honest, and the first phrasing somebody deletes turns it into a promise that does not work. An author writes the German prose; the machine writes the syntax.
+
+`help` is optional. A command without it still appears everywhere, under a title derived from its id and with its `description` as the detail — and reads like what it is, which is the incentive to write one.
+
 ## 7. Writing a spec file
 
 Every `<sockId>.specs.md` has these sections, in this order:
@@ -194,7 +224,7 @@ Keep German user-facing strings **in the spec**, verbatim. They are product copy
 
 | Sock | Spec | Exclusive commands | Chains | Milestone |
 |---|---|---|---|---|
-| **Help** ✅ | [help.specs.md](help.specs.md) | `overview`, `sock_commands` | — | M1 |
+| **Help** ✅ | [help.specs.md](help.specs.md) | `overview`, `sock_commands`, `explain_command` | — | M1 |
 | **Spotify** ✅ | [spotify.specs.md](spotify.specs.md) | `play_music`, `pause`, `resume`, `skip_next`, `skip_previous`, `restart_song` | `shared.stop`, `shared.resume` | M1 |
 | **Clock** ✅ | [clock.specs.md](clock.specs.md) | `set_timer`, `cancel_timer`, `cancel_all_timers`, `timer_remaining`, `whats_the_time` | `shared.stop` | M3 |
 | **Conversation** ✅ | [conversation.specs.md](conversation.specs.md) | `dismiss` | — | M2b |

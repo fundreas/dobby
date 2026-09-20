@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
@@ -64,6 +65,7 @@ fun ChatScreen(
     artwork: Bitmap?,
     onListen: () -> Unit,
     onSettings: () -> Unit,
+    onHelp: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -76,7 +78,7 @@ fun ChatScreen(
         NowPlayingCard(nowPlaying, artwork)
         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
         Conversation(state.messages, Modifier.weight(1f))
-        Composer(state, onListen)
+        Composer(state, onListen, onHelp)
     }
 }
 
@@ -232,7 +234,7 @@ private fun Bubble(message: ChatMessage) {
 }
 
 @Composable
-private fun Composer(state: DobbyUiState, onListen: () -> Unit) {
+private fun Composer(state: DobbyUiState, onListen: () -> Unit, onHelp: () -> Unit) {
     val busy = state.phase == Phase.LISTENING || state.phase == Phase.THINKING
     val armed = state.phase == Phase.LISTENING
 
@@ -262,6 +264,17 @@ private fun Composer(state: DobbyUiState, onListen: () -> Unit) {
                 Icons.Filled.Mic,
                 contentDescription = "Zuhören",
                 modifier = Modifier.size(32.dp),
+            )
+        }
+
+        // Beside it rather than in the header: "what can I say" is a question somebody has
+        // while standing in front of the microphone, with their hand already here.
+        IconButton(onClick = onHelp, modifier = Modifier.size(72.dp)) {
+            Icon(
+                Icons.AutoMirrored.Filled.HelpOutline,
+                contentDescription = "Hilfe",
+                modifier = Modifier.size(28.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }

@@ -90,8 +90,16 @@ class MainActivity : ComponentActivity() {
                             val artwork by connected.controller.spotifyArtwork
                                 .collectAsStateWithLifecycle()
                             var settingsOpen by remember { mutableStateOf(false) }
+                            var helpOpen by remember { mutableStateOf(false) }
 
-                            if (settingsOpen) {
+                            if (helpOpen) {
+                                // The same directory the Help Sock answers out of, so the
+                                // screen and the voice cannot disagree (`help.specs.md` §8).
+                                HelpScreen(
+                                    introspection = connected.controller.introspection,
+                                    onBack = { helpOpen = false },
+                                )
+                            } else if (settingsOpen) {
                                 BackHandler { settingsOpen = false }
                                 SettingsScreen(
                                     state = state,
@@ -118,6 +126,7 @@ class MainActivity : ComponentActivity() {
                                     artwork = artwork,
                                     onListen = { connected.controller.listen() },
                                     onSettings = { settingsOpen = true },
+                                    onHelp = { helpOpen = true },
                                 )
                             }
                         }

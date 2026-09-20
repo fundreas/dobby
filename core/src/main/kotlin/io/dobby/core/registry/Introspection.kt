@@ -2,6 +2,7 @@ package io.dobby.core.registry
 
 import io.dobby.core.dispatch.SockHealth
 import io.dobby.core.nlu.template.KeywordMatcher
+import io.dobby.core.nlu.template.Syntax
 import io.dobby.core.sock.CommandSpec
 import io.dobby.core.sock.Example
 import io.dobby.core.sock.ExclusiveCommandSpec
@@ -134,6 +135,11 @@ class Introspection(
 
     private fun describe(command: CommandSpec): CommandInfo {
         val subscribers = registry.chainFor(command.id)?.subscribers.orEmpty()
+        val entries = registry.palette.entries.filter { it.command.id == command.id }
+        // Only what Tier 1 actually matches. Spoken help is a promise — "say this and it
+        // will work" — so neither a few-shot nor a held-out case belongs in it, and
+        // [Example.tier2Only] is the one question that covers both.
+        val sayable = command.examples.filterNot { it.tier2Only }.map { it.utterance }
         return CommandInfo(
             id = command.id,
             kind = when (command) {
@@ -144,18 +150,28 @@ class Introspection(
             params = command.params.map { describe(it) },
             // Match order, so the listing doubles as an explanation of why an utterance routed
             // the way it did.
-            templates = registry.palette.entries
-                .filter { it.command.id == command.id }
+            templates = entries
                 .map { entry -> entry.contributedBy?.let { "${entry.template.source}  (+$it)" } ?: entry.template.source },
-            // Only what Tier 1 actually matches. Spoken help is a promise — "say this and it
-            // will work" — so neither a few-shot nor a held-out case belongs in it, and
-            // [Example.tier2Only] is the one question that covers both.
-            examples = command.examples.filterNot { it.tier2Only }.map { it.utterance },
+            examples = sayable,
+            title = command.help?.title ?: titleOf(command.id),
+            detail = command.help?.detail ?: command.description,
+            // Derived from the grammar rather than written down beside it, so it cannot drift
+            // away from what the matcher will actually accept.
+            syntax = entries.map { Syntax.of(it.template, MAX_SYNTAX_OPTIONS) }.distinct(),
+            // What to say, in one line: a declared Tier 1 example if there is one — it is real
+            // German — and otherwise the shortest path through the first template.
+            usage = sayable.firstOrNull() ?: entries.firstOrNull()?.let { Syntax.spoken(it.template) },
+            hints = command.help?.hints.orEmpty(),
+            aliases = command.help?.aliases.orEmpty(),
             ownerSockId = registry.ownerOf(command.id)?.id,
             subscribers = subscribers.map { SubscriberInfo(it.sock.id, it.subscription.priority) }
                 .sortedByDescending { it.priority },
         )
     }
+
+    /** `clock.set_timer` → "Set timer", for a command whose author declared no [CommandHelp]. */
+    private fun titleOf(commandId: String): String =
+        commandId.substringAfter('.').replace('_', ' ').replaceFirstChar { it.uppercase() }
 
     private fun describe(param: ParamSpec) = ParamInfo(
         name = param.name,
@@ -168,6 +184,9 @@ class Introspection(
         default = param.default,
     )
 }
+
+/** How many branches of one alternation a rendered syntax line shows before "…". */
+private const val MAX_SYNTAX_OPTIONS = 4
 
 enum class CommandKind { EXCLUSIVE, SHARED }
 
@@ -210,6 +229,14 @@ data class SubscriberInfo(val sockId: String, val priority: Int)
 
 data class ChainMembership(val commandId: String, val priority: Int)
 
+/**
+ * One command, as a person and a program both need to see it.
+ *
+ * The bottom half — [title] through [aliases] — is the explanation the help screen draws and
+ * "erkläre das Kommando …" speaks. It is one structure with one source: whatever the Sock
+ * declared in [io.dobby.core.sock.CommandHelp], plus a usage line derived from the grammar,
+ * so the two surfaces cannot tell different stories about the same command.
+ */
 data class CommandInfo(
     val id: String,
     val kind: CommandKind,
@@ -223,6 +250,18 @@ data class CommandInfo(
     val ownerSockId: String?,
     /** Chain members in ranking order. Empty for an exclusive command. */
     val subscribers: List<SubscriberInfo>,
+    /** Short German name: "Timer stellen". Falls back to the command id when none was declared. */
+    val title: String = "",
+    /** German prose for a person; the Sock's [io.dobby.core.sock.CommandHelp.detail] or its description. */
+    val detail: String = description,
+    /** Every phrasing, rendered from the grammar: `stell [einen] timer auf <amount> <unit>`. */
+    val syntax: List<String> = emptyList(),
+    /** One line somebody can repeat out loud, or null for a command with neither example nor template. */
+    val usage: String? = null,
+    /** German notes: what is optional, what happens when something is left out. */
+    val hints: List<String> = emptyList(),
+    /** Other names this command answers to when somebody asks about it. */
+    val aliases: List<String> = emptyList(),
 ) {
     val signature: String
         get() = if (params.isEmpty()) id else "$id(${params.joinToString(", ")})"

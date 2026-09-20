@@ -1,5 +1,6 @@
 package io.dobby.socks.spotify
 
+import io.dobby.core.sock.CommandHelp
 import io.dobby.core.sock.CommandInvocation
 import io.dobby.core.sock.Example
 import io.dobby.core.sock.ExclusiveCommandSpec
@@ -123,6 +124,16 @@ class SpotifySock(
                 pattern("(musik|spotify) (an|einschalten)"),
             ),
             description = "Spielt Musik auf Spotify ab, optional nach Titel, Künstler oder Playlist.",
+            help = CommandHelp(
+                title = "Musik abspielen",
+                detail = "Sucht auf Spotify und spielt ab. Du kannst einen Titel, einen Künstler " +
+                    "oder eine Playlist nennen — oder gar nichts, dann läuft einfach Musik.",
+                hints = listOf(
+                    "„Spiele etwas von …“ sucht nur nach dem Künstler.",
+                    "Sag die Art dazu — „den Song“, „die Playlist“ —, wenn ich sonst das Falsche finde.",
+                ),
+                aliases = listOf("musik", "musik abspielen", "musik anmachen", "spotify"),
+            ),
             examples = listOf(
                 Example(
                     "spiele blinding lights von the weeknd",
@@ -167,6 +178,12 @@ class SpotifySock(
                 "(mach|schalt|schalte) (die musik|spotify) aus",
             ),
             description = "Pausiert Spotify — explizit adressiert.",
+            help = CommandHelp(
+                title = "Musik pausieren",
+                detail = "Pausiert Spotify. Nenne dabei die Musik — ein bloßes „Stopp“ ist der " +
+                    "geteilte Befehl und gilt dem, was gerade läuft.",
+                aliases = listOf("musik pausieren", "musik aus", "pause"),
+            ),
             examples = listOf(
                 Example("musik aus"),
                 Example("stopp die musik"),
@@ -184,6 +201,12 @@ class SpotifySock(
                 "(spiel|spiele|mach) (die musik|spotify) weiter",
             ),
             description = "Setzt Spotify fort — explizit adressiert.",
+            help = CommandHelp(
+                title = "Musik fortsetzen",
+                detail = "Spielt weiter, was pausiert wurde. Auch hier gilt: „Weiter“ allein ist " +
+                    "der geteilte Befehl.",
+                aliases = listOf("musik fortsetzen", "musik weiter", "weiterspielen"),
+            ),
             examples = listOf(
                 Example("spiel die musik weiter"),
                 Example("spotify fortsetzen"),
@@ -200,6 +223,11 @@ class SpotifySock(
                 "(spiel|spiele) (den|das) (nächste|nächsten|nächstes) (song|lied|titel)",
             ),
             description = "Springt zum nächsten Titel.",
+            help = CommandHelp(
+                title = "Nächster Titel",
+                detail = "Überspringt den laufenden Titel.",
+                aliases = listOf("nächster titel", "nächster song", "überspringen", "skip"),
+            ),
             examples = listOf(
                 Example("nächster song"),
                 Example("nächstes lied"),
@@ -222,6 +250,11 @@ class SpotifySock(
                 "(spiel|spiele) (den|das) (vorherige|vorherigen|letzte|letzten) (song|lied|titel)",
             ),
             description = "Springt zum vorherigen Titel.",
+            help = CommandHelp(
+                title = "Vorheriger Titel",
+                detail = "Geht einen Titel zurück.",
+                aliases = listOf("vorheriger titel", "letzter song", "ein lied zurück"),
+            ),
             examples = listOf(
                 Example("vorheriger song"),
                 Example("letztes lied"),
@@ -241,6 +274,11 @@ class SpotifySock(
                 "(das lied|den song|den titel) (nochmal|neu) starten",
             ),
             description = "Spielt den laufenden Titel von vorne.",
+            help = CommandHelp(
+                title = "Titel von vorne",
+                detail = "Startet den laufenden Titel noch einmal von Anfang an.",
+                aliases = listOf("von vorne", "titel neu starten", "nochmal von vorne"),
+            ),
             examples = listOf(
                 Example("nochmal von vorne"),
                 Example("von vorne"),

@@ -1,5 +1,6 @@
 package io.dobby.socks.clock
 
+import io.dobby.core.sock.CommandHelp
 import io.dobby.core.sock.CommandInvocation
 import io.dobby.core.sock.Example
 import io.dobby.core.sock.ExclusiveCommandSpec
@@ -145,6 +146,16 @@ class ClockSock(
                 "timer {name} (auf|für) {amount:int}",
             ),
             description = "Stellt einen Timer für eine bestimmte Dauer, auf Wunsch unter einem Namen.",
+            help = CommandHelp(
+                title = "Timer stellen",
+                detail = "Stellt einen Küchentimer. Mehrere gleichzeitig sind erlaubt — dann " +
+                    "lohnt sich ein Name, damit du den richtigen wieder abbrechen kannst.",
+                hints = listOf(
+                    "Ohne Einheit frage ich nach: Sekunden, Minuten oder Stunden?",
+                    "Der Name steht vor der Dauer: „stell einen Timer Nudeln auf 10 Minuten“.",
+                ),
+                aliases = listOf("timer", "wecker", "timer stellen", "wecker stellen"),
+            ),
             examples = listOf(
                 // The normalizer has already turned "zehn" into "10" before templates run.
                 Example("timer zehn minuten", mapOf("amount" to 10, "unit" to "minuten")),
@@ -248,6 +259,13 @@ class ClockSock(
                 "($CANCEL_PREFIX) (den)? timer {name} (ab)?",
             ),
             description = "Bricht einen laufenden Timer ab, auf Wunsch den mit einem bestimmten Namen.",
+            help = CommandHelp(
+                title = "Timer abbrechen",
+                detail = "Bricht einen laufenden Timer ab — und bringt einen zum Schweigen, der " +
+                    "gerade klingelt.",
+                hints = listOf("Laufen mehrere und du sagst keinen Namen, frage ich nach welchem."),
+                aliases = listOf("timer abbrechen", "timer stoppen", "wecker abbrechen"),
+            ),
             examples = listOf(
                 Example("timer stopp"),
                 Example("timer abbrechen"),
@@ -271,6 +289,11 @@ class ClockSock(
                 "(alle|sämtliche) (timer|wecker) ($CANCEL_VERBS|stopp|stop|aus|weg)",
             ),
             description = "Bricht alle laufenden Timer ab.",
+            help = CommandHelp(
+                title = "Alle Timer abbrechen",
+                detail = "Räumt auf einen Schlag ab: jeder laufende Timer ist danach weg.",
+                aliases = listOf("alle timer abbrechen", "alle timer"),
+            ),
             examples = listOf(
                 Example("brich alle timer ab"),
                 Example("alle timer abbrechen"),
@@ -296,6 +319,12 @@ class ClockSock(
                 "wie lange noch",
             ),
             description = "Sagt, wie lange ein Timer oder alle Timer noch laufen.",
+            help = CommandHelp(
+                title = "Restzeit",
+                detail = "Sagt, wie lange es noch dauert. Ohne Namen antworte ich über alle " +
+                    "laufenden Timer.",
+                aliases = listOf("restzeit", "wie lange noch", "verbleibende zeit"),
+            ),
             examples = listOf(
                 Example("wie lange geht der timer noch"),
                 Example("wie lange läuft der timer noch"),
@@ -340,6 +369,11 @@ class ClockSock(
                 "(whats|what's|what is) the time (now)?",
             ),
             description = "Sagt die aktuelle Uhrzeit.",
+            help = CommandHelp(
+                title = "Uhrzeit",
+                detail = "Sagt, wie spät es ist.",
+                aliases = listOf("uhrzeit", "zeit", "wie spät ist es"),
+            ),
             examples = listOf(
                 Example("wie spät ist es"),
                 Example("wie viel uhr ist es"),

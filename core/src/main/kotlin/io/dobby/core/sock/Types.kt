@@ -178,7 +178,37 @@ sealed interface CommandSpec {
     /** One German line; becomes a tool definition in the Tier 2 system prompt. */
     val description: String
     val examples: List<Example>
+
+    /**
+     * How this command is explained to a person. Null falls back to [id] and [description].
+     *
+     * Part of the command interface rather than of any one surface, because the same
+     * explanation is read on the panel's help screen and spoken by "erkläre das Kommando …".
+     */
+    val help: CommandHelp? get() = null
 }
+
+/**
+ * The human half of a command: what to call it, and what to say about it beyond [CommandSpec.description].
+ *
+ * What is deliberately *not* here is the usage line. That is derived from the templates by
+ * [io.dobby.core.nlu.template.Syntax] — a hand-written one is a copy of the grammar that
+ * nothing keeps honest, and the first phrasing somebody deletes makes it a lie.
+ *
+ * [description] stays the one-liner the Tier 2 prompt renders as a tool definition, which is
+ * written for a model and paid for by the token. [detail] is written for a person and costs
+ * nothing, so it may say the thing the one-liner had to leave out.
+ */
+data class CommandHelp(
+    /** Short German name: "Timer stellen". Shown as the heading, and what a spoken request for this command is resolved against. */
+    val title: String,
+    /** A sentence or two of German prose for the help screen. Null falls back to [CommandSpec.description]. */
+    val detail: String? = null,
+    /** German notes: what is optional, what happens when something is left out. */
+    val hints: List<String> = emptyList(),
+    /** Other names somebody might use for this command when asking about it out loud. */
+    val aliases: List<String> = emptyList(),
+)
 
 /** A command owned by exactly one Sock. */
 data class ExclusiveCommandSpec(
@@ -187,6 +217,7 @@ data class ExclusiveCommandSpec(
     override val description: String,
     override val params: List<ParamSpec> = emptyList(),
     override val examples: List<Example> = emptyList(),
+    override val help: CommandHelp? = null,
 ) : CommandSpec
 
 /**
@@ -201,6 +232,7 @@ data class SharedCommandSpec(
     val unconsumedResponse: SockResult,
     override val params: List<ParamSpec> = emptyList(),
     override val examples: List<Example> = emptyList(),
+    override val help: CommandHelp? = null,
     val chainMode: ChainMode = ChainMode.FIRST_CONSUMER,
 ) : CommandSpec
 

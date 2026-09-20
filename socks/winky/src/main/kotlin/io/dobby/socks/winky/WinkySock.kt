@@ -1,5 +1,6 @@
 package io.dobby.socks.winky
 
+import io.dobby.core.sock.CommandHelp
 import io.dobby.core.sock.CommandInvocation
 import io.dobby.core.sock.Example
 import io.dobby.core.sock.ExclusiveCommandSpec
@@ -28,6 +29,12 @@ class WinkySock : Sock {
                 "hello",
             ),
             description = "Begrüßt Winky, den Entwickler-Sock.",
+            help = CommandHelp(
+                title = "Winky grüßen",
+                detail = "Der Entwickler-Sock. Antwortet und tut sonst nichts — er ist der " +
+                    "Beweis, dass die Kette vom Mikrofon bis zur Stimme steht.",
+                aliases = listOf("winky", "hallo"),
+            ),
             examples = listOf(
                 Example("hello"),
                 Example("hallo winky"),

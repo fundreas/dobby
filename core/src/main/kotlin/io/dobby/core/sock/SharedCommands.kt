@@ -21,6 +21,14 @@ object SharedCommands {
             "aus",
         ),
         description = "Beendet oder pausiert das, was gerade läuft.",
+        help = CommandHelp(
+            title = "Stopp",
+            detail = "Gilt dem, was gerade läuft: der Musik, einem klingelnden Timer, dem " +
+                "Radio. Wer das ist, entscheidet sich im Moment des Sagens — deshalb gehört " +
+                "dieser Befehl keinem Bereich allein.",
+            hints = listOf("Läuft nichts, sage ich das."),
+            aliases = listOf("stopp", "pause", "anhalten"),
+        ),
         examples = listOf(
             Example("stopp"),
             Example("pause"),
@@ -44,6 +52,12 @@ object SharedCommands {
             "weiter gehts",
         ),
         description = "Setzt fort, was zuletzt pausiert wurde.",
+        help = CommandHelp(
+            title = "Weiter",
+            detail = "Das Gegenstück zu „Stopp“: setzt fort, was zuletzt pausiert wurde.",
+            hints = listOf("Ist nichts pausiert, sage ich das."),
+            aliases = listOf("weiter", "fortsetzen"),
+        ),
         examples = listOf(
             Example("weiter"),
             Example("mach weiter"),

@@ -35,6 +35,7 @@ An unbound Sock answers `Failed("Ich kann meine Befehle gerade nicht nachschlage
 |---|---|---|
 | `help.overview` | — | Sagt, welche Bereiche es gibt. |
 | `help.sock_commands` | `sock: string` | Sagt, was ein bestimmter Bereich kann. |
+| `help.explain_command` | `command: string` | Erklärt ein einzelnes Kommando und wie man es sagt. |
 
 ### Shared subscriptions
 
@@ -138,42 +139,109 @@ Only **Tier 1** examples are ever offered. A Tier 2 paraphrase is by definition 
 
 ---
 
-## 5. Activity
+## 5. `help.explain_command`
+
+The panel's help screen lists every command; this is the same answer for somebody whose hands are wet. "Erkläre das Kommando Timer stellen."
+
+### Params
+
+| Name | Type | Required | Notes |
+|---|---|---|---|
+| `command` | string | yes | Spoken command name, resolved against titles, aliases, ids and Tier 1 examples |
+
+### Tier 1 templates
+
+```
+(erkläre|erklär) (das|den)? (kommando|befehl) {command}
+was (macht|bedeutet|tut) (das|der)? (kommando|befehl) {command}
+wie (benutze|benutzt|verwende) ich (das|den)? (kommando|befehl) {command}
+wie (geht|funktioniert) (das|der)? (kommando|befehl) {command}
+hilfe (zum|zu dem)? (kommando|befehl) {command}
+```
+
+> ⚠️ Every phrasing carries `kommando` or `befehl`, and that is not decoration. The `{command}` slot is open and greedy; without a keyword in front of it, "erkläre …" would answer every sentence that starts with it. The same word is what keeps `hilfe zum kommando rechnen` off `help.sock_commands` — "zum" is two characters from "zu", and a two-letter keyword has tolerance 0.
+
+### Utterances → invocation
+
+| Utterance | Invocation |
+|---|---|
+| erkläre das kommando timer stellen | `explain_command(command="timer stellen")` |
+| erklär den befehl uhrzeit | `explain_command(command="uhrzeit")` |
+| was macht das kommando restzeit | `explain_command(command="restzeit")` |
+| wie benutze ich den befehl musik abspielen | `explain_command(command="musik abspielen")` |
+| hilfe zum kommando rechnen | `explain_command(command="rechnen")` |
+
+### Command resolution
+
+Wider than the area resolution in §4, because there is no article to strip and no short spoken list to compare against — somebody says the title, an alias, one word of it, or the sentence they remember saying last time. In order, first hit wins:
+
+1. Exact match against `title`, `id`, the id's command part with underscores as spaces, or any alias.
+2. Exact match against a Tier 1 example.
+3. Levenshtein against the same names.
+4. Containment either way — shortest title first, so "Timer" reaches *Timer stellen* rather than *Alle Timer abbrechen*.
+
+Ids are matched although nobody speaks one: `clock.set_timer` is what the terminal and the fallthrough log print, and whoever has just read one of those is exactly the person who then asks the panel about it.
+
+### Behavior & result
+
+Read out of [`CommandInfo`](../core/src/main/kotlin/io/dobby/core/registry/Introspection.kt) — the same structure the panel's help screen draws (§8), which is what keeps the two from telling different stories:
+
+```
+<title>: <detail>. Sag zum Beispiel: ‚<usage>‘. <first hint>
+```
+
+| Case | German |
+|---|---|
+| known command | "Timer stellen: Stellt einen Küchentimer … Sag zum Beispiel: ‚timer zehn minuten‘. Ohne Einheit frage ich nach: Sekunden, Minuten oder Stunden?" |
+| no example and no template | title and detail alone |
+| unknown command | "Das Kommando kenne ich nicht. Frag zum Beispiel: Was kann Rechner?" |
+
+**At most one hint is spoken**, although a command may declare several. A screen can carry three; an answer to a spoken question cannot, and the rest is on the panel.
+
+`usage` is a declared Tier 1 example where there is one — it is real German — and otherwise the shortest path through the first template, rendered by [`Syntax`](../core/src/main/kotlin/io/dobby/core/nlu/template/Syntax.kt). Both come from the grammar the matcher runs, so this command cannot promise a phrasing that does not work.
+
+---
+
+## 6. Activity
 
 No shared subscriptions; `activityFor` always returns `INACTIVE`.
 
-## 6. Utterance collision surface
+## 7. Utterance collision surface
 
-Claims: `was kannst du …`, `was kann … {sock}`, `hilfe`, `hilf mir`, `welche befehle …`, `welche/was für bereiche|module|socks …`, `wobei kannst du helfen`.
+Claims: `was kannst du …`, `was kann … {sock}`, `hilfe`, `hilf mir`, `welche befehle …`, `welche/was für bereiche|module|socks …`, `wobei kannst du helfen`, and — always behind the word `kommando` or `befehl` — `erkläre …`, `was macht …`, `wie benutze ich …`, `wie geht …`, `hilfe zum …`.
 
 - `hilfe` bare is claimed here. A future Sock wanting "Hilfe bei X" must use a longer, more specific template.
 - The `{sock}` slot is greedy but requires a `was kann` / `welche befehle hat` / `hilfe zu` prefix, so it cannot swallow ordinary commands. Asserted.
 
-## 7. State & dashboard
+## 8. State & dashboard
 
-None in v1. From M5 the dashboard shows the same data visually, reading it from `Introspection` directly rather than through this Sock.
+No Sock state. There is a **help screen** on the panel, reached from the `?` beside the listen button: areas, then every command of one area with its description, its Tier 1 examples and its syntax.
 
-## 8. Config
+It reads `Introspection` **directly**, not through this Sock — a screen has room for the whole list, which is precisely what a spoken answer does not (§3). Both render the same `CommandInfo`, so an area that appears here is an area that can be asked about out loud, and the syntax on screen is the grammar the matcher runs ([README](README.md) §6a).
+
+Lives in `:android:app` (`ui/HelpScreen.kt`) rather than here: it is a Compose screen, and this Sock is a plain JVM module with no Android on its classpath.
+
+## 9. Config
 
 None.
 
-## 9. Failure & degradation
+## 10. Failure & degradation
 
 - Never `Unavailable`. If the directory is unbound it fails per-invocation with a spoken message and stays `Ready`, because the fault is in app wiring, not in this Sock.
 - Degraded Socks still appear in the listing — knowing Spotify exists but is broken is more useful than it vanishing.
 
-## 10. Testing
+## 11. Testing
 
 - The template tables above, plus the `was kannst du` / `was kann die Uhr` shadowing assertion.
 - Answer shaping: singular vs. plural, the three-phrasing cap and its remainder count, unknown area, area with no commands, no examples declared.
-- Area resolution through articles and near misses.
+- Area resolution through articles and near misses; command resolution through titles, aliases, ids and partial names.
+- `erkläre das kommando …` and `hilfe zum kommando …` must not be taken by `help.sock_commands`.
 - **It must not swallow ordinary utterances** — "wie spät ist es", "hello", "spiele musik" must never reach `help.*`.
 - The unbound-directory path.
 - Ordering: spoken lists by display name, phrasings in declaration order.
 
-## 11. Open questions / out of scope (v1)
+## 12. Open questions / out of scope (v1)
 
-- **"Wie sage ich das nochmal?"** — asking for the phrasing of one specific command rather than a whole area.
 - Search by topic ("was kannst du mit Musik") — `Introspection.search` exists and the terminal uses it; there is no voice command for it yet.
 - Reading out what a Sock *cannot* do, or why it is degraded ("Spotify ist nicht verbunden").
 - Localisation. Everything here is German, like the rest of the palette.

@@ -136,6 +136,11 @@ class DobbyController(
      * app on it.
      */
     private val spotifyHardware: SpotifyHardware? = null,
+    /**
+     * `AudioManager`, for the System Sock. Null in tests and off-device, where the Sock is
+     * `Unavailable` and every volume command says so instead of pretending to have worked.
+     */
+    systemHardware: SystemHardware? = null,
     /** Remembers the wake phrase and whether it is armed, across restarts. */
     private val settings: Settings? = null,
     /**
@@ -173,7 +178,7 @@ class DobbyController(
 
     private val health = SockHealth()
 
-    private val wiring = DobbySocks.create(hardware, spotifyHardware)
+    private val wiring = DobbySocks.create(hardware, spotifyHardware, systemHardware)
 
     /** The panel's clock and timer countdown, straight from the Sock that owns them. */
     val clock: StateFlow<ClockState> get() = wiring.clock.state
@@ -195,6 +200,15 @@ class DobbyController(
     private val engine: DobbyEngine?
     private val summary: String
 
+    /**
+     * What Dobby can do, for the screen that draws it.
+     *
+     * The same object the Help Sock answers out of (`help.specs.md` §1), handed to the help
+     * screen so the panel and the voice cannot disagree about what exists. Null only when the
+     * registry did not build, which is the state the chat already says out loud.
+     */
+    val introspection: Introspection?
+
     init {
         val build = SockRegistry.build(wiring.socks)
         registry = build.registry
@@ -206,10 +220,12 @@ class DobbyController(
             transcript.note("Dobby kann nicht starten — die Socks passen nicht zusammen:")
             build.errors.forEach { transcript.note("• $it") }
             engine = null
+            introspection = null
             summary = "Registry ungültig"
         } else {
-            val introspection = Introspection(registry, health)
-            wiring.bindDirectory(introspection)
+            val directory = Introspection(registry, health)
+            introspection = directory
+            wiring.bindDirectory(directory)
             registry.checkExamples().forEach { Log.w(TAG, "palette collision: $it") }
             registry.checkFillers().forEach { Log.w(TAG, "filler conflict: $it") }
             // Never fatal: `lauter` and `stumm` are this shape and are correct. Logged so the
@@ -217,7 +233,7 @@ class DobbyController(
             registry.checkSingleKeywordTemplates().forEach { Log.w(TAG, "single keyword: $it") }
             // Null when a Sock declares a few-shot the prompt cannot render, and null when no
             // resolver was supplied at all. Both leave the engine byte-for-byte what it was.
-            val program = Tier2Program.ofOrNull(registry, introspection) { Log.w(TAG, it) }
+            val program = Tier2Program.ofOrNull(registry, directory) { Log.w(TAG, it) }
             engine = DobbyEngine(
                 registry = registry,
                 dispatcher = Dispatcher(registry, health),

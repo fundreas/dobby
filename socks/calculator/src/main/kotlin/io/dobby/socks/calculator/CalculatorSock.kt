@@ -1,5 +1,6 @@
 package io.dobby.socks.calculator
 
+import io.dobby.core.sock.CommandHelp
 import io.dobby.core.sock.CommandInvocation
 import io.dobby.core.sock.Example
 import io.dobby.core.sock.ExclusiveCommandSpec
@@ -124,6 +125,17 @@ class CalculatorSock(
                 pattern("$ASK {a:int} $MODULO_OP", "op" to MOD),
             ),
             description = "Rechnet eine Aufgabe aus und sagt Aufgabe und Ergebnis.",
+            help = CommandHelp(
+                title = "Rechnen",
+                detail = "Rechnet eine Aufgabe mit zwei Zahlen aus und wiederholt sie mit dem " +
+                    "Ergebnis, damit du hörst, was ich verstanden habe.",
+                hints = listOf(
+                    "Plus, minus, mal, geteilt durch, hoch, modulo — dazu „die Hälfte von“, " +
+                        "„das Doppelte von“ und „zum Quadrat“.",
+                    "Fehlt die zweite Zahl, frage ich nach.",
+                ),
+                aliases = listOf("rechnen", "rechner", "ausrechnen"),
+            ),
             examples = listOf(
                 Example("wie viel ist 3 plus 5", sum(3, ADD, 5)),
                 Example("was ist 12 minus 4", sum(12, SUB, 4)),
@@ -191,6 +203,12 @@ class CalculatorSock(
                 pattern("$CONT $MODULO_OP {b:int}", "op" to MOD),
             ),
             description = "Rechnet mit dem letzten Ergebnis weiter.",
+            help = CommandHelp(
+                title = "Weiterrechnen",
+                detail = "Nimmt das letzte Ergebnis als erste Zahl, sodass du nur noch den " +
+                    "nächsten Schritt sagen musst.",
+                aliases = listOf("weiterrechnen", "weiter rechnen"),
+            ),
             examples = listOf(
                 Example("mal 2", mapOf("op" to MUL, "b" to 2)),
                 Example("und jetzt mal 2", mapOf("op" to MUL, "b" to 2)),
@@ -222,6 +240,11 @@ class CalculatorSock(
                 "was haben wir (zuletzt)? gerechnet",
             ),
             description = "Sagt das zuletzt gerechnete Ergebnis noch einmal.",
+            help = CommandHelp(
+                title = "Letztes Ergebnis",
+                detail = "Wiederholt das zuletzt gerechnete Ergebnis.",
+                aliases = listOf("letztes ergebnis", "ergebnis"),
+            ),
             examples = listOf(
                 Example("was war das ergebnis"),
                 Example("wie war das ergebnis nochmal"),
@@ -247,6 +270,12 @@ class CalculatorSock(
                 "(neu|von vorne) anfangen",
             ),
             description = "Vergisst das letzte Ergebnis.",
+            help = CommandHelp(
+                title = "Ergebnis vergessen",
+                detail = "Wirft das letzte Ergebnis weg. Danach fängt „Weiterrechnen“ wieder " +
+                    "bei nichts an.",
+                aliases = listOf("ergebnis vergessen", "rechner zurücksetzen"),
+            ),
             examples = listOf(
                 Example("vergiss das ergebnis"),
                 Example("vergiss die zahl"),
