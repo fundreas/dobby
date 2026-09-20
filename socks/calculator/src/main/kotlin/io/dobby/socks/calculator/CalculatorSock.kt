@@ -5,8 +5,10 @@ import io.dobby.core.sock.CommandInvocation
 import io.dobby.core.sock.Example
 import io.dobby.core.sock.ExclusiveCommandSpec
 import io.dobby.core.sock.FollowUp
+import io.dobby.core.sock.Lang
 import io.dobby.core.sock.ParamSpec
 import io.dobby.core.sock.ParamType
+import io.dobby.core.sock.Phrase
 import io.dobby.core.sock.Sock
 import io.dobby.core.sock.SockContext
 import io.dobby.core.sock.SockResult
@@ -362,13 +364,16 @@ class CalculatorSock(
 
     private fun lastResult(): SockResult {
         val last = memory.recall() ?: return SockResult.Spoken(NOTHING_YET)
-        return SockResult.Spoken("Das Ergebnis war ${CalcNumber.speak(last)}.")
+        return SockResult.Spoken { lang ->
+            val number = CalcNumber.speak(last, lang)
+            if (lang == Lang.EN) "The result was $number." else "Das Ergebnis war $number."
+        }
     }
 
     private fun clear(): SockResult {
         val had = memory.forget()
         _state.value = CalculatorState()
-        return SockResult.Spoken(if (had) "Vergessen." else NOTHING_TO_FORGET)
+        return if (had) SockResult.Spoken(FORGOTTEN) else SockResult.Spoken(NOTHING_TO_FORGET)
     }
 
     /**
@@ -383,7 +388,9 @@ class CalculatorSock(
 
             is CalcResult.Value -> {
                 memory.remember(outcome.value)
-                _state.value = CalculatorState(outcome.sentence, outcome.value)
+                // The panel's German UI draws the equation; the spoken half follows the
+                // answer language, and core resolves it as it speaks.
+                _state.value = CalculatorState(outcome.sentence(Lang.DE), outcome.value)
                 // The panel shows the sum written out, which is the half of the answer that
                 // survives being misheard.
                 context?.screen?.wakeFor(screenWakeSeconds)
@@ -395,7 +402,10 @@ class CalculatorSock(
     private fun askForOperand(a: Double, op: Operation): SockResult {
         val token = stash(Pending(a, op, null))
         return SockResult.Asked(
-            text = "${CalcNumber.speak(a)} ${op.spoken} was?",
+            phrase = { lang ->
+                val left = "${CalcNumber.speak(a, lang)} ${op.spoken(lang)}"
+                if (lang == Lang.EN) "$left what?" else "$left was?"
+            },
             follow = FollowUp(
                 commandId = CALCULATE,
                 // Bare in a scoped palette, which is legal there and reckless anywhere else:
@@ -412,7 +422,10 @@ class CalculatorSock(
     private fun askForStart(op: Operation, b: Long): SockResult {
         val token = stash(Pending(null, op, b))
         return SockResult.Asked(
-            text = "${op.spoken} ${CalcNumber.speak(b.toDouble())} — von welcher Zahl?",
+            phrase = { lang ->
+                val right = "${op.spoken(lang)} ${CalcNumber.speak(b.toDouble(), lang)}"
+                if (lang == Lang.EN) "$right — starting from what number?" else "$right — von welcher Zahl?"
+            },
             follow = FollowUp(
                 commandId = CONTINUE_WITH,
                 templates = patterns("(von|ab)? {a:int}"),
@@ -436,11 +449,18 @@ class CalculatorSock(
 
         const val DEFAULT_SCREEN_WAKE_SECONDS: Int = 30
 
-        /** German copy, verbatim from the spec (§3–§6). */
-        const val CANNOT_CALCULATE: String = "Das kann ich nicht rechnen."
-        const val LOST_THE_THREAD: String = "Ich weiß nicht mehr, was ich rechnen sollte."
-        const val NOTHING_YET: String = "Ich habe noch nichts gerechnet."
-        const val NOTHING_TO_FORGET: String = "Da war nichts zu vergessen."
+        /** Spec copy (§3–§6), German verbatim and English alongside it. */
+        val CANNOT_CALCULATE: Phrase =
+            Phrase.of("Das kann ich nicht rechnen.", "I can't work that out.")
+        val LOST_THE_THREAD: Phrase = Phrase.of(
+            "Ich weiß nicht mehr, was ich rechnen sollte.",
+            "I've lost track of what I was meant to calculate.",
+        )
+        val NOTHING_YET: Phrase =
+            Phrase.of("Ich habe noch nichts gerechnet.", "I haven't calculated anything yet.")
+        val NOTHING_TO_FORGET: Phrase =
+            Phrase.of("Da war nichts zu vergessen.", "There was nothing to forget.")
+        val FORGOTTEN: Phrase = Phrase.of("Vergessen.", "Forgotten.")
 
         /** `op` values, spelled once so a template and its example cannot drift apart. */
         private val ADD = Operation.PLUS.value

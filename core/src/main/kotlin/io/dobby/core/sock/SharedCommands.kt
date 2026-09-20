@@ -40,7 +40,7 @@ object SharedCommands {
             // precisely what Tier 2 is for.
             Example("hör bitte auf damit", matchedByTemplates = false),
         ),
-        unconsumedResponse = SockResult.Spoken("Es läuft gerade nichts."),
+        unconsumedResponse = SockResult.Spoken("Es läuft gerade nichts.", "Nothing is running."),
     )
 
     /** "Weiter" — resume whatever was last paused. */
@@ -62,7 +62,7 @@ object SharedCommands {
             Example("weiter"),
             Example("mach weiter"),
         ),
-        unconsumedResponse = SockResult.Spoken("Es ist gerade nichts pausiert."),
+        unconsumedResponse = SockResult.Spoken("Es ist gerade nichts pausiert.", "Nothing is paused."),
     )
 
     val all: List<SharedCommandSpec> = listOf(STOP, RESUME)

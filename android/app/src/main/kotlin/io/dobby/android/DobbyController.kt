@@ -19,11 +19,14 @@ import io.dobby.core.nlu.llm.Tier2Request
 import io.dobby.core.nlu.llm.Tier2Resolver
 import io.dobby.core.registry.Introspection
 import io.dobby.core.registry.SockRegistry
+import io.dobby.core.sock.Lang
+import io.dobby.core.sock.Phrase
 import io.dobby.core.sock.SockContext
 import io.dobby.core.sock.SockLog
 import io.dobby.core.sock.SockResult
 import io.dobby.pipeline.ListenCue
 import io.dobby.pipeline.audio.MicProfile
+import io.dobby.pipeline.tts.VoiceCatalogue
 import io.dobby.pipeline.tts.VoiceModelState
 import io.dobby.pipeline.tts.VoiceOption
 import io.dobby.pipeline.wakeword.WakeWordOption
@@ -168,7 +171,7 @@ class DobbyController(
      * and single-slot. [TurnAudio.NONE] off-device, where there is nothing to duck.
      */
     private val turnAudio: TurnAudio = TurnAudio.NONE,
-    sockContext: (announce: suspend (String) -> Unit) -> SockContext,
+    sockContext: (announce: suspend (Phrase) -> Unit) -> SockContext,
 ) {
     private val transcript = Transcript()
 
@@ -335,12 +338,34 @@ class DobbyController(
         }
     }
 
-    private val sockContext = sockContext { text ->
+    private val sockContext = sockContext { phrase ->
         // Asynchronous speech from a Sock — a timer firing. It is Dobby talking, so it belongs
         // in the chat exactly like an answer does, just without a command that caused it.
+        //
+        // Rendered here and not by the Sock, in the language that is set *now*: a two-hour
+        // timer set before the voice was switched is announced in the voice that will read it.
+        val text = phrase(lang)
         transcript.said(text)
         pipeline.say(text)
     }
+
+    /**
+     * The language Dobby answers in, which is the voice's language and nothing else.
+     *
+     * Choosing Cori chooses English, Thorsten and the Android voice choose German — there is no
+     * separate language setting to keep in step, and no way to end up with an English sentence
+     * read by a German voice. `m2c-plan.md` Part E sketched the other direction (a language
+     * setting the voice follows); the voice is the control people actually reach for, and it is
+     * the one whose wrong value is audible.
+     *
+     * Read per sentence rather than held, because [selectVoice] changes it mid-session and a
+     * [Phrase] built before the switch must still come out in the language now selected.
+     *
+     * **Understanding does not follow it.** The palette and the Tier 2 few-shots are German
+     * whatever this says, so an English-answering panel is still spoken to in German.
+     */
+    private val lang: Lang
+        get() = Lang.of(VoiceCatalogue.of(pipeline.selectedVoiceId).language)
 
     /**
      * The selectable phrases, and a counter that makes a change to them re-emit.
@@ -750,30 +775,36 @@ class DobbyController(
             // the log of what happened and a buzz leaves no mark on it — this is the one place
             // where what is shown and what is said deliberately differ.
             pipeline.buzz()
-            val text = (outcome.result as? SockResult.Spoken)?.text ?: DobbyEngine.NOT_UNDERSTOOD
+            val text = ((outcome.result as? SockResult.Spoken)?.phrase ?: DobbyEngine.NOT_UNDERSTOOD)(lang)
             transcript.said(text, failed = true)
             return TurnOutcome.RETRY
         }
 
+        // One read of [lang] for the whole answer: a voice switched between the two halves of
+        // a sentence would be the one way to get a mixed-language one out of this.
+        val lang = lang
         when (val result = outcome.result) {
             is SockResult.Spoken -> {
-                transcript.said(result.text, outcome.detailLine())
-                pipeline.say(result.text)
+                val text = result.phrase(lang)
+                transcript.said(text, outcome.detailLine())
+                pipeline.say(text)
             }
 
             // say() suspends until the sentence has finished playing, so the microphone is
             // reopened by the loop above only once Dobby has stopped talking — otherwise the
             // first thing it would hear answering its question is itself.
             is SockResult.Asked -> {
-                transcript.said(result.text, outcome.detailLine())
-                pipeline.say(result.text)
+                val text = result.phrase(lang)
+                transcript.said(text, outcome.detailLine())
+                pipeline.say(text)
                 return TurnOutcome.AWAITING_ANSWER
             }
 
             is SockResult.Failed -> {
                 Log.w(TAG, "${outcome.invocation?.commandId} failed", result.cause)
-                transcript.said(result.userMessage, outcome.detailLine(), failed = true)
-                pipeline.say(result.userMessage)
+                val text = result.phrase(lang)
+                transcript.said(text, outcome.detailLine(), failed = true)
+                pipeline.say(text)
             }
 
             // The side effect is its own feedback, but the chat would otherwise look like
@@ -786,7 +817,7 @@ class DobbyController(
             // The one result that closes the microphone. Spoken first if there is anything to
             // say — "Gute Nacht" is still an answer, it is just the last one.
             is SockResult.Ended -> {
-                val text = result.text
+                val text = result.phrase?.invoke(lang)
                 if (text == null) {
                     outcome.detailLine()?.let { transcript.note(it) }
                 } else {
@@ -796,7 +827,8 @@ class DobbyController(
                 return TurnOutcome.CLOSED
             }
 
-            SockResult.NotForMe -> transcript.said("Das kann ich gerade nicht.", outcome.detailLine(), failed = true)
+            SockResult.NotForMe ->
+                transcript.said(Dispatcher.CANNOT_RIGHT_NOW(lang), outcome.detailLine(), failed = true)
         }
         return TurnOutcome.CONTINUE
     }

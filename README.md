@@ -133,10 +133,23 @@ voice and the phone's own as the third.
   until the next timer fires is a setting nobody trusts.
 - **Sideloaded voices are first-class**, like sideloaded wake words: any directory under
   `files/voices/` with an `.onnx` and a `tokens.txt` is offered in settings.
-- **What has not changed is what is said.** Every Sock answers in German, so Cori reads German
-  sentences with English phonemes — the settings row says so where she is chosen. Answering in
-  English is a language setting and a strings table in every Sock, which is `m2c-plan.md` Part E
-  and deliberately not this milestone.
+- **The voice is also the language switch.** Choosing Cori makes Dobby *answer* in English;
+  Thorsten and the Android voice answer in German. There is no separate language setting, on
+  purpose — two controls that can disagree is a state where an English sentence comes out of a
+  German voice, and the voice is the one whose wrong value is audible. Each settings row says
+  which language it answers in.
+- **Commands stay German whichever voice is speaking.** The template palette, the normaliser
+  and the Tier 2 few-shots are German, so an English-answering panel is still spoken to in
+  German — and a question asked in English is answered with "die zweite". The panel's own
+  screens stay German too; they are read, not heard.
+- **How it works**: nothing sayable is a string. `SockResult.Spoken`, `Asked`, `Failed`,
+  `Ended` and `SockContext.announce` all carry a `Phrase` — `(Lang) -> String` — so the Sock
+  builds the sentence and core calls it with the language set *at the moment of speaking*. A
+  timer set before the voice was switched is announced after it in the new language. A strings
+  table would not have survived the ordinary cases: German "halb drei" is English "half past
+  two" read from the other end, and `2,5` and `2.5` are the same number that each voice reads
+  the other's separator of as a second number. See `m2c-plan.md` Part E and
+  `socks.specs/README.md` §2a.
 
 **Not yet measured on the device.** `high` is the default because it was asked for and because
 the host numbers say it is affordable; whether two Cortex-A78 cores agree is what
@@ -272,7 +285,7 @@ All 523 tests are plain JVM tests. Nothing needs an emulator, including the wake
 - **`DobbyControllerTest`** — *(Phase B, extended in M2)* the join, end to end: an utterance goes through the real registry to the real Clock Sock, and the answer is both shown and spoken, as the same sentence. Also that a Sock reaches the `SockContext` built on the Android side, that saying nothing leaves no trace, that typing takes the identical path — and that the wake word takes *that same path*, wakes the screen first, and that losing the wake word model leaves a working push-to-talk panel rather than a broken one. And the shape of a turn: five seconds for a voice to start, whether it is the first utterance or the retry after a not-understood buzz; two buzzes instead of the spoken apology; an answer if the second try lands; a bound, so a television cannot hold the microphone open all evening; and that the wake word's acknowledgement — buzz, pip or nothing — is a setting the pipeline acts on and the screen shows. Testable at all because the hardware sits behind `VoiceIo` and the context behind a factory — the Phase A trick, one layer up.
 - **`TranscriptTest`** — *(Phase B)* the chat model's awkward parts: a live bubble becoming a transcript in place, an answer replacing a bubble nobody filled, bounded scrollback for a panel that runs for weeks.
 - **`CaptureBufferTest`** — *(STT)* the arithmetic between the microphone and the recogniser: 16-bit PCM landing inside −1..1, only the requested samples converted, and the 10 s cap truncating inside a frame rather than overrunning it. Neither half can fail loudly — a scale mistake is a recogniser that works and is quietly worse.
-- **`VoiceCatalogueTest`** — *(M2c)* the voices settings offers: every file pinned by size and lowercase checksum, every Hugging Face URL pinned to a revision rather than a branch, ids unique and stable because they are what settings stores, an unknown id falling back to Thorsten instead of throwing, and Cori's row saying out loud that she reads German with English phonemes. Plus the naming of a sideloaded directory, which is the only thing that decides what a pushed voice is called on screen.
+- **`VoiceCatalogueTest`** — *(M2c)* the voices settings offers: every file pinned by size and lowercase checksum, every Hugging Face URL pinned to a revision rather than a branch, ids unique and stable because they are what settings stores, an unknown id falling back to Thorsten instead of throwing, and Cori's row saying out loud which language she answers in. Plus the naming of a sideloaded directory, which is the only thing that decides what a pushed voice is called on screen.
 - **`SynthesisCallbackTest`** — *(M2c)* one method descriptor, asserted reflectively. sherpa-onnx's TTS JNI resolves the per-sentence callback by hand — `GetMethodID(cls, "invoke", "([F)Ljava/lang/Integer;")` — and does not check for a pending exception afterwards, so an object without that exact method aborts the process instead of throwing. A Kotlin lambda compiles through `invokedynamic` and does not have it; that is what took the first cut of M2c down on the phone, as a `SIGABRT` no `catch` could see. The fix is one class, and the thing that would silently undo it is a Kotlin version bump — which is why the check is a JVM test and not a device.
 - **`EspeakDataTest`** — *(M2c)* the stamp that decides whether 18 MB of phoneme data is copied again: missing, matching, stale and unreadable. And both pins asserted against literals, because the same two numbers live in the build file and a bump that changes one without the other is a device that either re-copies 355 files on every start or trusts a directory it has not seen.
 - **`PiperVoiceDeviceTest`** — *(M2c, instrumented)* every voice on the device, synthesising the sentences Dobby actually says — a German time, a calculation read back, a three-sentence Help answer, a departures line, an English title in a German sentence. It asserts what cannot throw: a graph loaded with the wrong token table or a phoneme directory that copied 300 of 355 files produces *silence*, not an exception. It is also the instrument: load time, first-chunk latency, real-time factor and RSS go to logcat under `DobbyVoice` and into `m2c-plan.md`'s *Measured* table. Skips itself when no voice is on the device.

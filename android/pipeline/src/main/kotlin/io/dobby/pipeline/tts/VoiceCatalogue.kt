@@ -9,9 +9,17 @@ import io.dobby.pipeline.stt.RemoteFile
  *   renamed id silently resets somebody's choice back to the default.
  * @param name what the settings row says.
  * @param language BCP-47, as the voice was trained: `de-DE`, `en-GB`. Empty for the system
- *   voice, which is whatever the phone has. It is here for the language setting M2d will hang
- *   off it (`m2c-plan.md` Part E) — the voice follows the answer language, and this is the tag
- *   that lets it, without changing what is stored.
+ *   voice, which is whatever the phone has — and read as German, which is what a phone in this
+ *   kitchen speaks.
+ *
+ *   **This tag is the answer language.** `io.dobby.core.sock.Lang.of` maps it, and the panel
+ *   reads it for every sentence a Sock hands back: choosing Cori chooses English, choosing
+ *   Thorsten or the Android voice chooses German. `m2c-plan.md` Part E sketched the other
+ *   direction — a language setting the voice follows — and this is the inversion of it, for the
+ *   reason that decided it: the voice is the control people reach for, and it is the one whose
+ *   wrong value is audible. Understanding stays German either way (Part E again): the Tier 1
+ *   palette and the Tier 2 few-shots are German, so an English-answering panel is still spoken
+ *   to in German.
  * @param description one line under the name, in the settings screen.
  * @param directory where the files live under `files/voices/`. Empty for the system voice.
  * @param files model and token table. Empty for the system voice, which downloads nothing.
@@ -82,7 +90,7 @@ object VoiceCatalogue {
         id = "thorsten",
         name = "Thorsten",
         language = "de-DE",
-        description = "Deutsch · 114 MB",
+        description = "Deutsch · 114 MB · Antwortet auf Deutsch.",
         directory = THORSTEN_DIRECTORY,
         files = listOf(
             voice(THORSTEN_DIRECTORY, THORSTEN_REVISION, "de_DE-thorsten-high.onnx",
@@ -94,14 +102,14 @@ object VoiceCatalogue {
     )
 
     /**
-     * British English, female, 22.05 kHz.
+     * British English, female, 22.05 kHz — **and the English answer language**.
      *
      * LibriVox recordings in the public domain, ~24 h, trained from scratch by Bryce Beattie.
      *
-     * **She reads German sentences with English phonemes**, because the interaction language
-     * is German (`dobby-plan.md` §1) and nothing here changes *what* is said. Choosing her today
-     * is choosing pronunciation, not language; the settings row says so where it is chosen.
-     * What English output actually needs is `m2c-plan.md` Part E.
+     * Choosing her used to be choosing pronunciation: she read German sentences with English
+     * phonemes, because nothing could yet change *what* was said. It now changes both — every
+     * Sock builds its answer from a `Phrase`, and [language] is what selects the wording. What
+     * does **not** change is understanding: commands are still spoken to the panel in German.
      *
      * The gain is not cosmetic: on the same sentences she peaks about 5 dB below Thorsten, so
      * switching voices would otherwise also be switching volume.
@@ -110,8 +118,8 @@ object VoiceCatalogue {
         id = "cori",
         name = "Cori",
         language = "en-GB",
-        description = "Englisch (britisch) · 114 MB · Liest deutsche Antworten mit " +
-            "englischer Aussprache.",
+        description = "Englisch (britisch) · 114 MB · Antwortet auf Englisch. " +
+            "Befehle bleiben deutsch.",
         directory = CORI_DIRECTORY,
         files = listOf(
             voice(CORI_DIRECTORY, CORI_REVISION, "en_GB-cori-high.onnx",
@@ -119,8 +127,8 @@ object VoiceCatalogue {
             voice(CORI_DIRECTORY, CORI_REVISION, TOKENS,
                 "ef3a7e4a8d1af0c9d4dc45aaae1a6242ebe24a7ed6f3d025a49eb29682784c6d", 940),
         ),
-        // English, because she is about to read it with English phonemes either way — and
-        // hearing that is the fastest honest answer to "what does picking Cori do?".
+        // English, which is now the whole of what picking her does — and hearing it said is
+        // the fastest honest answer to "what does picking Cori do?".
         greeting = "Hello, I'm Cori.",
     )
 
@@ -129,7 +137,7 @@ object VoiceCatalogue {
         id = "system",
         name = "Android-Stimme",
         language = "",
-        description = "Die Stimme des Telefons, wie bisher.",
+        description = "Die Stimme des Telefons, wie bisher. Antwortet auf Deutsch.",
         directory = "",
         files = emptyList(),
         greeting = "Ich bin die Android-Stimme.",

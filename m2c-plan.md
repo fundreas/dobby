@@ -23,7 +23,7 @@ that stops a release build.
 
 **This plan makes Thorsten the default voice, Cori the second, keeps the Android voice as the
 fallback, and makes the choice a setting.** It does not change *what* Dobby says: every Sock
-answers in German ([dobby-plan.md:18](dobby-plan.md#L18)), so Cori reads German sentences with
+answered in German at the time ([dobby-plan.md:18](dobby-plan.md#L18)), so Cori read German sentences with
 English phonemes until the Socks can answer in English. What "English output" needs beyond the
 voice is in Part E, and deliberately out of scope here.
 
@@ -363,7 +363,11 @@ language.
 
 ---
 
-## Part E — What "English output" needs, and why it is not here
+## Part E — English output. **Done, and inverted.**
+
+> Shipped after M2c. This section is kept as written, with the outcome recorded, because the
+> shape that was predicted here is not the shape that was built — and the difference is the
+> interesting part.
 
 The request behind Cori is a panel that can *answer* in English. The voice is the smaller half:
 
@@ -382,6 +386,54 @@ So the honest shape is: **a language setting (M2d or part of M3) selects the ans
 and the voice follows it** — `VoiceCatalogue.defaultFor(language)` — with the voice setting
 kept as an override. This plan lays the id and the language tag on each `VoiceOption` so that
 follow-up does not have to change what is stored, and stops there.
+
+### What was actually built
+
+**The voice selects the language, not the other way round.** There is no language setting.
+`VoiceOption.language` — the BCP-47 tag this plan laid down "so that follow-up does not have to
+change what is stored" — *is* the answer language: `Lang.of("en-GB")` is `EN`, `de-DE` and the
+system voice's empty tag are `DE`. Choosing Cori chooses English; Thorsten and the Android voice
+choose German.
+
+The inversion is the one thing worth arguing about, so: the voice is the control people reach
+for, it is the one whose wrong value is *audible*, and two settings that can disagree is a state
+where an English sentence comes out of a German voice. One control cannot get out of step with
+itself. The settings screen says so under the voice list, and each row says which language it
+answers in.
+
+**No strings table.** `SockResult.Spoken` does not carry a string, it carries a `Phrase` —
+`(Lang) -> String` — and so do `Asked`, `Failed`, `Ended` and `SockContext.announce`. The Sock
+builds the sentence; core calls the function with the language that is set *at the moment of
+speaking*. A table keyed on fragments would have had to be reassembled by something that does
+not know what it is assembling, and the cases that break it are ordinary: German "halb drei" is
+14:30 and English "half past two" is the same instant read from the other end, `2,5` and `2.5`
+are the same number read by two voices that each say the other's separator as a second number,
+and "Der Timer" has an article where "Timer 2" must not.
+
+Late binding is not a nicety either. A timer set before the voice was switched is announced
+after it, in the language now selected — because nothing was rendered until it was said.
+
+**Understanding did not move**, exactly as predicted: the palette, the normaliser and the Tier 2
+few-shots are German, so an English-answering panel is still *spoken to* in German. A question
+asked in English ("The first or the second?") is still answered with "die zweite". That is
+visible in the product and is the honest state of it.
+
+**What remains German by choice**, and where to start when it should not be:
+
+- The panel's own UI — the settings and help screens, `SockStatus` reasons, the dashboard cards.
+  They are drawn, not spoken, and a screen has room to be read.
+- `CommandHelp.title`, `detail` and `hints` — the Sock author's prose. `help.explain_command`
+  frames them in the answer language and quotes them as written. Translating them is a
+  `CommandHelp` per language, which is the contract change this section predicted and the only
+  part of it still outstanding.
+- Utterances quoted back at the user ("Sag zum Beispiel: ‚timer zehn minuten‘"). Those are
+  command grammar; a translated one would not work when repeated.
+- A sideloaded voice has no language tag and so answers in German. Guessing from a directory
+  name is a guess about somebody else's file naming; a settings row is the fix.
+
+`GermanTime` became `SpokenTime`, because an object of that name returning "half past two" is a
+name that lies. `GermanNumbers` keeps its name and its job: it parses German, and parsing did
+not change.
 
 ---
 
@@ -535,7 +587,8 @@ stays an option. That is a two-line change to `VoiceCatalogue` plus the pinned c
 
 ## Not in this plan
 
-- **English answers** — Part E. A language setting and per-Sock strings; the voice follows.
+- **English answers** — was Part E, and has since shipped; see the outcome recorded there. Not
+  a language setting with the voice following, but the voice itself selecting the language.
 - **A speaking-rate setting** (`speed` / `length_scale`) — one float already plumbed through
   `generateWithCallback`; add it when somebody asks for it.
 - **Two voices resident at once**, or switching voice per sentence (an English title in a

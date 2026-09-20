@@ -14,6 +14,7 @@ import io.dobby.core.dispatch.SockHealth
 import io.dobby.core.registry.Introspection
 import io.dobby.core.registry.RegistryValidationException
 import io.dobby.core.registry.SockRegistry
+import io.dobby.core.sock.Lang
 import io.dobby.core.sock.Sock
 import io.dobby.core.sock.SockResult
 import io.dobby.socks.calculator.CalculatorSock
@@ -132,7 +133,10 @@ fun main(args: Array<String>) = runBlocking {
         onRescue = fallthrough::record,
         tier2 = program?.let { Tier2(registry, scripted, it) },
     )
-    val context = ConsoleContext(scope) { verbose }
+    // The terminal's answer language. `--en` starts in English; `/lang` switches it live,
+    // which is how both wordings of a Sock's answers get exercised without a device.
+    var lang = if (args.contains("--en")) Lang.EN else Lang.DEFAULT
+    val context = ConsoleContext(scope, { verbose }, { lang })
     engine.start(context)
 
     banner(registry)
@@ -173,11 +177,25 @@ fun main(args: Array<String>) = runBlocking {
                     println("  trace ${if (verbose) "on" else "off"}")
                 }
 
+                // Only the answers move. Understanding stays German in both settings — the
+                // palette and the few-shots are German (`m2c-plan.md` Part E) — so utterances
+                // are typed the same way whichever language is selected.
+                "lang", "language" -> {
+                    val chosen = Lang.entries.firstOrNull { it.name.equals(argument, ignoreCase = true) }
+                    if (argument.isEmpty() || chosen == null) {
+                        val options = Lang.entries.joinToString("|") { it.name.lowercase() }
+                        println("  answers in ${lang.name.lowercase()}. usage: /lang $options")
+                    } else {
+                        lang = chosen
+                        println("  answers in ${lang.name.lowercase()}")
+                    }
+                }
+
                 else -> println("  unknown command '${parts[0]}'. /help")
             }
             println()
         } else {
-            render(engine.handle(line), verbose)
+            render(engine.handle(line), verbose, lang)
         }
     }
 
@@ -297,6 +315,7 @@ private fun help() = """
     |  /prompt [command]    the route prompt and its headroom, or one command's fill turn
     |  /tier2 <utterance>   run both Tier 2 steps; "= <label> | <json>" forces the answers
     |  /fallthrough         utterances Tier 1 could not match, plus the ones filler skipping saved
+    |  /lang [de|en]        the language answers come back in (understanding stays German)
     |  /trace               toggle normalizer and template output
     |  /quit                exit
 """.trimMargin()
@@ -320,7 +339,7 @@ private fun fallthroughView(log: FallthroughLog): String {
     }
 }
 
-private fun render(outcome: EngineOutcome, verbose: Boolean) {
+private fun render(outcome: EngineOutcome, verbose: Boolean, lang: Lang) {
     if (verbose) {
         println("  normalized: ${outcome.normalized}")
         outcome.matched?.let { println("  template:   \"${it.template.source}\"") }
@@ -335,15 +354,15 @@ private fun render(outcome: EngineOutcome, verbose: Boolean) {
     }
 
     when (val result = outcome.result) {
-        is SockResult.Spoken -> println("  🔊 ${result.text}")
+        is SockResult.Spoken -> println("  🔊 ${result.phrase(lang)}")
         // The floor is Dobby's until the next line: core is holding the question open and will
         // route whatever is typed next back to the Sock that asked it.
-        is SockResult.Asked -> println("  ❓ ${result.text}")
-        is SockResult.Failed -> println("  ✖ ${result.userMessage}")
+        is SockResult.Asked -> println("  ❓ ${result.phrase(lang)}")
+        is SockResult.Failed -> println("  ✖ ${result.phrase(lang)}")
         // On the panel this is where the microphone closes and the wake word comes back. In a
         // terminal there is nothing to close, so it reads as an ordinary answer with a full
         // stop after it — which is exactly what it is.
-        is SockResult.Ended -> result.text?.let { println("  🔊 $it") }
+        is SockResult.Ended -> result.phrase?.let { println("  🔊 ${it(lang)}") }
         SockResult.Silent -> Unit
         SockResult.Deferred -> Unit
         SockResult.NotForMe -> println("  ✖ nobody handled this")

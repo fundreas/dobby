@@ -4,6 +4,7 @@ import io.dobby.core.registry.SockRegistry
 import io.dobby.core.registry.Subscriber
 import io.dobby.core.sock.ChainMode
 import io.dobby.core.sock.CommandInvocation
+import io.dobby.core.sock.Phrase
 import io.dobby.core.sock.Sock
 import io.dobby.core.sock.SockActivity
 import io.dobby.core.sock.SockLog
@@ -82,7 +83,7 @@ class Dispatcher(
     private suspend fun dispatchExclusive(invocation: CommandInvocation): DispatchOutcome {
         val owner = registry.ownerOf(invocation.commandId)
             ?: return DispatchOutcome(
-                SockResult.Failed("Das kenne ich nicht."),
+                SockResult.Failed(UNKNOWN_COMMAND),
                 listOf(ChainStep("?", null, StepOutcome.FAILED, "no owner")),
             )
         return deliver(owner, invocation, note = null)
@@ -112,7 +113,7 @@ class Dispatcher(
                 health.degrade(owner.id, attempt.cause.toString())
                 log.warn("${owner.id} threw handling ${invocation.commandId}", attempt.cause)
                 DispatchOutcome(
-                    SockResult.Failed("Das hat gerade nicht geklappt.", attempt.cause),
+                    SockResult.Failed(HANDLER_THREW, attempt.cause),
                     listOf(step(owner, null, StepOutcome.FAILED, detail(note, attempt.cause.toString()))),
                 )
             }
@@ -121,7 +122,7 @@ class Dispatcher(
                 health.degrade(owner.id, "Zeitüberschreitung")
                 log.warn("${owner.id} timed out handling ${invocation.commandId}")
                 DispatchOutcome(
-                    SockResult.Failed("Das hat zu lange gedauert."),
+                    SockResult.Failed(HANDLER_TIMED_OUT),
                     listOf(step(owner, null, StepOutcome.TIMED_OUT, note)),
                 )
             }
@@ -132,7 +133,7 @@ class Dispatcher(
                     // the Sock's own `when` fell through — a bug in the Sock, not a routing hint.
                     log.warn("${owner.id} returned NotForMe for exclusive ${invocation.commandId}")
                     DispatchOutcome(
-                        SockResult.Failed("Das kann ich gerade nicht."),
+                        SockResult.Failed(CANNOT_RIGHT_NOW),
                         listOf(step(owner, null, StepOutcome.FAILED, detail(note, "NotForMe"))),
                     )
                 } else {
@@ -148,7 +149,7 @@ class Dispatcher(
 
     private suspend fun dispatchChain(invocation: CommandInvocation): DispatchOutcome {
         val chain = registry.chainFor(invocation.commandId)
-            ?: return DispatchOutcome(SockResult.Failed("Das kenne ich nicht."))
+            ?: return DispatchOutcome(SockResult.Failed(UNKNOWN_COMMAND))
 
         val trace = mutableListOf<ChainStep>()
         var consumed: SockResult? = null
@@ -221,5 +222,20 @@ class Dispatcher(
 
     companion object {
         val DEFAULT_TIMEOUT: Duration = 5.seconds
+
+        /**
+         * The four sentences core says on a Sock's behalf when the Sock could not.
+         *
+         * They live here rather than in a Sock because none of them is about a capability:
+         * they are what a routing failure, a thrown handler, a timeout and a misused
+         * [SockResult.NotForMe] sound like from the room. Deliberately vague — a person
+         * standing at a panel can do nothing with "IllegalStateException in clock", and the
+         * trace in [ChainStep.detail] is where the real answer went.
+         */
+        val UNKNOWN_COMMAND: Phrase = Phrase.of("Das kenne ich nicht.", "I don't know that one.")
+        val HANDLER_THREW: Phrase =
+            Phrase.of("Das hat gerade nicht geklappt.", "That didn't work just now.")
+        val HANDLER_TIMED_OUT: Phrase = Phrase.of("Das hat zu lange gedauert.", "That took too long.")
+        val CANNOT_RIGHT_NOW: Phrase = Phrase.of("Das kann ich gerade nicht.", "I can't do that right now.")
     }
 }

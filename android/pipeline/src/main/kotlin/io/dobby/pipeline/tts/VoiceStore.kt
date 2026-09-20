@@ -173,10 +173,13 @@ class VoiceStore(private val root: File) {
             VoiceOption(
                 id = "dir:${folder.name}",
                 name = nameFor(folder.name),
-                // Unknowable from a directory. The language setting Part E brings will have to
-                // ask, or guess from the name; neither is this milestone's problem.
+                // Unknowable from a directory, and the tag is now the answer language — so an
+                // empty one means German, which is the default a sideload silently inherits.
+                // Guessing from the directory name (`vits-piper-en_GB-…`) is a guess about
+                // somebody else's file naming; naming it in the UI is the honest fix, and it
+                // needs a settings row rather than a regex.
                 language = "",
-                description = "Eigene Stimme · ${folder.name}",
+                description = "Eigene Stimme · ${folder.name} · Antwortet auf Deutsch",
                 directory = folder.name,
                 files = emptyList(),
             )

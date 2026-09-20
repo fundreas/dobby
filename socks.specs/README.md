@@ -25,13 +25,47 @@ This file defines what a Sock is and how to write its spec. One spec file per So
 ## 2. What a Sock may NOT do
 
 - Touch `AudioRecord` or the wake word. The mic has exactly one owner (core).
-- Call `TextToSpeech` directly for a command acknowledgement — return a `SockResult` instead. Asynchronous announcements (a timer firing) go through `ctx.announce(text)`.
+- Call `TextToSpeech` directly for a command acknowledgement — return a `SockResult` instead. Asynchronous announcements (a timer firing) go through `ctx.announce(phrase)`.
 - Hold screen wake locks. Ask `ctx.screen` instead.
 - Start sustained audio playback without requesting focus from `ctx.playback`. A Sock that plays **in this process** also passes an `onLost` callback to `requestFocus` and stops when it fires — the OS cannot revoke a request Dobby has already abandoned, so eviction is the coordinator's job (`radio.specs.md` §3, M4).
 - Reach into another Sock. Cross-Sock effects happen only through `PlaybackCoordinator` / `ScreenController`.
 - Block. `handle()` runs under a timeout; long work belongs in `ctx.coroutineScope` with a `Deferred` result. **This includes waiting for an answer to a question**: a Sock that asks something returns `Asked` and keeps its half-built state under the token (§5). Core calls `handle()` a second time with the answer. There is no waiting instance and nothing to block on.
 
 If a Sock needs something not on `SockContext`, that is a core change and a plan change — not a local workaround.
+
+---
+
+## 2a. What a Sock says, and in which language
+
+**Nothing sayable is a `String`.** `SockResult.Spoken`, `Asked`, `Failed`, `Ended` and `ctx.announce` all take a `Phrase` — `(Lang) -> String`, with `Lang` being `DE` or `EN`. The Sock is handed the language and builds the sentence; core calls the function at the moment it speaks.
+
+```kotlin
+// A sentence with nothing to interpolate: the two wordings, side by side.
+SockResult.Spoken("Es läuft gerade kein Timer.", "No timer is running.")
+
+// A constant, for copy the spec names and several handlers share.
+val NO_TIMER: Phrase = Phrase.of("Es läuft gerade kein Timer.", "No timer is running.")
+
+// Anything assembled. This is the common case, and it is why there is no strings table:
+// the article, the number and the word order all move together.
+SockResult.Spoken { lang ->
+    val subject = timer.subject(lang)          // "Der Timer" / "The timer"
+    if (lang == Lang.EN) "$subject has ${left(timer, lang)} left." else "$subject läuft noch ${left(timer, lang)}."
+}
+
+// A name that is neither German nor English. Write it once.
+SockResult.Spoken(Phrase.of("${station.displayName}."))
+```
+
+Three rules follow from it:
+
+1. **Build late, never early.** The function must be cheap and must not capture a rendered string. A timer set before the voice was switched is announced after it, in the language now selected — that only works because nothing was rendered until it was said.
+2. **Understanding does not follow the answer language.** Templates, examples and the Tier 2 few-shots are German whatever the voice is, so a question asked in English is still answered in German ("The first or the second?" → "die zweite"). Do not add an English answer palette to a `FollowUp`.
+3. **The panel's own UI stays German.** `SockStatus` reasons, dashboard cards and `CommandHelp` are drawn rather than spoken; where a Sock needs the same copy for both, it renders the phrase with `Lang.DE` for the screen and hands the phrase itself to core for the speaker.
+
+**The per-Sock specs quote the German wording only**, and that is deliberate rather than stale: German is the copy that was reviewed out loud in the room, the English is its translation, and duplicating every table would give the two a way to drift. A spec says `Spoken("Es läuft gerade kein Timer.")`; the code carries both wordings and the German one must match the spec verbatim.
+
+**Which language is set is not a Sock's business, and not a setting of its own.** It is the selected voice's: Cori answers in English, Thorsten and the Android voice in German (`m2c-plan.md` Part E). A Sock never reads it outside a `Phrase`.
 
 ## 3. Command ids
 
@@ -151,7 +185,7 @@ A slot capture always beats a static param. Use this rather than re-parsing Germ
 
 **Breadth is cheap; two things constrain it.** Tier 1 must fully cover every command every Sock declares ([`dobby-plan.md`](../dobby-plan.md) §2, core design rule 5), and more templates only enlarge a lookup table — it is the Tier 2 system prompt that is expensive, and that grows with `description` and `examples`, not with templates (same file, §9). So add phrasings liberally. What limits them is the single-keyword rule above, and this one:
 
-**English templates are allowed on commands with no `{x:int}` and no `{x:enum}` slot.** The recogniser is multilingual and English tokens arrive intact, so an English template really does fire. The *normalizer* is German-only: it turns "zehn" into `10` and knows nothing of "ten", so an English template feeding an integer slot would match and then fail to coerce, silently. Apostrophes survive normalization (`'` is in the keep class), so write `what's` — and list `whats` beside it, the way `ich hab's gehört` lists `ich habs gehört`. Dobby answers in German whatever language it was addressed in; that is deliberate, and a spec that adds English templates says so.
+**English templates are allowed on commands with no `{x:int}` and no `{x:enum}` slot.** The recogniser is multilingual and English tokens arrive intact, so an English template really does fire. The *normalizer* is German-only: it turns "zehn" into `10` and knows nothing of "ten", so an English template feeding an integer slot would match and then fail to coerce, silently. Apostrophes survive normalization (`'` is in the keep class), so write `what's` — and list `whats` beside it, the way `ich hab's gehört` lists `ich habs gehört`. The answer language is not the language it was addressed in — it is the voice's (§2a) — so an English template is answered in whatever the voice speaks. A spec that adds English templates says so.
 
 **Do not enumerate filler variants.** The matcher runs the palette twice: once strictly, and — only if nothing matched — once more ignoring a list of German filler words. So `wie spät` already covers "wie spät ist es", "wie spät ist es denn jetzt", "ähm wie spät ist es bitte" and the "wie spät ist **das**" the recogniser keeps producing. Write the content words; do not write the cross-product.
 

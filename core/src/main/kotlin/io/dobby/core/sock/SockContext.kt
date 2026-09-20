@@ -22,8 +22,12 @@ interface SockContext {
      * Asynchronous speech — a timer firing, a stream dropping.
      *
      * Command acknowledgements do NOT go here; return a [SockResult] instead.
+     *
+     * A [Phrase] for the same reason every sayable [SockResult] is one, and here the late
+     * binding earns its keep twice over: an announcement is built when the timer is *set* and
+     * spoken when it *expires*, which can be an hour and a voice change later.
      */
-    suspend fun announce(text: String)
+    suspend fun announce(phrase: Phrase)
 }
 
 /**

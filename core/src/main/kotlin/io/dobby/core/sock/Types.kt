@@ -25,10 +25,19 @@ sealed interface SockStatus {
     data class Unavailable(val reason: String) : SockStatus
 }
 
-/** What a Sock hands back to core. Core — never the Sock — turns this into speech and UI state. */
+/**
+ * What a Sock hands back to core. Core — never the Sock — turns this into speech and UI state.
+ *
+ * Everything sayable here is a [Phrase] rather than a string, and that is the i18n contract:
+ * the Sock hands back the *ability* to build a sentence, core calls it with the language that
+ * is set when the sentence is spoken. See [Phrase].
+ */
 sealed interface SockResult {
-    /** Say this, in German. */
-    data class Spoken(val text: String) : SockResult
+    /** Say this. */
+    data class Spoken(val phrase: Phrase) : SockResult {
+        /** The two wordings, for the common case of a sentence with nothing to interpolate. */
+        constructor(de: String, en: String) : this(Phrase.of(de, en))
+    }
 
     /** Handled; the side effect is its own feedback. */
     data object Silent : SockResult
@@ -36,7 +45,9 @@ sealed interface SockResult {
     /** Handled; the Sock will speak later via [SockContext.announce]. */
     data object Deferred : SockResult
 
-    data class Failed(val userMessage: String, val cause: Throwable? = null) : SockResult
+    data class Failed(val phrase: Phrase, val cause: Throwable? = null) : SockResult {
+        constructor(de: String, en: String, cause: Throwable? = null) : this(Phrase.of(de, en), cause)
+    }
 
     /**
      * Asked the user something and is waiting for the answer.
@@ -44,7 +55,7 @@ sealed interface SockResult {
      * Spoken exactly like [Spoken], but core keeps the microphone open and routes the next
      * utterance back to this Sock via [follow].
      */
-    data class Asked(val text: String, val follow: FollowUp) : SockResult
+    data class Asked(val phrase: Phrase, val follow: FollowUp) : SockResult
 
     /**
      * Handled, and the conversation with it: core stops listening rather than waiting for more.
@@ -58,11 +69,11 @@ sealed interface SockResult {
      * finished sentences: holding the microphone open after them is a panel that did not take
      * the hint, listening to a room that has stopped addressing it. The other kind is a command
      * that makes the room too loud to listen to — `spotify.play_music` ends its turn because
-     * the next few seconds are music, not a follow-up. [text] is spoken first if there is any;
+     * the next few seconds are music, not a follow-up. [phrase] is spoken first if there is any;
      * null closes the turn without a word, which is what a command answered by its own side
      * effect returns.
      */
-    data class Ended(val text: String? = null) : SockResult
+    data class Ended(val phrase: Phrase? = null) : SockResult
 
     /**
      * "Nothing to do for me here" — pass to the next Sock in the chain.

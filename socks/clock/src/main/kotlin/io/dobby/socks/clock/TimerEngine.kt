@@ -1,5 +1,7 @@
 package io.dobby.socks.clock
 
+import io.dobby.core.sock.Lang
+import io.dobby.core.sock.Phrase
 import io.dobby.core.sock.SockContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -362,9 +364,19 @@ internal class TimerEngine(
          * German copy lives in the spec (§3). What the sole default timer announces, and the
          * shape every other one follows: "Timer 2 ist abgelaufen", "Timer Nudeln ist abgelaufen".
          */
-        const val TIMER_EXPIRED: String = "Der Timer ist abgelaufen."
+        val TIMER_EXPIRED: Phrase = Phrase.of("Der Timer ist abgelaufen.", "The timer has finished.")
 
-        fun expired(timer: TimerState): String = "${timer.subject} ist abgelaufen."
+        /**
+         * A [Phrase], and this is the one place where the late binding is not a nicety.
+         *
+         * The sentence is built when the timer is *set* and spoken when it *expires* — an hour
+         * and, quite possibly, a voice change later. Rendering it at construction would answer
+         * a two-hour timer in whatever language was selected when it was started.
+         */
+        fun expired(timer: TimerState): Phrase = Phrase { lang ->
+            val subject = timer.subject(lang)
+            if (lang == Lang.EN) "$subject has finished." else "$subject ist abgelaufen."
+        }
 
         /**
          * More than this is not a kitchen, it is a stress test.

@@ -1,6 +1,8 @@
 package io.dobby.core.testing
 
 import io.dobby.core.sock.FocusLoss
+import io.dobby.core.sock.Lang
+import io.dobby.core.sock.Phrase
 import io.dobby.core.sock.PlaybackCoordinator
 import io.dobby.core.sock.ScreenController
 import io.dobby.core.sock.SockConfigStore
@@ -25,8 +27,18 @@ class FakeSockContext(
     override val config: FakeConfigStore = FakeConfigStore(),
 ) : SockContext {
 
+    /**
+     * What was announced, and in which language it was announced.
+     *
+     * A [Phrase] is rendered here rather than kept, because [lang] is the whole question a
+     * fixture can answer about one: a test that wants the other wording flips the field and
+     * announces again.
+     */
     val announcements: MutableList<String> = mutableListOf()
     val warnings: MutableList<String> = mutableListOf()
+
+    /** The language announcements are rendered in. Settable, so both wordings are reachable. */
+    var lang: Lang = Lang.DEFAULT
 
     override val log: SockLog = object : SockLog {
         override fun debug(message: String) = Unit
@@ -36,8 +48,8 @@ class FakeSockContext(
         }
     }
 
-    override suspend fun announce(text: String) {
-        announcements += text
+    override suspend fun announce(phrase: Phrase) {
+        announcements += phrase(lang)
     }
 }
 

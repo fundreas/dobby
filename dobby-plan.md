@@ -15,7 +15,8 @@ This document is the build spec for **Dobby core**. Per-Sock behavior is specifi
 - Commands are interpreted locally and dispatched to the owning Sock. Responses are spoken via TTS and/or shown on the dashboard.
 - Dashboard (when screen is on): clock plus whatever the installed Socks contribute (departure board, timer countdown, now playing).
 - Everything must survive: screen off, app backgrounded, days of uptime, OxygenOS's aggressive process killing. A reboot may require one manual tap (see §7.3 — accepted limitation).
-- Interaction language is **German** (de-AT/de-DE). Every Sock's utterances, TTS strings and LLM examples are German.
+- **Input** language is **German** (de-AT/de-DE): every Sock's utterances and LLM examples are German, and that has not changed.
+- **Answers** follow the selected voice — German with Thorsten or the Android voice, English with Cori. Every sayable `SockResult` is a `Phrase` rather than a string (§3.1); the panel's own screens stay German. See `m2c-plan.md` Part E and `socks.specs/README.md` §2a.
 
 ---
 
@@ -103,12 +104,13 @@ data class CommandSpec(
 ```
 
 - `CommandInvocation` = `commandId: String` + `params: Map<String, Any>` + `answering: String?` (the follow-up token this utterance answers, §3.4a), already type-coerced and validated against `ParamSpec` before it reaches the Sock.
-- `SockResult` = `Spoken(text)` | `Silent` | `Deferred` (Sock will speak later, e.g. timer expiry) | `Failed(userMessage, cause)` | **`Asked(text, follow)`** (a question that holds the floor, §3.4a) | **`NotForMe`** (chain only, §3.4). Core turns it into TTS + UI state. **A Sock never calls TTS directly for command acknowledgement** — it returns a result. It may push asynchronous announcements via `ctx.announce(text)`.
+- `SockResult` = `Spoken(phrase)` | `Silent` | `Deferred` (Sock will speak later, e.g. timer expiry) | `Failed(phrase, cause)` | **`Asked(phrase, follow)`** (a question that holds the floor, §3.4a) | **`NotForMe`** (chain only, §3.4). Core turns it into TTS + UI state. **A Sock never calls TTS directly for command acknowledgement** — it returns a result. It may push asynchronous announcements via `ctx.announce(phrase)`.
+- Everything sayable above is a **`Phrase`** — `(Lang) -> String`, `Lang` being `DE` or `EN` — and not a string: the Sock builds the sentence, core calls it with the language set at the moment of speaking. The language is the selected voice's and has no setting of its own (`m2c-plan.md` Part E, `socks.specs/README.md` §2a). **Understanding stays German** whatever the voice says: the palette, the normaliser and the Tier 2 few-shots are unaffected.
 - Returning `NotForMe` for an **exclusive** command is a programming error: logged loudly, treated as `Failed`.
 
 ### 3.2 SockContext — everything a Sock is allowed to touch
 
-`appContext`, `coroutineScope` (service-lifetime), `announce(text)` (async TTS), `playback: PlaybackCoordinator`, `screen: ScreenController`, `http: OkHttpClient` (shared, configured), `config: SockConfigStore` (namespaced key-value), `log: SockLog` (feeds the Tier-2 fallthrough flywheel).
+`appContext`, `coroutineScope` (service-lifetime), `announce(phrase)` (async TTS, §3.1), `playback: PlaybackCoordinator`, `screen: ScreenController`, `http: OkHttpClient` (shared, configured), `config: SockConfigStore` (namespaced key-value), `log: SockLog` (feeds the Tier-2 fallthrough flywheel).
 
 Anything not on `SockContext` is off-limits — this is what keeps Socks unit-testable without an emulator.
 

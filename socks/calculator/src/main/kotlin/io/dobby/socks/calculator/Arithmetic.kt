@@ -1,5 +1,7 @@
 package io.dobby.socks.calculator
 
+import io.dobby.core.sock.Lang
+import io.dobby.core.sock.Phrase
 import kotlin.math.abs
 import kotlin.math.pow
 
@@ -15,13 +17,13 @@ import kotlin.math.pow
  * [spoken] is how the operator reads back inside the equation, which is a different string:
  * "geteilt durch" is what a person says, `geteilt` is what the param carries.
  */
-enum class Operation(val value: String, val spoken: String) {
-    PLUS("plus", "plus"),
-    MINUS("minus", "minus"),
-    TIMES("mal", "mal"),
-    DIVIDE("geteilt", "geteilt durch"),
-    POWER("hoch", "hoch"),
-    MODULO("modulo", "modulo"),
+enum class Operation(val value: String, private val de: String, private val en: String) {
+    PLUS("plus", "plus", "plus"),
+    MINUS("minus", "minus", "minus"),
+    TIMES("mal", "mal", "times"),
+    DIVIDE("geteilt", "geteilt durch", "divided by"),
+    POWER("hoch", "hoch", "to the power of"),
+    MODULO("modulo", "modulo", "modulo"),
 
     /**
      * Integer division — "wie oft passt 5 in 17".
@@ -30,8 +32,11 @@ enum class Operation(val value: String, val spoken: String) {
      * question and keeps a different number: the quotient, not the remainder (see
      * [Arithmetic.evaluate]).
      */
-    INT_DIVIDE("ganzzahlig", "ganzzahlig geteilt durch"),
+    INT_DIVIDE("ganzzahlig", "ganzzahlig geteilt durch", "divided evenly by"),
     ;
+
+    /** How the operator reads back inside the equation, in the language being spoken. */
+    fun spoken(lang: Lang): String = if (lang == Lang.EN) en else de
 
     companion object {
         val VALUES: List<String> = entries.map { it.value }
@@ -46,10 +51,10 @@ sealed interface CalcResult {
      * @param value what carries into the next utterance ("und jetzt mal 2")
      * @param sentence the whole spoken answer, equation included
      */
-    data class Value(val value: Double, val sentence: String) : CalcResult
+    data class Value(val value: Double, val sentence: Phrase) : CalcResult
 
-    /** Arithmetic Dobby will not do, and the German sentence saying so. */
-    data class Refused(val message: String) : CalcResult
+    /** Arithmetic Dobby will not do, and the sentence saying so. */
+    data class Refused(val message: Phrase) : CalcResult
 }
 
 /**
@@ -68,11 +73,11 @@ object Arithmetic {
     fun evaluate(a: Double, op: Operation, b: Long): CalcResult {
         if (abs(a) > MAX_OPERAND || abs(b) > MAX_OPERAND) return CalcResult.Refused(TOO_BIG_OPERAND)
         return when (op) {
-            Operation.PLUS -> value(a + b, equation(a, op, b))
-            Operation.MINUS -> value(a - b, equation(a, op, b))
-            Operation.TIMES -> value(a * b, equation(a, op, b))
+            Operation.PLUS -> value(a + b, op, a, b)
+            Operation.MINUS -> value(a - b, op, a, b)
+            Operation.TIMES -> value(a * b, op, a, b)
             Operation.DIVIDE ->
-                if (b == 0L) CalcResult.Refused(BY_ZERO) else value(a / b, equation(a, op, b))
+                if (b == 0L) CalcResult.Refused(BY_ZERO) else value(a / b, op, a, b)
 
             Operation.POWER -> power(a, b)
             Operation.MODULO -> modulo(a, b)
@@ -80,17 +85,20 @@ object Arithmetic {
         }
     }
 
-    /** "8 mal 2" — the left-hand side, read back so the answer can be checked by ear. */
-    private fun equation(a: Double, op: Operation, b: Long): String =
-        "${CalcNumber.speak(a)} ${op.spoken} ${CalcNumber.speak(b.toDouble())}"
+    /** "8 mal 2" / "8 times 2" — the left-hand side, read back so the answer checks by ear. */
+    private fun equation(a: Double, op: Operation, b: Long, lang: Lang): String =
+        "${CalcNumber.speak(a, lang)} ${op.spoken(lang)} ${CalcNumber.speak(b.toDouble(), lang)}"
 
-    private fun value(result: Double, equation: String): CalcResult =
+    private fun value(result: Double, op: Operation, a: Double, b: Long): CalcResult =
         if (!result.isFinite() || abs(result) > MAX_RESULT) {
             CalcResult.Refused(TOO_BIG_RESULT)
         } else {
             // Rounded before it is stored as well as before it is said, so the number the
             // person heard is the number the next utterance continues from.
-            CalcResult.Value(CalcNumber.round(result), "$equation ist ${CalcNumber.speak(result)}.")
+            CalcResult.Value(CalcNumber.round(result)) { lang ->
+                val verb = if (lang == Lang.EN) "is" else "ist"
+                "${equation(a, op, b, lang)} $verb ${CalcNumber.speak(result, lang)}."
+            }
         }
 
     /**
@@ -101,7 +109,7 @@ object Arithmetic {
      */
     private fun power(a: Double, b: Long): CalcResult {
         if (b < 0 || b > MAX_EXPONENT) return CalcResult.Refused(TOO_BIG_RESULT)
-        return value(a.pow(b.toDouble()), equation(a, Operation.POWER, b))
+        return value(a.pow(b.toDouble()), Operation.POWER, a, b)
     }
 
     /**
@@ -114,7 +122,7 @@ object Arithmetic {
         if (b == 0L) return CalcResult.Refused(BY_ZERO)
         if (!CalcNumber.isWhole(a)) return CalcResult.Refused(WHOLE_NUMBERS_ONLY)
         val rest = Math.floorMod(a.toLong(), b)
-        return value(rest.toDouble(), equation(a, Operation.MODULO, b))
+        return value(rest.toDouble(), Operation.MODULO, a, b)
     }
 
     /**
@@ -134,24 +142,32 @@ object Arithmetic {
         val whole = a.toLong()
         val times = Math.floorDiv(whole, b)
         val rest = Math.floorMod(whole, b)
-        val divisor = CalcNumber.speak(b.toDouble())
-        val dividend = CalcNumber.speak(a)
-        val count = CalcNumber.speak(times.toDouble())
-        return CalcResult.Value(
-            times.toDouble(),
-            if (rest == 0L) {
-                "$divisor passt genau $count mal in $dividend."
-            } else {
-                "$divisor passt $count mal in $dividend, Rest ${CalcNumber.speak(rest.toDouble())}."
-            },
-        )
+        return CalcResult.Value(times.toDouble()) { lang ->
+            val divisor = CalcNumber.speak(b.toDouble(), lang)
+            val dividend = CalcNumber.speak(a, lang)
+            val count = CalcNumber.speak(times.toDouble(), lang)
+            when {
+                lang == Lang.EN && rest == 0L -> "$divisor goes into $dividend exactly $count times."
+                lang == Lang.EN ->
+                    "$divisor goes into $dividend $count times, remainder " +
+                        "${CalcNumber.speak(rest.toDouble(), lang)}."
+
+                rest == 0L -> "$divisor passt genau $count mal in $dividend."
+                else ->
+                    "$divisor passt $count mal in $dividend, Rest " +
+                        "${CalcNumber.speak(rest.toDouble(), lang)}."
+            }
+        }
     }
 
-    /** German copy, verbatim from `socks.specs/calculator.specs.md` §3. */
-    const val BY_ZERO: String = "Durch null kann ich nicht teilen."
-    const val TOO_BIG_OPERAND: String = "Diese Zahl ist zu groß für mich."
-    const val TOO_BIG_RESULT: String = "Das Ergebnis ist zu groß für mich."
-    const val WHOLE_NUMBERS_ONLY: String = "Das geht nur mit ganzen Zahlen."
+    /** Spec copy (`socks.specs/calculator.specs.md` §3), German verbatim, English alongside. */
+    val BY_ZERO: Phrase = Phrase.of("Durch null kann ich nicht teilen.", "I can't divide by zero.")
+    val TOO_BIG_OPERAND: Phrase =
+        Phrase.of("Diese Zahl ist zu groß für mich.", "That number is too big for me.")
+    val TOO_BIG_RESULT: Phrase =
+        Phrase.of("Das Ergebnis ist zu groß für mich.", "That result is too big for me.")
+    val WHOLE_NUMBERS_ONLY: Phrase =
+        Phrase.of("Das geht nur mit ganzen Zahlen.", "That only works with whole numbers.")
 
     /** A milliard either way: past this a wall panel is the wrong tool. */
     private const val MAX_OPERAND = 1_000_000_000.0

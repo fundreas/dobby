@@ -4,8 +4,10 @@ import io.dobby.core.sock.CommandHelp
 import io.dobby.core.sock.CommandInvocation
 import io.dobby.core.sock.Example
 import io.dobby.core.sock.ExclusiveCommandSpec
+import io.dobby.core.sock.Lang
 import io.dobby.core.sock.ParamSpec
 import io.dobby.core.sock.ParamType
+import io.dobby.core.sock.Phrase
 import io.dobby.core.sock.SharedCommands
 import io.dobby.core.sock.SharedSubscription
 import io.dobby.core.sock.Sock
@@ -417,7 +419,9 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
             }
             player.release()
             ctx.playback.releaseFocus(id)
-            _state.value = RadioState.Error(station, STREAM_DROPPED)
+            // The card is part of the panel's German UI; the announcement follows the answer
+            // language, and core resolves it as it speaks.
+            _state.value = RadioState.Error(station, STREAM_DROPPED(Lang.DE))
             ctx.announce(STREAM_DROPPED)
         }
     }
@@ -443,9 +447,13 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
         /** The spec's backoff. A shorter ladder takes the first rungs, never the last. */
         val BACKOFF_MS: List<Long> = listOf(1_000, 3_000, 9_000)
 
-        /** German copy, verbatim from the spec (§3). */
-        const val UNKNOWN_STATION: String = "Den Sender kenne ich nicht."
-        const val UNREACHABLE: String = "Der Sender ist gerade nicht erreichbar."
+        /** Spec copy (§3), German verbatim and English alongside it. */
+        val UNKNOWN_STATION: Phrase =
+            Phrase.of("Den Sender kenne ich nicht.", "I don't know that station.")
+        val UNREACHABLE: Phrase = Phrase.of(
+            "Der Sender ist gerade nicht erreichbar.",
+            "That station isn't reachable right now.",
+        )
         /**
          * Spec copy with no caller, and that is a decision rather than an omission (§J3).
          *
@@ -454,8 +462,12 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
          * `SockContext` for one sentence is not worth it until the generic one turns out to be
          * confusing in use; this is where to start when it does.
          */
-        const val NO_NETWORK: String = "Ich habe gerade keine Internetverbindung."
-        const val NO_FOCUS: String = "Gerade nicht möglich."
-        const val STREAM_DROPPED: String = "Der Radiostream ist abgerissen."
+        val NO_NETWORK: Phrase = Phrase.of(
+            "Ich habe gerade keine Internetverbindung.",
+            "I have no internet connection right now.",
+        )
+        val NO_FOCUS: Phrase = Phrase.of("Gerade nicht möglich.", "Not possible right now.")
+        val STREAM_DROPPED: Phrase =
+            Phrase.of("Der Radiostream ist abgerissen.", "The radio stream dropped.")
     }
 }

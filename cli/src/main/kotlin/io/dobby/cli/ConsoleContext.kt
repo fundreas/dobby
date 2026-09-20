@@ -1,6 +1,8 @@
 package io.dobby.cli
 
 import io.dobby.core.sock.FocusLoss
+import io.dobby.core.sock.Lang
+import io.dobby.core.sock.Phrase
 import io.dobby.core.sock.PlaybackCoordinator
 import io.dobby.core.sock.ScreenController
 import io.dobby.core.sock.SockConfigStore
@@ -17,6 +19,14 @@ import kotlinx.coroutines.CoroutineScope
 class ConsoleContext(
     override val scope: CoroutineScope,
     private val verbose: () -> Boolean,
+    /**
+     * The answer language, read at the moment something is said rather than held.
+     *
+     * A provider and not a value because `/lang` switches it mid-session, and the whole point
+     * of [io.dobby.core.sock.Phrase] is that a sentence built an hour ago is spoken in the
+     * language that is set now.
+     */
+    private val lang: () -> Lang = { Lang.DEFAULT },
 ) : SockContext {
 
     override val playback: PlaybackCoordinator = ConsolePlayback()
@@ -35,8 +45,8 @@ class ConsoleContext(
         }
     }
 
-    override suspend fun announce(text: String) {
-        println("  🔊 $text")
+    override suspend fun announce(phrase: Phrase) {
+        println("  🔊 ${phrase(lang())}")
     }
 }
 

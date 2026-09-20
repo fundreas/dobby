@@ -5,8 +5,10 @@ import io.dobby.core.sock.CommandInvocation
 import io.dobby.core.sock.Example
 import io.dobby.core.sock.ExclusiveCommandSpec
 import io.dobby.core.sock.FollowUp
+import io.dobby.core.sock.Lang
 import io.dobby.core.sock.ParamSpec
 import io.dobby.core.sock.ParamType
+import io.dobby.core.sock.Phrase
 import io.dobby.core.sock.SharedCommands
 import io.dobby.core.sock.SharedSubscription
 import io.dobby.core.sock.Sock
@@ -461,7 +463,9 @@ class ClockSock(
                 // The dashboard clock is the visual half of the answer, so wake the screen
                 // even though the spoken reply stands on its own.
                 context?.screen?.wakeFor(screenWakeSeconds)
-                SockResult.Spoken(GermanTime.speak(LocalTime.now(clock)))
+                // Read at the moment it is spoken, not at the moment it is dispatched — which
+                // is also why the clock is read inside the phrase and not outside it.
+                SockResult.Spoken { lang -> SpokenTime.speak(LocalTime.now(clock), lang) }
             }
 
             SET_TIMER -> setTimer(invocation)
@@ -512,14 +516,25 @@ class ClockSock(
         val outcome = timers.start(started(), durationMs, name)
         refreshStatus()
         if (outcome !is StartOutcome.Started) return SockResult.Failed(TOO_MANY_TIMERS)
-        return SockResult.Spoken(
+        return SockResult.Spoken { lang ->
+            val english = lang == Lang.EN
             buildString {
-                if (outcome.replaced) append("Alter Timer ersetzt. ")
-                append("${outcome.timer.spoken} läuft: ${GermanTime.duration(amount, unit)}.")
+                if (outcome.replaced) append(if (english) "Old timer replaced. " else "Alter Timer ersetzt. ")
+                val duration = SpokenTime.duration(amount, unit, lang)
+                append("${outcome.timer.spoken} ")
+                append(if (english) "is running: $duration." else "läuft: $duration.")
                 // The timer still runs off the coroutine; only the backstop is weaker (§12).
-                if (!alarm.canScheduleExact) append(" Achtung, er ist nicht garantiert genau.")
-            },
-        )
+                if (!alarm.canScheduleExact) {
+                    append(
+                        if (english) {
+                            " Careful, it isn't guaranteed to be exact."
+                        } else {
+                            " Achtung, er ist nicht garantiert genau."
+                        },
+                    )
+                }
+            }
+        }
     }
 
     /**
@@ -533,7 +548,13 @@ class ClockSock(
     private fun askForUnit(amount: Int, name: String?): SockResult {
         val token = ask(Pending.MissingUnit(amount, name))
         return SockResult.Asked(
-            text = "$amount was — Sekunden, Minuten oder Stunden?",
+            phrase = { lang ->
+                if (lang == Lang.EN) {
+                    "$amount what — seconds, minutes or hours?"
+                } else {
+                    "$amount was — Sekunden, Minuten oder Stunden?"
+                }
+            },
             follow = FollowUp(
                 commandId = SET_TIMER,
                 templates = patterns("{unit:enum}", "(in|auf|für) {unit:enum}"),
@@ -564,8 +585,10 @@ class ClockSock(
         return when (val outcome = timers.cancel(started(), name)) {
             // The silence is its own feedback.
             is CancelOutcome.Silenced -> SockResult.Silent
-            is CancelOutcome.Cancelled ->
-                SockResult.Spoken("${GermanTime.list(outcome.timers.map { it.spoken })} abgebrochen.")
+            is CancelOutcome.Cancelled -> SockResult.Spoken { lang ->
+                val named = SpokenTime.list(outcome.timers.map { it.spoken }, lang)
+                if (lang == Lang.EN) "$named cancelled." else "$named abgebrochen."
+            }
 
             CancelOutcome.Nothing -> SockResult.Spoken(NO_TIMER)
             is CancelOutcome.Unknown -> SockResult.Spoken(noSuchTimer(outcome.name))
@@ -593,14 +616,21 @@ class ClockSock(
      * sentence ("brich Timer grüner Tee ab"), which goes to the global palette.
      */
     private fun askWhichTimer(running: List<TimerState>): SockResult {
-        val question = "Es laufen ${GermanTime.list(running.map { it.spoken })}. Welchen soll ich abbrechen?"
+        val question = Phrase { lang ->
+            val named = SpokenTime.list(running.map { it.spoken }, lang)
+            if (lang == Lang.EN) {
+                "$named are running. Which one should I cancel?"
+            } else {
+                "Es laufen $named. Welchen soll ich abbrechen?"
+            }
+        }
         val candidates = running.flatMap { it.keys }.filter { ' ' !in it }
         // Nothing sayable in one word: ask nothing, and let the list be the answer. Holding the
         // floor for a question no utterance could satisfy is worse than not holding it.
         if (candidates.isEmpty()) return SockResult.Spoken(question)
         val token = ask(Pending.WhichTimer)
         return SockResult.Asked(
-            text = question,
+            phrase = question,
             follow = FollowUp(
                 commandId = CANCEL_TIMER,
                 templates = patterns("{name:enum}", "(den)? timer {name:enum}"),
@@ -615,8 +645,18 @@ class ClockSock(
         val cancelled = timers.cancelAll(started())
         return when (cancelled.size) {
             0 -> SockResult.Spoken(NO_TIMER)
-            1 -> SockResult.Spoken("${cancelled.single().spoken} abgebrochen.")
-            else -> SockResult.Spoken("Alle ${cancelled.size} Timer abgebrochen.")
+            1 -> SockResult.Spoken { lang ->
+                val name = cancelled.single().spoken
+                if (lang == Lang.EN) "$name cancelled." else "$name abgebrochen."
+            }
+
+            else -> SockResult.Spoken { lang ->
+                if (lang == Lang.EN) {
+                    "All ${cancelled.size} timers cancelled."
+                } else {
+                    "Alle ${cancelled.size} Timer abgebrochen."
+                }
+            }
         }
     }
 
@@ -634,23 +674,32 @@ class ClockSock(
         val name = TimerNames.clean(invocation.textOrNull("name"))
         if (name != null) {
             val timer = TimerNames.find(running, name) ?: return SockResult.Spoken(noSuchTimer(name))
-            return SockResult.Spoken(sentence(timer))
+            return SockResult.Spoken { lang -> sentence(timer, lang) }
         }
-        if (running.size == 1) return SockResult.Spoken(sentence(running.single()))
-        return SockResult.Spoken(running.joinToString(" ") { "${it.spoken}: ${phrase(it)}." })
+        if (running.size == 1) return SockResult.Spoken { lang -> sentence(running.single(), lang) }
+        return SockResult.Spoken { lang ->
+            running.joinToString(" ") { "${it.spoken}: ${left(it, lang)}." }
+        }
     }
 
-    /** "Der Timer läuft noch 9 Minuten." — the whole answer, for one timer. */
-    private fun sentence(timer: TimerState): String =
-        if (timer.isRinging) {
-            "${timer.subject} ist gerade abgelaufen."
-        } else {
-            "${timer.subject} läuft noch ${GermanTime.remaining(timer.remainingMs)}."
+    /** "Der Timer läuft noch 9 Minuten." / "The timer has 9 minutes left." */
+    private fun sentence(timer: TimerState, lang: Lang): String {
+        val subject = timer.subject(lang)
+        return when {
+            timer.isRinging && lang == Lang.EN -> "$subject has just finished."
+            timer.isRinging -> "$subject ist gerade abgelaufen."
+            lang == Lang.EN -> "$subject has ${SpokenTime.remaining(timer.remainingMs, lang)} left."
+            else -> "$subject läuft noch ${SpokenTime.remaining(timer.remainingMs, lang)}."
         }
+    }
 
-    /** "noch 9 Minuten" — one entry in a list of several. */
-    private fun phrase(timer: TimerState): String =
-        if (timer.isRinging) "abgelaufen" else "noch ${GermanTime.remaining(timer.remainingMs)}"
+    /** "noch 9 Minuten" / "9 minutes left" — one entry in a list of several. */
+    private fun left(timer: TimerState, lang: Lang): String = when {
+        timer.isRinging && lang == Lang.EN -> "finished"
+        timer.isRinging -> "abgelaufen"
+        lang == Lang.EN -> "${SpokenTime.remaining(timer.remainingMs, lang)} left"
+        else -> "noch ${SpokenTime.remaining(timer.remainingMs, lang)}"
+    }
 
     /**
      * `shared.stop`.
@@ -711,18 +760,28 @@ class ClockSock(
         /** Highest in the catalog — see [shared]. */
         const val STOP_PRIORITY: Int = 100
 
-        /** German copy, verbatim from the spec (§3). */
-        const val BAD_DURATION: String = "Diese Dauer kann ich nicht stellen."
+        /** Spec copy (§3), German verbatim and English alongside it. */
+        val BAD_DURATION: Phrase =
+            Phrase.of("Diese Dauer kann ich nicht stellen.", "I can't set that duration.")
 
         /** §4–§6. Said when nothing is running at all, whatever was asked about it. */
-        const val NO_TIMER: String = "Es läuft gerade kein Timer."
+        val NO_TIMER: Phrase = Phrase.of("Es läuft gerade kein Timer.", "No timer is running.")
 
         /** §3. The cap is a guard against a misheard sentence, not a limit of the engine. */
-        const val TOO_MANY_TIMERS: String =
-            "Ich kann nicht mehr als ${TimerEngine.MAX_TIMERS} Timer gleichzeitig stellen."
+        val TOO_MANY_TIMERS: Phrase = Phrase.of(
+            "Ich kann nicht mehr als ${TimerEngine.MAX_TIMERS} Timer gleichzeitig stellen.",
+            "I can't run more than ${TimerEngine.MAX_TIMERS} timers at once.",
+        )
 
         /** §4 and §6. [name] arrives lowercase from the matcher and is spoken the way it is written. */
-        fun noSuchTimer(name: String): String = "Es läuft kein Timer namens ${TimerNames.display(name)}."
+        fun noSuchTimer(name: String): Phrase = Phrase { lang ->
+            val display = TimerNames.display(name)
+            if (lang == Lang.EN) {
+                "There's no timer called $display."
+            } else {
+                "Es läuft kein Timer namens $display."
+            }
+        }
 
         /**
          * Shared alternations, written once because they appear in both the named and the

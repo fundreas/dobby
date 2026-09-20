@@ -8,6 +8,7 @@ import io.dobby.core.sock.CommandHelp
 import io.dobby.core.sock.CommandInvocation
 import io.dobby.core.sock.Example
 import io.dobby.core.sock.ExclusiveCommandSpec
+import io.dobby.core.sock.Lang
 import io.dobby.core.sock.ParamSpec
 import io.dobby.core.sock.ParamType
 import io.dobby.core.sock.Sock
@@ -147,49 +148,82 @@ class HelpSock(
 
     override suspend fun handle(invocation: CommandInvocation): SockResult {
         val introspection = directory()
-            ?: return SockResult.Failed("Ich kann meine Befehle gerade nicht nachschlagen.")
+            ?: return SockResult.Failed(
+                "Ich kann meine Befehle gerade nicht nachschlagen.",
+                "I can't look up my commands right now.",
+            )
 
         return when (invocation.commandId) {
-            OVERVIEW -> SockResult.Spoken(overview(introspection))
-            SOCK_COMMANDS -> SockResult.Spoken(describeSock(introspection, invocation.text("sock")))
+            OVERVIEW -> SockResult.Spoken { lang -> overview(introspection, lang) }
+            SOCK_COMMANDS ->
+                SockResult.Spoken { lang -> describeSock(introspection, invocation.text("sock"), lang) }
+
             EXPLAIN_COMMAND ->
-                SockResult.Spoken(explainCommand(introspection, invocation.text("command")))
+                SockResult.Spoken { lang -> explainCommand(introspection, invocation.text("command"), lang) }
+
             else -> SockResult.NotForMe
         }
     }
 
-    private fun overview(introspection: Introspection): String {
+    private fun overview(introspection: Introspection, lang: Lang): String {
         val socks = introspection.socks().filter { it.commandCount > 0 }.sortedBy { it.displayName }
-        if (socks.isEmpty()) return "Ich kann im Moment noch nichts."
+        if (socks.isEmpty()) {
+            return pick(lang, "Ich kann im Moment noch nichts.", "I can't do anything yet.")
+        }
 
-        val names = germanList(socks.map { it.displayName })
+        val names = list(socks.map { it.displayName }, lang)
         val example = socks.firstOrNull { it.id != id } ?: socks.first()
-        return if (socks.size == 1) {
-            "Ich habe einen Bereich: $names. Frag: Was kann ${example.displayName}?"
-        } else {
-            "Ich habe ${socks.size} Bereiche: $names. " +
-                "Frag zum Beispiel: Was kann ${example.displayName}?"
+        // The area name and the question that reaches it are German either way: they are
+        // command *grammar*, and the palette only understands German (`m2c-plan.md` Part E).
+        // So the English sentence frames a German quotation rather than translating it.
+        val ask = "‚Was kann ${example.displayName}?‘"
+        return when {
+            socks.size == 1 && lang == Lang.EN -> "I have one area: $names. Ask: $ask"
+            socks.size == 1 -> "Ich habe einen Bereich: $names. Frag: $ask"
+            lang == Lang.EN -> "I have ${socks.size} areas: $names. For example, ask: $ask"
+            else -> "Ich habe ${socks.size} Bereiche: $names. Frag zum Beispiel: $ask"
         }
     }
 
-    private fun describeSock(introspection: Introspection, spoken: String): String {
+    private fun describeSock(introspection: Introspection, spoken: String, lang: Lang): String {
         val sock = resolve(introspection, spoken)
-            ?: return "Den Bereich kenne ich nicht. Ich habe: " +
-                germanList(introspection.socks().map { it.displayName }.sorted()) + "."
+            ?: return pick(
+                lang,
+                "Den Bereich kenne ich nicht. Ich habe: ",
+                "I don't know that area. I have: ",
+            ) + list(introspection.socks().map { it.displayName }.sorted(), lang) + "."
 
         val commands = introspection.commands(sock.id).orEmpty()
-        if (commands.isEmpty()) return "${sock.displayName} kann im Moment nichts."
+        if (commands.isEmpty()) {
+            return pick(
+                lang,
+                "${sock.displayName} kann im Moment nichts.",
+                "${sock.displayName} can't do anything at the moment.",
+            )
+        }
 
         val phrases = commands.mapNotNull { phraseFor(it) }.take(MAX_SPOKEN_EXAMPLES)
         if (phrases.isEmpty()) {
-            return "${sock.displayName} hat ${count(commands.size)}, aber ich weiß gerade nicht, " +
-                "wie man sie sagt."
+            return pick(
+                lang,
+                "${sock.displayName} hat ${count(commands.size, lang)}, aber ich weiß gerade " +
+                    "nicht, wie man sie sagt.",
+                "${sock.displayName} has ${count(commands.size, lang)}, but I don't currently know " +
+                    "how to say them.",
+            )
         }
 
         val rest = commands.size - phrases.size
-        val tail = if (rest > 0) " Und $rest weitere." else ""
-        return "${sock.displayName} hat ${count(commands.size)}. Sag zum Beispiel: " +
-            germanList(phrases.map { "‚$it‘" }) + ".$tail"
+        // The examples stay German for the same reason the question above does: they are
+        // sentences to repeat at the microphone, and repeating a translation would not work.
+        val quoted = list(phrases.map { "‚$it‘" }, lang)
+        return pick(
+            lang,
+            "${sock.displayName} hat ${count(commands.size, lang)}. Sag zum Beispiel: $quoted." +
+                if (rest > 0) " Und $rest weitere." else "",
+            "${sock.displayName} has ${count(commands.size, lang)}. For example, say: $quoted." +
+                if (rest > 0) " And $rest more." else "",
+        )
     }
 
     /**
@@ -202,14 +236,25 @@ class HelpSock(
      * At most one hint is spoken. A screen can carry three; an answer to a question somebody
      * asked out loud cannot, and the rest is on the panel.
      */
-    private fun explainCommand(introspection: Introspection, spoken: String): String {
+    private fun explainCommand(introspection: Introspection, spoken: String, lang: Lang): String {
         val command = resolveCommand(introspection, spoken)
-            ?: return "Das Kommando kenne ich nicht. Frag zum Beispiel: Was kann " +
-                (introspection.socks().firstOrNull { it.id != id }?.displayName ?: "Hilfe") + "?"
+            ?: return pick(
+                lang,
+                "Das Kommando kenne ich nicht. Frag zum Beispiel: Was kann ",
+                "I don't know that command. For example, ask: Was kann ",
+            ) + (introspection.socks().firstOrNull { it.id != id }?.displayName ?: "Hilfe") + "?"
 
+        // [title], [detail] and [hints] are the Sock author's German prose, and translating
+        // them is the rest of `m2c-plan.md` Part E — a `CommandHelp` per language, which is a
+        // contract change every Sock has to implement. Until then the *frame* follows the
+        // answer language and the explanation stays as it was written, which is honest: a
+        // German panel explaining German commands.
         return buildString {
             append(command.title).append(": ").append(command.detail.trimEnd('.')).append('.')
-            command.usage?.let { append(" Sag zum Beispiel: ‚").append(it).append("‘.") }
+            command.usage?.let {
+                append(pick(lang, " Sag zum Beispiel: ‚", " For example, say: ‚"))
+                append(it).append("‘.")
+            }
             command.hints.firstOrNull()?.let { append(' ').append(it) }
         }
     }
@@ -273,13 +318,21 @@ class HelpSock(
             }
     }
 
-    private fun count(n: Int): String = if (n == 1) "einen Befehl" else "$n Befehle"
+    private fun count(n: Int, lang: Lang): String = when {
+        lang == Lang.EN -> if (n == 1) "one command" else "$n commands"
+        n == 1 -> "einen Befehl"
+        else -> "$n Befehle"
+    }
 
-    private fun germanList(items: List<String>): String = when (items.size) {
+    /** "A, B und C" / "A, B and C" — a spoken enumeration, with the right conjunction. */
+    private fun list(items: List<String>, lang: Lang): String = when (items.size) {
         0 -> ""
         1 -> items.single()
-        else -> items.dropLast(1).joinToString(", ") + " und " + items.last()
+        else -> items.dropLast(1).joinToString(", ") +
+            (if (lang == Lang.EN) " and " else " und ") + items.last()
     }
+
+    private fun pick(lang: Lang, de: String, en: String): String = if (lang == Lang.EN) en else de
 
     companion object {
         const val OVERVIEW: String = "help.overview"

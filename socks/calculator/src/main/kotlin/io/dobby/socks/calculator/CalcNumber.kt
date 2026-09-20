@@ -1,5 +1,6 @@
 package io.dobby.socks.calculator
 
+import io.dobby.core.sock.Lang
 import java.math.BigDecimal
 import java.math.RoundingMode
 import kotlin.math.abs
@@ -21,18 +22,20 @@ object CalcNumber {
     /** Decimal places Dobby is willing to pronounce. */
     const val DECIMALS: Int = 4
 
-    /** "8", "minus 4", "2,5", "ungefähr 3,3333". */
-    fun speak(value: Double): String {
+    /** "8", "minus 4", "2,5", "ungefähr 3,3333" — and "8", "minus 4", "2.5", "about 3.3333". */
+    fun speak(value: Double, lang: Lang = Lang.DEFAULT): String {
         val rounded = round(value)
-        val digits = BigDecimal(abs(rounded))
+        val plain = BigDecimal(abs(rounded))
             .setScale(DECIMALS, RoundingMode.HALF_UP)
             .stripTrailingZeros()
             .toPlainString()
-            .replace('.', ',')
+        // The separator is the whole reason this function takes a language: a German voice
+        // reading "2.5" says two numbers, and an English one reading "2,5" does the same.
+        val digits = if (lang == Lang.EN) plain else plain.replace('.', ',')
         return buildString {
             // The hedge and the memory are the same question asked once: "ungefähr" appears
             // exactly when the number Dobby keeps differs from the number it just said.
-            if (rounded != value) append("ungefähr ")
+            if (rounded != value) append(if (lang == Lang.EN) "about " else "ungefähr ")
             if (rounded < 0) append("minus ")
             append(digits)
         }

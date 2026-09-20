@@ -140,6 +140,15 @@ fun SettingsScreen(
                 )
                 HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
                 SectionLabel("Stimme")
+                // The voice is also the language switch: each row says which language it
+                // answers in, and there is deliberately no second setting to disagree with it.
+                Text(
+                    "Die Stimme bestimmt auch die Antwortsprache. Befehle sprichst du immer " +
+                        "auf Deutsch.",
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
 
             items(state.voices, key = { it.id }) { option ->

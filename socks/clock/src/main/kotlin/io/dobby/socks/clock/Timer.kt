@@ -2,6 +2,7 @@ package io.dobby.socks.clock
 
 import io.dobby.core.nlu.Fillers
 import io.dobby.core.nlu.template.Levenshtein
+import io.dobby.core.sock.Lang
 import java.time.Instant
 
 /**
@@ -12,11 +13,30 @@ import java.time.Instant
  * the command takes `amount` + `unit` rather than a single `duration_s` nobody says out loud
  * (`clock.specs.md` §2).
  */
-enum class TimerUnit(val spoken: String, val singular: String, val plural: String, val seconds: Long) {
-    SEKUNDEN("sekunden", "Sekunde", "Sekunden", 1),
-    MINUTEN("minuten", "Minute", "Minuten", 60),
-    STUNDEN("stunden", "Stunde", "Stunden", 3600),
+enum class TimerUnit(
+    val spoken: String,
+    val singular: String,
+    val plural: String,
+    private val singularEn: String,
+    private val pluralEn: String,
+    val seconds: Long,
+) {
+    SEKUNDEN("sekunden", "Sekunde", "Sekunden", "second", "seconds", 1),
+    MINUTEN("minuten", "Minute", "Minuten", "minute", "minutes", 60),
+    STUNDEN("stunden", "Stunde", "Stunden", "hour", "hours", 3600),
     ;
+
+    /**
+     * The unit as it reads next to [amount], in [lang].
+     *
+     * The plural rule is the same in both languages for the numbers a kitchen timer uses, so
+     * it is asked once here rather than at each of the three call sites.
+     */
+    fun noun(amount: Int, lang: Lang): String = when {
+        lang == Lang.EN -> if (amount == 1) singularEn else pluralEn
+        amount == 1 -> singular
+        else -> plural
+    }
 
     companion object {
         /** The `ParamType.Enumeration` values. Singular forms are folded in by the enum matcher. */
@@ -75,9 +95,20 @@ data class TimerState(
     val spoken: String
         get() = if (name != null) "$DEFAULT_LABEL $name" else label
 
-    /** [spoken] as the subject of a sentence: "Der Timer ist abgelaufen", "Timer 2 ist abgelaufen". */
-    val subject: String
-        get() = if (spoken == DEFAULT_LABEL) "Der $DEFAULT_LABEL" else spoken
+    /**
+     * [spoken] as the subject of a sentence: "Der Timer ist abgelaufen", "Timer 2 ist abgelaufen".
+     *
+     * The article is the only part that is language-specific — "Timer" is the same word in both
+     * — and it only appears for the sole default timer, because "Der Timer 2" is not German and
+     * "The Timer 2" is not English.
+     */
+    fun subject(lang: Lang): String = when {
+        spoken != DEFAULT_LABEL -> spoken
+        // Lowercase, because in English "timer" here is a common noun and not the label a
+        // numbered or named timer wears. German capitalises it either way.
+        lang == Lang.EN -> "The ${DEFAULT_LABEL.lowercase()}"
+        else -> "Der $DEFAULT_LABEL"
+    }
 
     /**
      * The words that address this timer: its name, or its number.

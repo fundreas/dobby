@@ -8,6 +8,7 @@ import android.os.PowerManager
 import android.util.Log
 import androidx.core.content.edit
 import io.dobby.core.sock.FocusLoss
+import io.dobby.core.sock.Phrase
 import io.dobby.core.sock.PlaybackCoordinator
 import io.dobby.core.sock.ScreenController
 import io.dobby.core.sock.SockConfigStore
@@ -26,7 +27,7 @@ import kotlinx.coroutines.launch
 class AndroidSockContext(
     context: Context,
     override val scope: CoroutineScope,
-    private val speak: suspend (String) -> Unit,
+    private val speak: suspend (Phrase) -> Unit,
 ) : SockContext {
 
     private val appContext = context.applicationContext
@@ -39,7 +40,7 @@ class AndroidSockContext(
 
     override val log: SockLog = LogcatLog()
 
-    override suspend fun announce(text: String) = speak(text)
+    override suspend fun announce(phrase: Phrase) = speak(phrase)
 }
 
 /**

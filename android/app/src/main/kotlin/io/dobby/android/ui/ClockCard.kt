@@ -23,7 +23,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.dobby.socks.clock.ClockState
-import io.dobby.socks.clock.GermanTime
+import io.dobby.socks.clock.SpokenTime
 import io.dobby.socks.clock.TimerState
 import java.time.format.DateTimeFormatter
 
@@ -52,7 +52,7 @@ fun ClockCard(state: ClockState, modifier: Modifier = Modifier) {
                 color = MaterialTheme.colorScheme.onBackground,
             )
             Text(
-                GermanTime.date(state.now.toLocalDate()),
+                SpokenTime.date(state.now.toLocalDate()),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -101,7 +101,7 @@ private fun Timer(timer: TimerState) {
             )
         }
         Text(
-            if (timer.isRinging) "${timer.label}!" else GermanTime.countdown(timer.remainingMs),
+            if (timer.isRinging) "${timer.label}!" else SpokenTime.countdown(timer.remainingMs),
             style = MaterialTheme.typography.headlineSmall,
             color = if (timer.isRinging) {
                 MaterialTheme.colorScheme.error

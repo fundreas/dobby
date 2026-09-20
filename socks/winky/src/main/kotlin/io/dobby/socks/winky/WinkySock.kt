@@ -4,6 +4,7 @@ import io.dobby.core.sock.CommandHelp
 import io.dobby.core.sock.CommandInvocation
 import io.dobby.core.sock.Example
 import io.dobby.core.sock.ExclusiveCommandSpec
+import io.dobby.core.sock.Phrase
 import io.dobby.core.sock.Sock
 import io.dobby.core.sock.patterns
 import io.dobby.core.sock.SockResult
@@ -53,6 +54,6 @@ class WinkySock : Sock {
 
     companion object {
         const val HELLO: String = "winky.hello"
-        const val GREETING: String = "Hallo Meister"
+        val GREETING: Phrase = Phrase.of("Hallo Meister", "Hello master")
     }
 }

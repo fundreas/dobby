@@ -15,6 +15,7 @@ import io.dobby.core.registry.compileScopedPalette
 import io.dobby.core.sock.CommandInvocation
 import io.dobby.core.sock.ExclusiveCommandSpec
 import io.dobby.core.sock.FollowUp
+import io.dobby.core.sock.Phrase
 import io.dobby.core.sock.Sock
 import io.dobby.core.sock.SockContext
 import io.dobby.core.sock.SockLog
@@ -335,7 +336,7 @@ class DobbyEngine(
         if (refusal != null) {
             log.warn("follow-up on '${follow.commandId}' will not hold the floor: $refusal")
             asker?.let { cancel(it, follow.token) }
-            return SockResult.Spoken(asked.text)
+            return SockResult.Spoken(asked.phrase)
         }
 
         val spec = ExclusiveCommandSpec(
@@ -349,7 +350,7 @@ class DobbyEngine(
         if (palette == null) {
             build.errors.forEach { log.warn("follow-up on '${follow.commandId}': $it") }
             asker?.let { cancel(it, follow.token) }
-            return SockResult.Spoken(asked.text)
+            return SockResult.Spoken(asked.phrase)
         }
 
         pending = PendingAsk(
@@ -403,7 +404,16 @@ class DobbyEngine(
     )
 
     companion object {
-        const val NOT_UNDERSTOOD: String = "Das habe ich nicht verstanden."
+        /**
+         * The one sentence core says for itself, and the only string in the engine.
+         *
+         * Core knows no commands, so it has nothing else to say — and on the panel this is
+         * usually not even spoken: `respondTo` buzzes twice instead (`dobby-plan.md` §5.1).
+         * It still has to exist in both languages, because the chat shows it and the terminal
+         * prints it.
+         */
+        val NOT_UNDERSTOOD: Phrase =
+            Phrase.of("Das habe ich nicht verstanden.", "I didn't catch that.")
 
         /**
          * How many questions one turn may ask before core stops playing along.

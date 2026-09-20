@@ -5,8 +5,10 @@ import io.dobby.core.sock.CommandInvocation
 import io.dobby.core.sock.Example
 import io.dobby.core.sock.ExclusiveCommandSpec
 import io.dobby.core.sock.FollowUp
+import io.dobby.core.sock.Lang
 import io.dobby.core.sock.ParamSpec
 import io.dobby.core.sock.ParamType
+import io.dobby.core.sock.Phrase
 import io.dobby.core.sock.SharedCommands
 import io.dobby.core.sock.SharedSubscription
 import io.dobby.core.sock.Sock
@@ -311,9 +313,10 @@ class SpotifySock(
      */
     override suspend fun onStart(ctx: SockContext) {
         context = ctx
+        // German, like the rest of the settings screen that draws it (see [Lang]).
         _status.value = when {
-            !credentials.canConnect -> SockStatus.Unavailable(NOT_CONFIGURED)
-            !player.isInstalled -> SockStatus.Unavailable(NOT_INSTALLED)
+            !credentials.canConnect -> SockStatus.Unavailable(NOT_CONFIGURED(Lang.DE))
+            !player.isInstalled -> SockStatus.Unavailable(NOT_INSTALLED(Lang.DE))
             else -> SockStatus.Ready
         }
     }
@@ -470,17 +473,31 @@ class SpotifySock(
      */
     private fun askWhichVersion(candidates: List<Hit>): SockResult {
         val artists = candidates.map { it.artist ?: it.name }
-        val question = if (candidates.size == 2) {
-            "Ich habe zwei Versionen: einmal von ${artists[0]}, einmal von ${artists[1]}. " +
-                "Die erste oder die zweite?"
-        } else {
-            "Ich habe drei: von ${artists[0]}, von ${artists[1]} und von ${artists[2]}. " +
-                "Die erste, die zweite oder die dritte?"
+        val question = Phrase { lang ->
+            when {
+                lang == Lang.EN && candidates.size == 2 ->
+                    "I have two versions: one by ${artists[0]}, one by ${artists[1]}. " +
+                        "The first or the second?"
+
+                lang == Lang.EN ->
+                    "I have three: by ${artists[0]}, by ${artists[1]} and by ${artists[2]}. " +
+                        "The first, the second or the third?"
+
+                candidates.size == 2 ->
+                    "Ich habe zwei Versionen: einmal von ${artists[0]}, einmal von ${artists[1]}. " +
+                        "Die erste oder die zweite?"
+
+                else ->
+                    "Ich habe drei: von ${artists[0]}, von ${artists[1]} und von ${artists[2]}. " +
+                        "Die erste, die zweite oder die dritte?"
+            }
         }
         val token = "spotify-${askCounter.incrementAndGet()}"
         asked[token] = candidates
+        // The answer palette stays German — understanding does not follow the answer language
+        // (`m2c-plan.md` Part E) — so an English question is still answered with "die zweite".
         return SockResult.Asked(
-            text = question,
+            phrase = question,
             follow = FollowUp(
                 commandId = PLAY_MUSIC,
                 templates = patterns("{choice:enum}", "(die|das|den) {choice:enum}"),
@@ -579,10 +596,11 @@ class SpotifySock(
         if (connected && player.state.value != null) return Connection.Connected
         val outcome = player.connect()
         connected = outcome == Connection.Connected
+        // The status is drawn on the panel's settings screen, which is German (see [Lang]).
         _status.value = when (outcome) {
             Connection.Connected -> SockStatus.Ready
-            Connection.NotPremium -> SockStatus.Unavailable(NO_PREMIUM)
-            Connection.NotInstalled -> SockStatus.Unavailable(NOT_INSTALLED)
+            Connection.NotPremium -> SockStatus.Unavailable(NO_PREMIUM(Lang.DE))
+            Connection.NotInstalled -> SockStatus.Unavailable(NOT_INSTALLED(Lang.DE))
             // Not a status change at all: a dead connection is the ordinary overnight case,
             // and whatever the status was before it is still true.
             is Connection.Refused -> _status.value
@@ -594,7 +612,7 @@ class SpotifySock(
     }
 
     /** What to say about a connection that did not happen. Never called for `Connected`. */
-    private fun unreachable(outcome: Connection): String = when (outcome) {
+    private fun unreachable(outcome: Connection): Phrase = when (outcome) {
         Connection.NotInstalled -> NOT_INSTALLED
         Connection.NotPremium -> NO_PREMIUM
         Connection.Connected, is Connection.Refused -> UNREACHABLE
@@ -618,7 +636,7 @@ class SpotifySock(
         return ended("spotify: handed \"$query\" to the Spotify app")
     }
 
-    /** German copy for a search that failed, and the status it leaves behind (§3). */
+    /** What a failed search says, and the status it leaves behind (§3). */
     private fun searchFailed(failure: SearchFailure): SockResult {
         val message = when (failure.error) {
             SearchError.NOT_CONFIGURED -> NOT_CONFIGURED
@@ -632,7 +650,7 @@ class SpotifySock(
         // and it is only the catalogue lookup that is out. A disconnect, by contrast, is not
         // degradation at all (§10).
         if (failure.error == SearchError.NO_TOKEN || failure.error == SearchError.RATE_LIMITED) {
-            _status.value = SockStatus.Degraded(message)
+            _status.value = SockStatus.Degraded(message(Lang.DE))
         }
         return SockResult.Failed(message, failure)
     }
@@ -644,7 +662,7 @@ class SpotifySock(
      * and an app that was installed since `onStart` both simply start working. The connection's
      * own outcomes are handled by [open], which is the one place a status is set.
      */
-    private fun unavailable(): String? = when {
+    private fun unavailable(): Phrase? = when {
         !credentials.canConnect -> NOT_CONFIGURED
         !player.isInstalled -> NOT_INSTALLED
         else -> null
@@ -695,18 +713,37 @@ class SpotifySock(
             "erste", "ersten", "zweite", "zweiten", "dritte", "dritten", "egal",
         )
 
-        /** German copy, verbatim from the spec (§3). */
-        const val NOT_INSTALLED: String = "Spotify ist auf diesem Gerät nicht installiert."
-        const val NOT_CONFIGURED: String = "Spotify ist nicht eingerichtet."
-        const val UNREACHABLE: String = "Ich komme gerade nicht an Spotify ran."
-        const val NO_PREMIUM: String = "Dafür brauche ich Spotify Premium."
-        const val NO_SEARCH: String = "Ich komme gerade nicht an die Spotify-Suche ran."
-        const val NOT_FOUND: String = "Ich habe auf Spotify nichts gefunden."
-        const val NO_NETWORK: String = "Ich habe gerade keine Internetverbindung."
-        const val RATE_LIMITED: String = "Spotify lässt mich gerade nicht so oft suchen."
-        const val SEARCH_TIMEOUT: String = "Die Suche hat zu lange gedauert."
-        const val NOTHING_PLAYING: String = "Auf Spotify läuft gerade nichts."
-        const val NOTHING_PAUSED: String = "Auf Spotify ist nichts pausiert."
-        const val RUNNING: String = "Läuft."
+        /** Spec copy (§3), German verbatim and English alongside it. */
+        val NOT_INSTALLED: Phrase = Phrase.of(
+            "Spotify ist auf diesem Gerät nicht installiert.",
+            "Spotify isn't installed on this device.",
+        )
+        val NOT_CONFIGURED: Phrase =
+            Phrase.of("Spotify ist nicht eingerichtet.", "Spotify isn't set up.")
+        val UNREACHABLE: Phrase =
+            Phrase.of("Ich komme gerade nicht an Spotify ran.", "I can't reach Spotify right now.")
+        val NO_PREMIUM: Phrase =
+            Phrase.of("Dafür brauche ich Spotify Premium.", "That needs Spotify Premium.")
+        val NO_SEARCH: Phrase = Phrase.of(
+            "Ich komme gerade nicht an die Spotify-Suche ran.",
+            "I can't reach Spotify search right now.",
+        )
+        val NOT_FOUND: Phrase =
+            Phrase.of("Ich habe auf Spotify nichts gefunden.", "I found nothing on Spotify.")
+        val NO_NETWORK: Phrase = Phrase.of(
+            "Ich habe gerade keine Internetverbindung.",
+            "I have no internet connection right now.",
+        )
+        val RATE_LIMITED: Phrase = Phrase.of(
+            "Spotify lässt mich gerade nicht so oft suchen.",
+            "Spotify won't let me search that often right now.",
+        )
+        val SEARCH_TIMEOUT: Phrase =
+            Phrase.of("Die Suche hat zu lange gedauert.", "The search took too long.")
+        val NOTHING_PLAYING: Phrase =
+            Phrase.of("Auf Spotify läuft gerade nichts.", "Nothing is playing on Spotify.")
+        val NOTHING_PAUSED: Phrase =
+            Phrase.of("Auf Spotify ist nichts pausiert.", "Nothing is paused on Spotify.")
+        val RUNNING: Phrase = Phrase.of("Läuft.", "Playing.")
     }
 }

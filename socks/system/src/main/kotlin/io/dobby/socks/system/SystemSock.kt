@@ -6,6 +6,7 @@ import io.dobby.core.sock.Example
 import io.dobby.core.sock.ExclusiveCommandSpec
 import io.dobby.core.sock.ParamSpec
 import io.dobby.core.sock.ParamType
+import io.dobby.core.sock.Phrase
 import io.dobby.core.sock.Sock
 import io.dobby.core.sock.SockContext
 import io.dobby.core.sock.SockResult
@@ -316,12 +317,16 @@ class SystemSock(private val volume: VolumeControl = VolumeControl.NONE) : Sock 
         const val LOUD_STEPS: Int = 5
         const val GENTLE_STEPS: Int = 1
 
-        const val ALREADY_LOUD: String = "Schon ganz laut."
-        const val ALREADY_QUIET: String = "Schon ganz leise."
-        const val SOUND_BACK: String = "Ton ist wieder an."
+        val ALREADY_LOUD: Phrase = Phrase.of("Schon ganz laut.", "Already at the top.")
+        val ALREADY_QUIET: Phrase = Phrase.of("Schon ganz leise.", "Already as quiet as it gets.")
+        val SOUND_BACK: Phrase = Phrase.of("Ton ist wieder an.", "Sound is back on.")
 
+        /** The settings screen's status text, which is German because the screen is. */
         const val NO_STREAM: String = "Keine Lautstärkeregelung"
-        const val NO_STREAM_SPOKEN: String = "Ich komme hier an die Lautstärke nicht heran."
+        val NO_STREAM_SPOKEN: Phrase = Phrase.of(
+            "Ich komme hier an die Lautstärke nicht heran.",
+            "I can't reach the volume on this device.",
+        )
 
         private val LAUTER = Direction.LAUTER.spoken
         private val LEISER = Direction.LEISER.spoken
