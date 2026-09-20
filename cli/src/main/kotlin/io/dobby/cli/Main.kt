@@ -19,6 +19,7 @@ import io.dobby.core.sock.SockResult
 import io.dobby.socks.calculator.CalculatorSock
 import io.dobby.socks.clock.ClockSock
 import io.dobby.socks.conversation.ConversationSock
+import io.dobby.socks.radio.RadioSock
 import io.dobby.socks.spotify.SpotifySock
 import io.dobby.socks.system.SystemSock
 import io.dobby.socks.system.VolumeControl
@@ -58,6 +59,10 @@ object DobbySocks {
             // utterance tables are asserted, and "spiele blinding lights" routes correctly
             // long before a device is involved.
             SpotifySock(),
+            // `RadioPlayer.NONE` off-device, which still leaves the station table, the
+            // three-tier resolver and the whole command surface drivable from a terminal —
+            // roughly two thirds of the Sock, and the payoff for drawing the player seam.
+            RadioSock(),
             // A stream that exists only in memory, so "lauter" and "volle Lautstärke" really
             // change a number here — the same reason the terminal's chime prints itself
             // instead of being silent.
