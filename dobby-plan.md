@@ -463,9 +463,13 @@ openWakeWord as a second `FrameSink` on the shared `AudioSource` + earcon. Scree
 Two more Socks, both dependency-free, to prove the registry composes: timers with TTS/chime, time-of-day answer, volume/mute/screen. German number-word normalizer in core. **`ChainDispatcher` goes live** with the first real chain: `shared.stop` across Spotify and Clock.
 *Done when:* "Timer zehn Minuten", "Wie spät ist es", "Lauter" all work; "Stopp" silences a ringing timer while music keeps playing, and pauses the music when no timer is ringing; and adding a Sock required touching only `DobbySocks.all`.
 
-**M4 — Radio + Departures Socks.**
+**M4 — Radio + Departures Socks.** *(Radio landed; Departures outstanding.)*
 `PlaybackCoordinator` (Radio vs. Spotify arbitration), ExoPlayer, Wiener Linien client with fair-use polling discipline. Radio joins the `shared.stop` / `shared.resume` chains — the three-way case.
 *Done when:* radio and Spotify never overlap; "Wann fährt der nächste Bus" answers correctly; and "Stopp" resolves correctly in all six active/idle combinations of Spotify, Radio and Clock.
+
+> **Radio, done** (`radio-plan.md`). The arbitration turned out not to be free: `PlaybackCoordinator` only ever recorded who held the channel, which worked as long as every Sock that made a sound made it in another process. Radio is the first one that plays inside Dobby's process, so `requestFocus` / `claimExternal` now take an optional `onLost` callback and the coordinator evicts the standing holder itself. Everything from there was ordinary Sock work.
+>
+> **Before Departures**, note the Tier 2 route prompt: two new commands put it at 1497 of 1500 estimated tokens, which `Tier2RegistryTest` prints as ~0 commands of headroom. `PromptBudgetTest`'s first lever is already spent (one example per command) and its second has just been used on Radio's own descriptions. The next Sock needs the third — sharding the route by Sock — or a pass over every Sock's German description.
 
 **M5 — Dashboard.**
 Compose shell + per-Sock dashboard cards (clock, departure board with attribution, timer countdown, now playing). Screen wake/sleep choreography (§7.2).

@@ -8,10 +8,16 @@
 | **displayName** | Radio |
 | **Purpose** | Play Austrian internet radio streams. |
 | **Milestone** | M4 |
-| **Dependencies** | Media3 ExoPlayer (`androidx.media3:media3-exoplayer`, `media3-session`) |
-| **Hard requirements** | Network. No account, no API key. |
+| **Dependencies** | Media3 ExoPlayer (`androidx.media3:media3-exoplayer`) |
+| **Hard requirements** | Network, over **HTTPS**. Every stream in §3.4 is reachable over TLS, so there is no cleartext exception and no `network_security_config.xml`. A future station that is HTTP-only is left out rather than let in. No account, no API key. |
 | **Permissions** | `INTERNET` |
-| **Audio** | Requests `PlaybackCoordinator` focus, class `AUDIO_SUSTAINED` — starting radio pauses Spotify and vice versa. Registers its player with `InProcessPlayers` so a turn can duck it (§6) |
+| **Audio** | Requests `PlaybackCoordinator` focus **with an `onLost` callback** — starting radio pauses Spotify and, since M4, vice versa. Registers its player with `InProcessPlayers` so a turn can duck it (§6) |
+
+> **`media3-session` is deliberately absent**, although the first draft listed it. Nothing in
+> this spec uses it. A `MediaSession` publishes transport controls to the lock screen,
+> Bluetooth buttons and Android Auto — none of which a kitchen wall panel has, and all of which
+> would be a second, unarbitrated way to start audio that `PlaybackCoordinator` knows nothing
+> about.
 
 ## 2. Commands
 
@@ -44,14 +50,18 @@ See [shared-commands.specs.md](shared-commands.specs.md).
 ### Tier 1 templates
 
 ```
-(spiele|spiel|mach|schalt|schalte) (das |den )?radio {station}( an| ein)?
-(spiele|spiel|mach|schalt|schalte) (den )?(sender|radiosender) {station}( an| ein)?
+(spiele|spiel|mach|schalt|schalte) (den)? (sender|radiosender) {station} (an|ein)
+(spiele|spiel|mach|schalt|schalte) (das|den)? radio {station} (an|ein)
+(spiele|spiel|mach|schalt|schalte) (den)? (sender|radiosender) {station}
+(spiele|spiel|mach|schalt|schalte) (das|den)? radio {station}
+(spiele|spiel|mach|schalt|schalte) (das|den)? radio (an|ein)?
 radio {station}
-(spiele|spiel|mach|schalt|schalte) (das |den )?radio( an| ein)?
-radio( an| ein)?
+radio (an|ein)?
 ```
 
-**Registration order is critical:** every one of these contains the literal `radio` (or `sender`), which makes them more specific than Spotify's greedy `spiele {query}`. The registry must order them ahead of it. Asserted in the collision test.
+**Registration order is critical:** every one of these contains the literal `radio` (or `sender`), which makes them more specific than Spotify's greedy `spiele {query}`. Asserted in the collision test.
+
+**The trailing `an`/`ein` is spelled out as its own template rather than left optional**, and that is the one place the first draft was wrong about how the registry orders things. `Specificity.ORDER` sorts *closed* templates ahead of open ones **before** it counts keywords, so `… radio {station}( an| ein)?` — which may end on its slot — loses to Spotify's closed `(mach|leg|spiel) {query} (an|auf)`, and "mach radio wien an" resolves to `spotify.play_music(query="radio wien")`. Written out, the closed form carries three keywords against Spotify's two and wins on its own merits; the open form stays one rung below it for "spiele radio fm4".
 
 ### Utterances → invocation
 
@@ -70,29 +80,50 @@ radio( an| ein)?
 
 STT will mangle station names (`FM4` → "ef em vier", `Ö3` → "oe drei"): letter-and-digit names are what any acoustic model is worst at, and Parakeet is better at this than Vosk was without being reliable. Resolution is therefore alias-first, fuzzy-second:
 
-1. Normalize: lowercase, strip spaces and hyphens, `ö→oe`, `ä→ae`, `ü→ue`.
+1. Normalize with **`StationKey.of`**, and put the **table's aliases through the same function**. This is not tidiness. `Normalizer.tokenize` runs `GermanNumbers` over every token before a Sock ever sees the slot, so "ef em vier" arrives as `ef em 4` and "ö drei" as `ö 3` — the first draft's alias list could never have matched anything. `StationKey.of` is `Normalizer.normalize` (lowercase, punctuation out, **number words → digits**) then `ö→oe`, `ä→ae`, `ü→ue`, `ß→ss`, then spaces and hyphens out. Aliases are therefore written the way a person says them and never pre-normalized.
 2. Exact match against the station's `id` or any `alias`.
-3. Levenshtein ≤ 2 against ids and aliases; best match wins.
-4. No match → `Failed` (see below). **Never silently fall back to the default station** when the user named one.
+3. Levenshtein against ids and aliases, best match wins, with **a budget of `min(2, key.length / 3)`**. The cap is load-bearing: a flat 2 lets a two-character key like `o1` accept most two-letter strings, and §11's `bayern 3` negative case is not safe without it. **A tie is a failure, not a coin flip** — two stations at the same distance means the Sock does not know which.
+4. **Kölner Phonetik** (`Phonetics.koelner`, the same tool the M6 keyword matcher uses), exact on the code and only when exactly one station matches. Rescues a misspelling that sounds identical and cannot widen the net any further than that.
+5. No match → `Failed` (see below). **Never silently fall back to the default station** when the user named one.
 
 ### Station table
 
-Ships as a constant map; overridable from config later. **Stream URLs must be verified against the broadcaster's current public stream list at implementation time — do not trust the values below without checking; ORF in particular rotates its endpoints.**
+Ships as a constant list; overridable from config later. **Verified on 2026-09-20** — every URL fetched, checked for a 2xx and an `audio/*` content type, and separately checked with `Icy-MetaData: 1` for a real `StreamTitle`. ORF rotates its endpoints, so this is a date and not a guarantee: `scripts/verify-streams` re-runs the whole check against this table and is meant to be run before a release.
 
-| id | Display | Aliases | Stream URL |
-|---|---|---|---|
-| `fm4` | FM4 | `ef em vier`, `fm vier`, `efemvier`, `f m 4` | *ORF live stream (verify)* |
-| `oe3` | Ö3 | `oe drei`, `ö drei`, `o3`, `hitradio ö3`, `hitradio oe3` | *ORF live stream (verify)* |
-| `oe1` | Ö1 | `oe eins`, `ö eins`, `o1` | *ORF live stream (verify)* |
-| `wien` | Radio Wien | `radio wien`, `wien` | *ORF live stream (verify)* |
-| `kronehit` | Kronehit | `krone hit`, `kronehit` | *verify* |
+| id | Display | Aliases (spoken) | `streamUrl` | `fallbackUrl` |
+|---|---|---|---|---|
+| `fm4` | FM4 | `fm vier`, `fm 4`, `f m 4`, `ef em vier`, `efemvier` | `https://orf-live.ors-shoutcast.at/fm4-q2a` | `…/fm4-q1a` |
+| `oe3` | Ö3 | `ö drei`, `oe drei`, `o3`, `hitradio`, `hitradio ö3`, `hitradio oe3` | `https://orf-live.ors-shoutcast.at/oe3-q2a` | `…/oe3-q1a` |
+| `oe1` | Ö1 | `ö eins`, `oe eins`, `o1`, `österreich eins` | `https://orf-live.ors-shoutcast.at/oe1-q2a` | `…/oe1-q1a` |
+| `wien` | Radio Wien | `radio wien`, `wien`, `orf wien` | `https://orf-live.ors-shoutcast.at/wie-q2a` | `…/wie-q1a` |
+| `kronehit` | Kronehit | `krone hit`, `kronen hit`, `krone`, `kronehit 105 8` | `https://secureonair.krone.at/kronehit1058.mp3` | `…/kronehit.mp3` |
 
-Each entry: `id`, `displayName`, `aliases: List<String>`, `streamUrl`, `isDefault: Boolean`.
+Each entry: `id`, `displayName`, `aliases: List<String>`, `streamUrl`, `fallbackUrl: String?`, `isDefault: Boolean`, `source` — provenance (radio-browser station UUID, homepage, codec, bitrate, `verifiedOn`), read by nothing at runtime and everything to whoever reads this in a year.
+
+Four decisions inside that table:
+
+1. **ORF is one uniform host**, `orf-live.ors-shoutcast.at/{code}-q{1,2}a` with `code ∈ {fm4, oe3, oe1, wie}` — not four scraped URLs. The directory lists `oe3-q1a` on a different host and `oe1`/`wie` over plain `http`; all eight combinations answer `206 audio/mpeg` on the uniform host over HTTPS, and the odd one out is what an ORS rotation looks like caught mid-rotation.
+2. **q2a primary (MP3 192), q1a fallback (128).** The fallback is not a quality setting a user picks — it is §10's reconnect ladder's last rung.
+3. **Kronehit over HTTPS**, on a host radio-browser does not list. The alternative was a cleartext exception in the manifest for one station, which is a permanent widening of the app's network posture.
+4. **No HLS.** The `…mdn.ors.at/out/u/{code}/q4a/manifest.m3u8` variants (AAC ~290k) need an extra Media3 dependency *and* carry no ICY metadata — so the dashboard's now-playing line would go dark for exactly the stations that supply the best of it.
+
+`krone` as an alias is safe in a way a bare template would not be: an alias is only ever matched against the content of the `{station}` slot, which by definition sits inside an utterance that already said "radio" or "sender". The README's single-keyword rule is about templates that match a whole utterance.
+
+### Help (`CommandHelp`)
+
+| Field | |
+|---|---|
+| `title` | Radio hören |
+| `detail` | Spielt einen der eingebauten Sender als Internet-Stream. Ohne Sendernamen läuft der Standardsender aus den Einstellungen. |
+| `hints` | „Ich kenne FM4, Ö3, Ö1, Radio Wien und Kronehit.“ · „„Weiter“ holt den zuletzt gestoppten Sender zurück.“ |
+| `aliases` | radio, sender, radio anmachen, radiosender |
+
+The usage line is not written here — `Syntax` derives it from the templates (README §6a).
 
 ### Behavior
 
 1. Resolve the station (§3.4).
-2. Request playback focus from `ctx.playback`; granting it pauses Spotify.
+2. Request playback focus from `ctx.playback`, **with an `onLost` callback**; granting it pauses Spotify. The callback is what makes the arbitration two-way: a Sock playing in Dobby's own process is not reachable by the OS's focus revocation once Dobby's request has been abandoned, so `PlaybackCoordinator` invokes it directly when another Sock or another app takes the channel. Losing the channel is **not** `stop_radio` — it is not a user decision, so `last_station` survives and "weiter" brings the station back.
 3. `ExoPlayer.setMediaItem(MediaItem.fromUri(streamUrl))`, `prepare()`, `play()`.
 4. The player instance is created lazily and **released on `stop_radio`, on focus loss, and in `onStop()`** — a live HTTP stream left open is both battery and bandwidth.
 5. Buffering timeout: 10 s. Exceeded → stop, release, `Failed`.
@@ -129,9 +160,17 @@ radio (aus|stopp|stop|ausschalten|abschalten|beenden)
 
 > Bare `stopp` / `stop` / `aus` is **not** claimed here — it routes to `shared.stop`, where this Sock consumes it whenever the stream is actually running (§5). These exclusive templates exist for the case where the user names the target while something *else* is playing.
 
+### Help (`CommandHelp`)
+
+| Field | |
+|---|---|
+| `title` | Radio ausschalten |
+| `detail` | Beendet den Stream. Das bloße „Stopp“ steht hier nicht — das entscheidet sich im Moment des Sagens und gehört zu „Stopp“. |
+| `aliases` | radio aus, radio ausschalten |
+
 ### Behavior
 
-Stop and release the ExoPlayer, release playback focus. Idempotent: stopping when nothing is playing is not an error.
+Stop and release the ExoPlayer, release playback focus, **cancel any pending reconnect** (§10). Idempotent: stopping when nothing is playing is not an error.
 
 ### Result
 
@@ -195,7 +234,7 @@ So:
 `DashboardCard`, shown while Radio holds playback focus:
 
 - Station display name, large.
-- Stream metadata title (ICY `StreamMetadata`) if the stream provides one — many do, most are unreliable. Render it only when non-empty; never show a placeholder.
+- Stream metadata title (ICY `StreamTitle`). Measured on 2026-09-20: **all five stations carry one, and carry it reliably** — the first draft's "many do, most are unreliable" was wrong. What they do not carry uniformly is a *track*: FM4 and Ö1 broadcast the **programme** dressed in boilerplate (`FM4 Fivas Ponyhof | fm4.orf.at`, `Jetzt in Ö1: Im Zeit-Raum: …`), while Ö3, Radio Wien and Kronehit send artist and title. `NowPlaying.clean` strips the station prefix and the URL suffix and returns null for what is left over when it is empty or is just the station's own name. Render it only when non-empty; **never show a placeholder**, and never re-capitalise it — Kronehit lower-cases everything and a title-caser gets "Ac/Dc" wrong.
 - Buffering / reconnecting indicator.
 
 Exposed state: `StateFlow<RadioState>` = `Idle(lastStation: Station?)` | `Buffering(station)` | `Playing(station, nowPlaying: String?)` | `Error(station, reason)`. `lastStation` is what backs `IDLE` on `shared.resume`.
@@ -218,8 +257,11 @@ Contributed to chains, not owned: `stopp`, `aus`, `weiter` (via `shared.stop` / 
 
 ## 10. Failure & degradation
 
-- Stream drops mid-playback (common on mobile networks and after router reboots): ExoPlayer error → retry up to `reconnect_attempts` with backoff 1 s / 3 s / 9 s. All retries exhausted → release, state `Error`, `ctx.announce("Der Radiostream ist abgerissen.")`.
-- Never auto-restart after a user-initiated `stop_radio`.
+- Stream drops mid-playback (common on mobile networks and after router reboots): ExoPlayer error → retry up to `reconnect_attempts` with backoff 1 s / 3 s / 9 s. **The last rung uses `fallbackUrl`**, because the commonest reason a specific ORS endpoint stops answering is that endpoint and not the network. All retries exhausted → release, state `Error`, `ctx.announce("Der Radiostream ist abgerissen.")`. `reconnect_attempts` counts the retries *after* the first failure, so the default 3 is exactly that ladder — and 0 means one attempt, no retry, and no fallback, which is the right reading of "no retries".
+- The ladder runs in `ctx.scope`, never inside `handle()`, which runs under a timeout.
+- Never auto-restart after a user-initiated `stop_radio`. **`stop_radio`, `shared.stop` and a focus eviction all cancel a pending reconnect before releasing the player.** A ladder that survives a "radio aus" and brings the stream back nine seconds later is the worst bug this Sock could have.
+- A stream that never started is §3's ten-second buffering timeout and *not* a ladder: the user has not been told it works, and `Failed` is the honest answer.
+- Telling "no network" apart from "this stream is down" needs a `ConnectivityManager`, which is an Android type `:socks:radio` must not see. v1 says `UNREACHABLE` for both rather than widening `SockContext` for one sentence. Recorded so the omission reads as a decision.
 - Sock status is always `Ready` — there is no account or device prerequisite that can make radio permanently unavailable; failures are per-invocation.
 
 ## 11. Testing
@@ -237,6 +279,9 @@ Contributed to chains, not owned: `stopp`, `aus`, `weiter` (via `shared.stop` / 
 
 - Station favorites / "nächster Sender" cycling.
 - User-editable station list in the UI (v1 is a constant table + a default-station setting).
-- Podcasts, TuneIn or radio-browser.info directory lookup — the hardcoded table is deliberate.
+- Podcasts, TuneIn or radio-browser.info directory lookup at runtime — the hardcoded table is deliberate. radio-browser is where the table came from and what `scripts/verify-streams` checks against; the APK ships a `Map`.
 - Recording, sleep timer for radio (the Clock Sock's timer does not stop playback).
-- Verifying and pinning the stream URLs is an **implementation task for M4**, tracked here so it is not forgotten.
+- HLS/AAC variants of the ORF streams exist (`…mdn.ors.at/out/u/{code}/q4a/manifest.m3u8`) and are deliberately not used: an extra Media3 dependency, and no ICY metadata (§3.4).
+- `MediaSession` / lock-screen and Bluetooth transport controls (§1).
+- The ORF programme API (`audioapi.orf.at/{station}/json/4.0/live`) — richer than ICY for FM4 and Ö1, and a second network dependency on the dashboard's critical path for one line of text. Where to look if §7's string cleanup turns out to be unsatisfying.
+- ~~Verifying and pinning the stream URLs~~ — **done 2026-09-20** (M4). The table in §3.4 carries real URLs, a `fallbackUrl` and provenance, and `scripts/verify-streams` re-checks it.

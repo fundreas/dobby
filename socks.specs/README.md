@@ -27,7 +27,7 @@ This file defines what a Sock is and how to write its spec. One spec file per So
 - Touch `AudioRecord` or the wake word. The mic has exactly one owner (core).
 - Call `TextToSpeech` directly for a command acknowledgement — return a `SockResult` instead. Asynchronous announcements (a timer firing) go through `ctx.announce(text)`.
 - Hold screen wake locks. Ask `ctx.screen` instead.
-- Start sustained audio playback without requesting focus from `ctx.playback`.
+- Start sustained audio playback without requesting focus from `ctx.playback`. A Sock that plays **in this process** also passes an `onLost` callback to `requestFocus` and stops when it fires — the OS cannot revoke a request Dobby has already abandoned, so eviction is the coordinator's job (`radio.specs.md` §3, M4).
 - Reach into another Sock. Cross-Sock effects happen only through `PlaybackCoordinator` / `ScreenController`.
 - Block. `handle()` runs under a timeout; long work belongs in `ctx.coroutineScope` with a `Deferred` result. **This includes waiting for an answer to a question**: a Sock that asks something returns `Asked` and keeps its half-built state under the token (§5). Core calls `handle()` a second time with the answer. There is no waiting instance and nothing to block on.
 
@@ -230,7 +230,7 @@ Keep German user-facing strings **in the spec**, verbatim. They are product copy
 | **Conversation** ✅ | [conversation.specs.md](conversation.specs.md) | `dismiss` | — | M2b |
 | **Calculator** ✅ | [calculator.specs.md](calculator.specs.md) | `calculate`, `continue_with`, `last_result`, `clear` | — | M3 |
 | **System** ⬤ | [system.specs.md](system.specs.md) | `volume`, `set_volume`, `mute` ✅ · `turn_on_screen`, `turn_off_screen` | — | M3 |
-| Radio | [radio.specs.md](radio.specs.md) | `play_radio`, `stop_radio` | `shared.stop`, `shared.resume` | M4 |
+| **Radio** ✅ | [radio.specs.md](radio.specs.md) | `play_radio`, `stop_radio` | `shared.stop`, `shared.resume` | M4 |
 | Departures | [departures.specs.md](departures.specs.md) | `departures` | — | M4 |
 
 ✅ built · ⬤ partly built. Plus the shared-command catalog, which is not a Sock: [shared-commands.specs.md](shared-commands.specs.md).

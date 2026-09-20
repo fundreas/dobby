@@ -1,0 +1,254 @@
+#!/usr/bin/env python3
+# verify-streams — check the Radio Sock's station table against reality.
+#
+#   scripts/verify-streams              check every station
+#   scripts/verify-streams fm4 oe3      check only these
+#   scripts/verify-streams --no-icy     skip the metadata probe (faster, less useful)
+#
+# ORF rotates its endpoints. That is why `radio.specs.md` §3.4 shipped with "verify" in every
+# URL cell, and it is why a table verified once is a table that will be wrong eventually and
+# silently. This is the thing that keeps it honest.
+#
+# **Run it before a release, not in CI.** A job that goes red because a broadcaster is having a
+# bad afternoon teaches everyone to ignore the job.
+#
+# What it does, in one radio-browser request plus two per station:
+#
+#   1. Resolves a radio-browser member via /json/servers, with a descriptive User-Agent —
+#      the API asks for one, and bare per-name searches get rate-limited into empty 200s
+#      within a handful of requests.
+#   2. Fetches /json/stations/bycountrycodeexact/AT **once** (~341 stations, ~375 KB) and looks
+#      every browserUuid from Stations.kt up in the result. Reports a `url_resolved` that has
+#      drifted away from the table and a `lastcheckok` of 0.
+#   3. Opens each streamUrl and fallbackUrl with `Icy-MetaData: 1`: a 2xx, an `audio/*` content
+#      type, and — for the primary — an `icy-metaint` and a non-empty StreamTitle within a few
+#      metadata blocks.
+#   4. Prints today's date beside every station that passed, so `Station.Source.verifiedOn` can
+#      be updated by hand from the output.
+#
+# It parses Stations.kt rather than holding its own copy of the table. Two tables is one table
+# too many, and the failure mode of a drifted script copy is a green run against URLs the app
+# does not use.
+#
+# stdlib only, no dependencies.
+
+import argparse
+import datetime
+import json
+import re
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+STATIONS_KT = (
+    Path(__file__).resolve().parent.parent
+    / "socks/radio/src/main/kotlin/io/dobby/socks/radio/Stations.kt"
+)
+
+# radio-browser asks every client to identify itself. An anonymous scraper is what their rate
+# limiter is for.
+USER_AGENT = "dobby-panel/verify-streams (https://github.com/fundreas/dobby)"
+
+# There is no stable hostname: the API is a pool behind a DNS round-robin, and the documented
+# way to find a member is to ask any of them for /json/servers.
+DIRECTORY = "https://all.api.radio-browser.info"
+
+COUNTRY = "AT"
+
+TIMEOUT = 15
+
+# Enough interleaved blocks for a StreamTitle to come round. Most stations send one within the
+# first, but a block only carries metadata when something changed.
+ICY_BLOCKS = 6
+
+
+def die(message):
+    print(f"error: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def get(url, headers=None):
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, **(headers or {})})
+    return urllib.request.urlopen(request, timeout=TIMEOUT)
+
+
+def parse_table():
+    """Every Station(...) literal in Stations.kt, as dicts. The table, not a copy of it."""
+    if not STATIONS_KT.is_file():
+        die(f"{STATIONS_KT} is not there — did the module move?")
+    text = STATIONS_KT.read_text(encoding="utf-8")
+    # Fields shared by every row are written as a `const val` — verifiedOn is — so a literal is
+    # not always what sits after the `=`.
+    consts = dict(re.findall(r'const val (\w+)\s*(?::\s*\w+\s*)?=\s*"([^"]*)"', text))
+    stations = []
+    for block in re.findall(r"Station\((.*?)\n        \),", text, re.S):
+        def field(name, block=block):
+            literal = re.search(rf'{name}\s*=\s*"([^"]*)"', block)
+            if literal:
+                return literal.group(1)
+            reference = re.search(rf"{name}\s*=\s*(\w+)", block)
+            return consts.get(reference.group(1)) if reference else None
+
+        station_id = field("id")
+        if not station_id:
+            continue
+        stations.append(
+            {
+                "id": station_id,
+                "displayName": field("displayName"),
+                "streamUrl": field("streamUrl"),
+                "fallbackUrl": field("fallbackUrl"),
+                "browserUuid": field("browserUuid"),
+                "verifiedOn": field("verifiedOn"),
+            }
+        )
+    if not stations:
+        die("parsed no stations out of Stations.kt — the literal's shape must have changed")
+    return stations
+
+
+def directory_stations():
+    """Austria's whole listing, in one request. Empty dict if radio-browser is unreachable."""
+    try:
+        with get(f"{DIRECTORY}/json/servers") as response:
+            servers = json.load(response)
+    except (urllib.error.URLError, json.JSONDecodeError, OSError) as error:
+        print(f"  ! radio-browser server list unreachable ({error}); skipping the drift check")
+        return {}
+    host = next((s.get("name") for s in servers if s.get("name")), None)
+    if not host:
+        print("  ! radio-browser answered with no named server; skipping the drift check")
+        return {}
+    print(f"  · directory: {host}")
+    try:
+        with get(f"https://{host}/json/stations/bycountrycodeexact/{COUNTRY}") as response:
+            listing = json.load(response)
+    except (urllib.error.URLError, json.JSONDecodeError, OSError) as error:
+        print(f"  ! {host} would not list {COUNTRY} ({error}); skipping the drift check")
+        return {}
+    print(f"  · {len(listing)} {COUNTRY} stations in the directory")
+    return {entry.get("stationuuid"): entry for entry in listing}
+
+
+def check_drift(station, listing):
+    """What the directory says about this station, if it says anything. Never fatal."""
+    if not listing:
+        return []
+    entry = listing.get(station["browserUuid"])
+    if entry is None:
+        return [f"uuid {station['browserUuid']} is no longer in the {COUNTRY} listing"]
+    notes = []
+    if str(entry.get("lastcheckok")) != "1":
+        notes.append("directory's own last check failed (lastcheckok=0)")
+    resolved = entry.get("url_resolved") or entry.get("url")
+    if resolved and strip_scheme(resolved) != strip_scheme(station["streamUrl"]):
+        notes.append(f"directory now resolves to {resolved}")
+    return notes
+
+
+def strip_scheme(url):
+    """Drops http/https before comparing.
+
+    The directory lists Ö1, Radio Wien and Kronehit over cleartext, and the table deliberately
+    uses the TLS host for all of them (`radio-plan.md` §B3). Reporting that every run would be
+    a warning nobody reads, and it would hide the drift this check exists for.
+    """
+    return url.split("://", 1)[-1]
+
+
+def check_stream(url, want_icy):
+    """Opens the stream and reads enough of it to have an opinion. Returns (ok, detail)."""
+    headers = {"Icy-MetaData": "1"} if want_icy else {}
+    try:
+        response = get(url, headers)
+    except urllib.error.HTTPError as error:
+        return False, f"HTTP {error.code}"
+    except (urllib.error.URLError, OSError) as error:
+        return False, str(error)
+
+    with response:
+        content_type = response.headers.get("Content-Type", "")
+        if not content_type.startswith("audio/"):
+            return False, f"content type {content_type or '(none)'}"
+        bitrate = response.headers.get("icy-br")
+        detail = content_type + (f", {bitrate} kbps" if bitrate else "")
+        if not want_icy:
+            return True, detail
+        interval = response.headers.get("icy-metaint")
+        if not interval:
+            return False, detail + ", no icy-metaint"
+        title = read_stream_title(response, int(interval))
+        if not title:
+            return False, detail + f", metaint {interval}, no StreamTitle in {ICY_BLOCKS} blocks"
+        return True, detail + f", metaint {interval}, “{title}”"
+
+
+def read_stream_title(response, interval):
+    """The first non-empty StreamTitle in the interleaved metadata, or None."""
+    for _ in range(ICY_BLOCKS):
+        if len(response.read(interval)) < interval:
+            return None
+        length = response.read(1)
+        if not length:
+            return None
+        size = length[0] * 16
+        if size == 0:
+            # A block with nothing in it means "nothing changed", which is the common case.
+            continue
+        block = response.read(size).decode("utf-8", "replace")
+        match = re.search(r"StreamTitle='(.*?)';", block)
+        if match and match.group(1).strip():
+            return match.group(1).strip()
+    return None
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Verify the Radio Sock's station table.")
+    parser.add_argument("ids", nargs="*", help="station ids to check (default: all)")
+    parser.add_argument("--no-icy", action="store_true", help="skip the metadata probe")
+    args = parser.parse_args()
+
+    stations = parse_table()
+    if args.ids:
+        known = {s["id"] for s in stations}
+        unknown = [i for i in args.ids if i not in known]
+        if unknown:
+            die(f"not in the table: {', '.join(unknown)}")
+        stations = [s for s in stations if s["id"] in args.ids]
+
+    print(f"{STATIONS_KT.name}: {len(stations)} station(s)")
+    listing = directory_stations()
+    today = datetime.date.today().isoformat()
+    print()
+
+    failed = []
+    for station in stations:
+        print(f"{station['id']} — {station['displayName']} (verifiedOn {station['verifiedOn']})")
+        ok = True
+        for note in check_drift(station, listing):
+            print(f"  ! {note}")
+        for label, url, want_icy in (
+            ("stream  ", station["streamUrl"], not args.no_icy),
+            ("fallback", station["fallbackUrl"], False),
+        ):
+            if not url:
+                continue
+            good, detail = check_stream(url, want_icy)
+            print(f"  {'✔' if good else '✖'} {label} {url}\n      {detail}")
+            ok = ok and good
+        if ok:
+            print(f"  → passed {today}")
+        else:
+            failed.append(station["id"])
+        print()
+
+    if failed:
+        print(f"FAILED: {', '.join(failed)}")
+        return 1
+    print(f"all {len(stations)} station(s) passed — Station.Source.verifiedOn = \"{today}\"")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
