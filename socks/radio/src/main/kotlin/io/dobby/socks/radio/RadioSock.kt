@@ -13,9 +13,12 @@ import io.dobby.core.sock.SockActivity
 import io.dobby.core.sock.SockContext
 import io.dobby.core.sock.SockResult
 import io.dobby.core.sock.patterns
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 /**
  * Radio — Austrian internet streams, from a constant table.
@@ -51,6 +54,17 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
     val state: StateFlow<RadioState> = _state.asStateFlow()
 
     private val resolver = StationResolver()
+
+    /**
+     * The reconnect ladder, while one is climbing. Cancelled by every user-initiated stop.
+     *
+     * A ladder that survives a "radio aus" and brings the stream back nine seconds later is the
+     * worst bug this Sock could have (`radio.specs.md` §10).
+     */
+    private var reconnect: Job? = null
+
+    /** Watches the player for a mid-stream drop. Lives as long as the Sock is started. */
+    private var watchdog: Job? = null
 
     override val commands: List<ExclusiveCommandSpec> = listOf(
         ExclusiveCommandSpec(
@@ -159,6 +173,18 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
 
     override suspend fun onStart(ctx: SockContext) {
         context = ctx
+        // A drop is asynchronous by nature, so it is watched for rather than returned from
+        // anything. `Buffering` is deliberately not a trigger: a stream that never started is
+        // §3's timeout and already has an answer, and the ladder is for one that did start and
+        // then went away.
+        watchdog = ctx.scope.launch {
+            player.state.collect { playback ->
+                val current = state.value
+                if (playback == PlaybackState.FAILED && current is RadioState.Playing) {
+                    climb(current.station)
+                }
+            }
+        }
     }
 
     /**
@@ -166,6 +192,10 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
      * battery and bandwidth (`radio.specs.md` §3).
      */
     override suspend fun onStop() {
+        watchdog?.cancel()
+        watchdog = null
+        reconnect?.cancel()
+        reconnect = null
         player.release()
         context?.playback?.releaseFocus(id)
         _state.value = RadioState.Idle()
@@ -295,13 +325,71 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
      *   `shared.resume` reads. True for every stop a person can hear; false only for teardown.
      */
     private suspend fun release(remember: Boolean) {
+        reconnect?.cancel()
+        reconnect = null
         player.release()
         context?.playback?.releaseFocus(id)
         _state.value = RadioState.Idle(if (remember) state.value.stationOrNull else null)
     }
 
-    /** Claims the channel. Focus is core's business, and the player never asks for its own. */
-    private suspend fun claimChannel(ctx: SockContext): Boolean = ctx.playback.requestFocus(id)
+    /**
+     * Claims the channel, and says what to do when it is taken away.
+     *
+     * Focus is core's business and the player never asks for its own. The callback is what
+     * makes Radio-vs-Spotify arbitration two-way: a Sock playing audio *in this process* is not
+     * reachable by the OS's own focus revocation once Dobby's request has been abandoned
+     * (`radio-plan.md` §A).
+     *
+     * Losing the channel is **not** `stop_radio`. It is not a user decision, so `lastStation`
+     * is kept and `shared.resume` can still bring it back: somebody who lost FM4 to an incoming
+     * call says "weiter" and gets it back. What goes away is the player and the socket.
+     */
+    private suspend fun claimChannel(ctx: SockContext): Boolean =
+        ctx.playback.requestFocus(id) { reason ->
+            ctx.log.debug("radio: lost the channel ($reason), releasing the player")
+            // Both reasons keep it: an eviction by Spotify is no more a decision about
+            // the radio than a phone call is.
+            release(remember = true)
+        }
+
+    /**
+     * The reconnect ladder (`radio.specs.md` §10, extended by `radio-plan.md` §J1).
+     *
+     * ```
+     * wait 1 s → streamUrl · wait 3 s → streamUrl · wait 9 s → fallbackUrl · give up
+     * ```
+     *
+     * `reconnect_attempts` counts the retries *after* the first failure, so the default 3 is
+     * exactly that ladder. The fallback URL is the last rung and nothing else — the commonest
+     * reason a specific ORS endpoint stops answering is that endpoint, not the network — which
+     * also means setting the config to 0 removes both, and "no retries" is the right reading
+     * of that.
+     *
+     * Runs in `ctx.scope` and not inside `handle()`, which runs under a timeout
+     * (`socks.specs/README.md` §2). Its user-facing outcome is a [SockContext.announce], which
+     * is exactly what that method is for.
+     */
+    private fun climb(station: Station) {
+        val ctx = context ?: return
+        reconnect = ctx.scope.launch {
+            val config = RadioConfig(ctx.config)
+            val attempts = config.reconnectAttempts
+            for (attempt in 0 until attempts) {
+                delay(BACKOFF_MS[minOf(attempt, BACKOFF_MS.lastIndex)])
+                val last = attempt == attempts - 1
+                val url = if (last) station.fallbackUrl ?: station.streamUrl else station.streamUrl
+                _state.value = RadioState.Buffering(station)
+                if (player.play(url, config.bufferTimeoutMs)) {
+                    _state.value = RadioState.Playing(station)
+                    return@launch
+                }
+            }
+            player.release()
+            ctx.playback.releaseFocus(id)
+            _state.value = RadioState.Error(station, STREAM_DROPPED)
+            ctx.announce(STREAM_DROPPED)
+        }
+    }
 
     /**
      * The context a command needs.
@@ -320,6 +408,9 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
 
         /** Behind Spotify's 50 on `shared.resume` (§5). */
         const val RESUME_PRIORITY: Int = 40
+
+        /** The spec's backoff. A shorter ladder takes the first rungs, never the last. */
+        val BACKOFF_MS: List<Long> = listOf(1_000, 3_000, 9_000)
 
         /** German copy, verbatim from the spec (§3). */
         const val UNKNOWN_STATION: String = "Den Sender kenne ich nicht."
