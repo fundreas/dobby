@@ -166,6 +166,15 @@ class DobbyController(
     /** Dispatch is single-file: two overlapping turns would interleave speech. */
     private val turn = Mutex()
 
+    /**
+     * The spoken turn in flight, so [stopListening] has something to cancel.
+     *
+     * Written from inside the turn lock and read from the main thread, hence volatile: the tap
+     * that aborts a turn arrives on a different thread from the one that started it.
+     */
+    @Volatile
+    private var turnJob: Job? = null
+
     private val thinking = MutableStateFlow(Thinking.NO)
 
     /**
@@ -550,6 +559,10 @@ class DobbyController(
      */
     fun listen(): Job = scope.launch {
         turn.withLock {
+            // Only once the lock is held: a job still queued behind another turn has nothing
+            // to abort, and claiming the slot from there would let [stopListening] cancel a
+            // turn that never opened the microphone.
+            turnJob = coroutineContext[Job]
             // A question left open by the typed path belongs to that exchange, not to this
             // one. Somebody walking up and saying the wake word has not agreed to answer it.
             engine?.endTurn()
@@ -599,18 +612,41 @@ class DobbyController(
                     }
                 }
             } finally {
-                // NonCancellable, and first: the scope this runs in is cancelled when the
-                // service dies, and a suspending release in a plain finally would be cancelled
-                // before it did anything — leaving the panel switched off and the music still
-                // quiet, with nothing left running to put it back.
-                withContext(NonCancellable) { turnAudio.release() }
-                // Both, in this order and in a finally: a question that outlived its turn would
-                // be answered by whatever the next wake word picked up (`socks.specs/README.md`
-                // §5), and the wake word stays off the microphone until endTurn() puts it back.
-                engine?.endTurn()
-                pipeline.endTurn()
+                // NonCancellable, and around all of it: this runs on a cancelled coroutine
+                // twice over — when the service dies, and when [stopListening] aborts the turn
+                // by hand — and a suspending call in a plain finally would be cancelled before
+                // it did anything, leaving the panel switched off, the music still quiet, and
+                // the wake word off the microphone with nothing left running to put it back.
+                withContext(NonCancellable) {
+                    turnAudio.release()
+                    // The live bubble is the microphone, on screen. An aborted turn left one
+                    // open with nothing to replace it; a turn that ran to its end has none,
+                    // and this does nothing to it.
+                    transcript.abandonListening()
+                    // Both, in this order: a question that outlived its turn would be answered
+                    // by whatever the next wake word picked up (`socks.specs/README.md` §5),
+                    // and the wake word stays off the microphone until endTurn() puts it back.
+                    engine?.endTurn()
+                    pipeline.endTurn()
+                }
+                turnJob = null
             }
         }
+    }
+
+    /**
+     * Abandons the turn that is listening right now: the X under the microphone.
+     *
+     * The way out of a turn nobody meant to start — a wake word the television said, or a
+     * question asked by mistake — without standing in front of the panel waiting out ten
+     * seconds of silence. Cancelling the job is the whole mechanism: [listen] closes the
+     * microphone, releases the duck and re-arms the wake word in a `finally`, so an abort ends
+     * exactly where a silence would have, back at "sag Dobby".
+     *
+     * Safe to call when nothing is listening — there is then no job to cancel.
+     */
+    fun stopListening() {
+        turnJob?.cancel()
     }
 
     /**

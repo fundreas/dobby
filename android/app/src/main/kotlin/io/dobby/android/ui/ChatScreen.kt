@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
@@ -64,6 +65,7 @@ fun ChatScreen(
     nowPlaying: PlayerSnapshot?,
     artwork: Bitmap?,
     onListen: () -> Unit,
+    onAbort: () -> Unit,
     onSettings: () -> Unit,
     onHelp: () -> Unit,
     modifier: Modifier = Modifier,
@@ -78,7 +80,7 @@ fun ChatScreen(
         NowPlayingCard(nowPlaying, artwork)
         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
         Conversation(state.messages, Modifier.weight(1f))
-        Composer(state, onListen, onHelp)
+        Composer(state, onListen, onAbort, onHelp)
     }
 }
 
@@ -234,9 +236,17 @@ private fun Bubble(message: ChatMessage) {
 }
 
 @Composable
-private fun Composer(state: DobbyUiState, onListen: () -> Unit, onHelp: () -> Unit) {
-    val busy = state.phase == Phase.LISTENING || state.phase == Phase.THINKING
-    val armed = state.phase == Phase.LISTENING
+private fun Composer(
+    state: DobbyUiState,
+    onListen: () -> Unit,
+    onAbort: () -> Unit,
+    onHelp: () -> Unit,
+) {
+    // The one control is two controls, because while the microphone is open the only thing
+    // anybody wants from it is the way out: a wake word the television said, or a question
+    // asked by mistake, otherwise costs ten seconds of standing there being listened to.
+    val listening = state.phase == Phase.LISTENING
+    val busy = state.phase == Phase.THINKING
 
     Row(
         Modifier
@@ -248,21 +258,23 @@ private fun Composer(state: DobbyUiState, onListen: () -> Unit, onHelp: () -> Un
         // One control, sized to be hit from across a room rather than from a thumb's reach —
         // the panel is on a wall, and this is the only thing on it you touch.
         FilledIconButton(
-            onClick = onListen,
+            onClick = if (listening) onAbort else onListen,
             modifier = Modifier.size(72.dp),
-            enabled = state.canListen && !busy,
+            // Abort is never greyed out: it is the button for a turn that is already running,
+            // and there is no state in which somebody may start listening but not stop.
+            enabled = listening || (state.canListen && !busy),
             colors = IconButtonDefaults.filledIconButtonColors(
-                containerColor = if (armed) {
-                    MaterialTheme.colorScheme.primary
+                containerColor = if (listening) {
+                    MaterialTheme.colorScheme.error
                 } else {
                     MaterialTheme.colorScheme.surfaceVariant
                 },
-                contentColor = if (armed) Color.Black else MaterialTheme.colorScheme.onSurface,
+                contentColor = if (listening) Color.Black else MaterialTheme.colorScheme.onSurface,
             ),
         ) {
             Icon(
-                Icons.Filled.Mic,
-                contentDescription = "Zuhören",
+                if (listening) Icons.Filled.Close else Icons.Filled.Mic,
+                contentDescription = if (listening) "Zuhören abbrechen" else "Zuhören",
                 modifier = Modifier.size(32.dp),
             )
         }
