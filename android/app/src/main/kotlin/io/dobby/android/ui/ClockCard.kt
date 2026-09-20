@@ -30,7 +30,7 @@ import java.time.format.DateTimeFormatter
 private val HOURS_MINUTES = DateTimeFormatter.ofPattern("HH:mm")
 
 /**
- * The Clock Sock's half of the wall panel (`clock.specs.md` §7).
+ * The Clock Sock's half of the wall panel (`clock.specs.md` §9).
  *
  * Seconds are deliberately absent from the clock: this panel is on all day, and a digit that
  * redraws once a second is an OLED burning itself in for no information. The countdown is the
@@ -57,7 +57,21 @@ fun ClockCard(state: ClockState, modifier: Modifier = Modifier) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        state.timer?.let { Timer(it) }
+        if (state.timers.isNotEmpty()) {
+            Column(horizontalAlignment = Alignment.End) {
+                // Soonest first, and only the ones that fit: a panel that lists eight timers in
+                // 6-point type is a list nobody reads across a kitchen. The rest are a count.
+                for (timer in state.timers.take(VISIBLE_TIMERS)) Timer(timer)
+                val hidden = state.timers.size - VISIBLE_TIMERS
+                if (hidden > 0) {
+                    Text(
+                        "+$hidden weitere",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -77,8 +91,17 @@ private fun Timer(timer: TimerState) {
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         modifier = Modifier.alpha(flash),
     ) {
+        // The label earns its place only once there is something to tell apart: a single
+        // default timer is just a countdown, exactly as it was before multi-timer.
+        if (timer.numbered || timer.name != null) {
+            Text(
+                timer.label,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         Text(
-            if (timer.isRinging) "Timer!" else GermanTime.countdown(timer.remainingMs),
+            if (timer.isRinging) "${timer.label}!" else GermanTime.countdown(timer.remainingMs),
             style = MaterialTheme.typography.headlineSmall,
             color = if (timer.isRinging) {
                 MaterialTheme.colorScheme.error
@@ -102,3 +125,6 @@ private fun Timer(timer: TimerState) {
 }
 
 private const val FLASH_MILLIS = 450
+
+/** How many timers the card draws before it starts counting the rest. */
+private const val VISIBLE_TIMERS = 3

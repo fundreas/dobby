@@ -15,7 +15,7 @@ interface TimerAlarm {
      * Whether an *exact* alarm can be scheduled right now.
      *
      * False means no `SCHEDULE_EXACT_ALARM` permission: the timer still runs off the coroutine,
-     * only the backstop is weaker, and the Sock reports `Degraded` and says so (§10).
+     * only the backstop is weaker, and the Sock reports `Degraded` and says so (§12).
      */
     val canScheduleExact: Boolean get() = true
 

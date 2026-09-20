@@ -14,32 +14,53 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.time.Clock
 import java.time.Instant
+import java.util.concurrent.atomic.AtomicLong
 
-/** What [TimerEngine.cancel] actually did — the three cases of `clock.cancel_timer` (§4). */
-enum class CancelOutcome {
+/** What [TimerEngine.start] actually did. */
+internal sealed interface StartOutcome {
+
+    /** @param timer the started timer, already carrying the label the whole list agrees on. */
+    data class Started(val timer: TimerState, val replaced: Boolean) : StartOutcome
+
+    /** [TimerEngine.MAX_TIMERS] are already running. */
+    data object TooMany : StartOutcome
+}
+
+/** What [TimerEngine.cancel] actually did — the cases of `clock.cancel_timer` (§4). */
+internal sealed interface CancelOutcome {
+
     /** The chime was sounding and is now quiet. */
-    SILENCED,
+    data class Silenced(val timers: List<TimerState>) : CancelOutcome
 
-    /** A timer was counting down and is now gone. */
-    CANCELLED,
+    /** These timers were counting down and are now gone. */
+    data class Cancelled(val timers: List<TimerState>) : CancelOutcome
 
     /** There was nothing to cancel. */
-    NOTHING,
+    data object Nothing : CancelOutcome
+
+    /** A name was spoken and no timer answers to it. */
+    data class Unknown(val name: String) : CancelOutcome
+
+    /** No name, several timers, none of them ringing. Only the user can break this tie. */
+    data class Ambiguous(val timers: List<TimerState>) : CancelOutcome
 }
 
 /**
- * One timer: count down, ring, be silenced.
+ * The running timers: count down, ring, be silenced.
  *
- * The countdown is a coroutine and the [TimerAlarm] is only a backstop — the coroutine drives
+ * Each countdown is a coroutine and the [TimerAlarm] is only a backstop — the coroutine drives
  * the UI, the alarm exists so a doze or a process death does not swallow the expiry
  * (`clock.specs.md` §3).
  *
- * v1 holds at most one timer at a time. The model is deliberately shaped so that multi-timer is
- * a change of this field into a list, not a rewrite; the commands simply do not expose it.
+ * **Several timers, one alarm.** [TimerAlarm.schedule] replaces whatever was pending, so the
+ * backstop is always armed for the *earliest* deadline still counting and re-armed whenever
+ * that changes. [onBackstop] then rings everything that has come due, not one thing, because a
+ * process that was asleep may well have slept past two of them.
  *
- * **Concurrency.** Every state transition happens under [mutex] and stamps a [generation].
- * The running coroutine re-checks that stamp before it touches anything, which is what keeps a
- * timer that was cancelled a millisecond before it fired from ringing anyway.
+ * **Concurrency.** Every state transition happens under [mutex]. A timer's [TimerState.id] is
+ * its stamp: the countdown coroutine re-checks that its own id is still in the list before it
+ * touches anything, which is what keeps a timer that was cancelled a millisecond before it fired
+ * from ringing anyway. Ids are never reused, so "still in the list" cannot be answered wrongly.
  */
 internal class TimerEngine(
     private val clock: Clock,
@@ -48,87 +69,109 @@ internal class TimerEngine(
     private val sockId: String,
     private val screenWakeSeconds: Int,
 ) {
-    private val _timer = MutableStateFlow<TimerState?>(null)
-    val timer: StateFlow<TimerState?> = _timer.asStateFlow()
+    private val _running = MutableStateFlow<List<TimerState>>(emptyList())
+
+    /** Ordered by deadline, soonest first — the order the panel draws and Dobby speaks. */
+    val running: StateFlow<List<TimerState>> = _running.asStateFlow()
 
     private val mutex = Mutex()
 
-    private var job: Job? = null
+    /** Countdown-then-ring coroutines by timer id. Touched only under [mutex]. */
+    private val jobs = mutableMapOf<Long, Job>()
 
-    @Volatile
-    private var generation: Int = 0
+    private val ids = AtomicLong()
 
     /** A pure state read: this is what `activityFor` is allowed to do (`socks.specs/README.md` §4). */
-    val isRinging: Boolean get() = _timer.value?.isRinging == true
+    val isRinging: Boolean get() = _running.value.any { it.isRinging }
+
+    /** A pure state read, for the questions that only report. */
+    fun snapshot(): List<TimerState> = _running.value
 
     /**
-     * Starts a timer, replacing whatever was running.
+     * Starts a timer.
      *
-     * @return true if it replaced a timer that was still counting down or ringing.
+     * A *named* timer replaces the one that already carries its name — saying "Timer Nudeln auf
+     * 10 Minuten" twice means one pot of noodles, not two. An unnamed one never replaces
+     * anything; that is the whole of what "multiple timers" changed about v1.
      */
-    suspend fun start(ctx: SockContext, durationMs: Long): Boolean = mutex.withLock {
-        val previous = _timer.value
-        // The replaced timer's own coroutine will see the new stamp and clean up nothing, so
-        // whatever it was holding is released here instead.
-        if (previous?.isRinging == true) silence(ctx)
-        arm(ctx, clock.instant().plusMillis(durationMs), durationMs)
-        previous != null
+    suspend fun start(ctx: SockContext, durationMs: Long, name: String?): StartOutcome = mutex.withLock {
+        val replaced = name?.let { wanted -> _running.value.firstOrNull { it.name.equals(wanted, ignoreCase = true) } }
+        if (replaced != null) forget(ctx, replaced.id, cancelJob = true)
+        if (_running.value.size >= MAX_TIMERS) return@withLock StartOutcome.TooMany
+        val started = TimerState(
+            id = ids.incrementAndGet(),
+            endsAt = clock.instant().plusMillis(durationMs),
+            totalMs = durationMs,
+            remainingMs = durationMs,
+            name = name,
+            ordinal = if (name == null) freeOrdinal() else 0,
+        )
+        arm(ctx, started)
+        // Re-read: the label depends on how many timers there now are, and publishing is what
+        // settles that. Speaking the pre-publish state would say "Timer" where the panel says
+        // "Timer 1".
+        StartOutcome.Started(current(started.id) ?: started, replaced != null)
     }
 
     /**
-     * Picks up a timer that outlived the process (§10).
+     * Picks up the timers that outlived the process (§12).
      *
-     * The countdown lives in memory, so a killed process would otherwise swallow the timer
-     * silently — the one failure a kitchen timer must not have. The deadline is written to
-     * config when the timer starts, so a restarted Sock can resume it, and ring straight away
-     * if it came due while nobody was home. A timer whose moment passed long ago is dropped
+     * The countdowns live in memory, so a killed process would otherwise swallow them silently —
+     * the one failure a kitchen timer must not have. The deadlines are written to config
+     * whenever the list changes, so a restarted Sock can resume them, and ring straight away for
+     * any that came due while nobody was home. A timer whose moment passed long ago is dropped
      * rather than announced: a chime an hour late is not news, it is a fright.
      */
     suspend fun restore(ctx: SockContext) = mutex.withLock {
-        if (_timer.value != null) return@withLock
-        val endsAt = ctx.config.getString(PENDING_ENDS_AT)?.toLongOrNull() ?: return@withLock
-        val totalMs = ctx.config.getString(PENDING_TOTAL_MS)?.toLongOrNull() ?: return@withLock
-        if (clock.millis() > endsAt + STALE_AFTER_MS) {
-            clearPending(ctx)
+        if (_running.value.isNotEmpty()) return@withLock
+        val saved = decode(ctx.config.getString(PENDING_TIMERS))
+        val fresh = saved.filter { clock.millis() <= it.endsAt.toEpochMilli() + STALE_AFTER_MS }
+        if (fresh.isEmpty()) {
+            if (saved.isNotEmpty()) ctx.config.put(PENDING_TIMERS, "")
             return@withLock
         }
-        ctx.log.debug("clock: resuming a timer that outlived the process")
-        arm(ctx, Instant.ofEpochMilli(endsAt), totalMs)
+        ctx.log.debug("clock: resuming ${fresh.size} timer(s) that outlived the process")
+        for (timer in fresh) {
+            arm(
+                ctx,
+                timer.copy(
+                    id = ids.incrementAndGet(),
+                    remainingMs = (timer.endsAt.toEpochMilli() - clock.millis()).coerceIn(0, timer.totalMs),
+                ),
+            )
+        }
     }
 
     /**
-     * Starts counting towards [endsAt]. Must be called with [mutex] held.
+     * "Timer stopp", and the `shared.stop` the Sock consumes while the chime rings.
      *
-     * A deadline that has already passed is legal and rings immediately — which is what makes
-     * [restore] need no special case of its own.
+     * With no name, a ringing timer wins: the chime is the thing demanding attention, and
+     * silencing it is unambiguously what the sentence meant. Only when nothing rings and several
+     * timers are counting is the utterance genuinely ambiguous, and then nothing is cancelled —
+     * cancelling the wrong timer is not undoable by saying it again.
      */
-    private fun arm(ctx: SockContext, endsAt: Instant, totalMs: Long) {
-        generation++
-        val stamp = generation
-        job?.cancel()
-        val remaining = (endsAt.toEpochMilli() - clock.millis()).coerceIn(0, totalMs)
-        _timer.value = TimerState(endsAt = endsAt, totalMs = totalMs, remainingMs = remaining)
-        ctx.config.put(PENDING_ENDS_AT, endsAt.toEpochMilli().toString())
-        ctx.config.put(PENDING_TOTAL_MS, totalMs.toString())
-        alarm.schedule(endsAt) { ctx.scope.launch { onBackstop(ctx, stamp) } }
-        job = ctx.scope.launch { countDownThenRing(ctx, stamp, endsAt) }
+    suspend fun cancel(ctx: SockContext, name: String?): CancelOutcome = mutex.withLock {
+        val timers = _running.value
+        if (timers.isEmpty()) return@withLock CancelOutcome.Nothing
+        val targets = when {
+            name != null -> listOf(TimerNames.find(timers, name) ?: return@withLock CancelOutcome.Unknown(name))
+            timers.any { it.isRinging } -> timers.filter { it.isRinging }
+            timers.size == 1 -> timers
+            else -> return@withLock CancelOutcome.Ambiguous(timers)
+        }
+        for (target in targets) forget(ctx, target.id, cancelJob = true)
+        if (targets.any { it.isRinging }) {
+            CancelOutcome.Silenced(targets)
+        } else {
+            CancelOutcome.Cancelled(targets)
+        }
     }
 
-    /** "Timer stopp", and the `shared.stop` the Sock consumes while the chime rings. */
-    suspend fun cancel(ctx: SockContext): CancelOutcome = mutex.withLock {
-        val current = _timer.value ?: return@withLock CancelOutcome.NOTHING
-        generation++
-        job?.cancel()
-        job = null
-        alarm.cancel()
-        _timer.value = null
-        clearPending(ctx)
-        if (current.isRinging) {
-            silence(ctx)
-            CancelOutcome.SILENCED
-        } else {
-            CancelOutcome.CANCELLED
-        }
+    /** "Brich alle Timer ab" — the one command that needs no name and no tie to break. */
+    suspend fun cancelAll(ctx: SockContext): List<TimerState> = mutex.withLock {
+        val all = _running.value
+        for (timer in all) forget(ctx, timer.id, cancelJob = true)
+        all
     }
 
     /**
@@ -139,43 +182,101 @@ internal class TimerEngine(
      * *disorderly* path, where the process is killed without a word, is [restore]'s job.
      */
     suspend fun shutdown(ctx: SockContext) {
-        cancel(ctx)
+        cancelAll(ctx)
         chime.stop()
     }
 
-    private suspend fun countDownThenRing(ctx: SockContext, stamp: Int, endsAt: Instant) {
-        val deadline = endsAt.toEpochMilli()
-        while (true) {
-            // Cancellation is cooperative, so a replaced timer can get one more tick in
-            // between `job.cancel()` and its own `delay` noticing. Without this it would write
-            // its remaining time into the state of the timer that replaced it.
-            if (stamp != generation) return
-            val remaining = deadline - clock.millis()
-            if (remaining <= 0) break
-            _timer.update { it?.copy(remainingMs = remaining) }
-            delay(minOf(remaining, TICK_MS))
-        }
-        ring(ctx, stamp)
+    /**
+     * Starts counting towards [TimerState.endsAt]. Must be called with [mutex] held.
+     *
+     * A deadline that has already passed is legal and rings immediately — which is what makes
+     * [restore] need no special case of its own.
+     */
+    private fun arm(ctx: SockContext, timer: TimerState) {
+        jobs[timer.id]?.cancel()
+        publish(ctx, _running.value + timer)
+        rearmAlarm(ctx)
+        jobs[timer.id] = ctx.scope.launch { countDownThenRing(ctx, timer.id, timer.endsAt) }
     }
 
     /**
-     * Expiry: wake the screen, duck the music, say it, then chime until told to stop.
+     * The one place the list changes. Must be called with [mutex] held.
+     *
+     * Relabelling happens here rather than at each call site because it is a property of the
+     * *list*: the sole default timer is "Timer" and the moment a second one exists it is
+     * "Timer 1" (`TimerState.numbered`). Persistence happens here for the same reason — every
+     * structural change is one, and a countdown tick is not.
+     */
+    private fun publish(ctx: SockContext, timers: List<TimerState>) {
+        val numbered = timers.size > 1
+        _running.value = timers
+            .map { if (it.numbered == numbered) it else it.copy(numbered = numbered) }
+            .sortedBy { it.endsAt }
+        ctx.config.put(PENDING_TIMERS, encode(_running.value))
+    }
+
+    /** Drops one timer, and with it the chime and the audio focus if it was the last ringing one. */
+    private suspend fun forget(ctx: SockContext, id: Long, cancelJob: Boolean): TimerState? {
+        val gone = current(id) ?: return null
+        val job = jobs.remove(id)
+        // Never on the ring coroutine's own `finally` path: it is the one calling this, and it
+        // is already finishing.
+        if (cancelJob) job?.cancel()
+        publish(ctx, _running.value.filterNot { it.id == id })
+        rearmAlarm(ctx)
+        if (gone.isRinging && _running.value.none { it.isRinging }) silence(ctx)
+        return gone
+    }
+
+    /** The backstop is armed for the next deadline only. Must be called with [mutex] held. */
+    private fun rearmAlarm(ctx: SockContext) {
+        val next = _running.value.filterNot { it.isRinging }.minByOrNull { it.endsAt }
+        if (next == null) {
+            alarm.cancel()
+        } else {
+            alarm.schedule(next.endsAt) { ctx.scope.launch { onBackstop(ctx) } }
+        }
+    }
+
+    private suspend fun countDownThenRing(ctx: SockContext, id: Long, endsAt: Instant) {
+        val deadline = endsAt.toEpochMilli()
+        while (true) {
+            // Cancellation is cooperative, so a cancelled timer can get one more tick in between
+            // `job.cancel()` and its own `delay` noticing. Without this it would write its
+            // remaining time back into a list it is no longer part of.
+            if (current(id) == null) return
+            val remaining = deadline - clock.millis()
+            if (remaining <= 0) break
+            _running.update { timers ->
+                timers.map { if (it.id == id) it.copy(remainingMs = remaining) else it }
+            }
+            delay(minOf(remaining, TICK_MS))
+        }
+        ring(ctx, id)
+    }
+
+    /**
+     * Expiry: wake the screen, duck the music, say which timer it was, then chime until told to
+     * stop.
      *
      * Transient focus rather than full focus is the whole point — Spotify ducks and comes back
      * up by itself, instead of being stopped by a kitchen timer (§3).
      */
-    private suspend fun ring(ctx: SockContext, stamp: Int) {
+    private suspend fun ring(ctx: SockContext, id: Long) {
         val config = ClockConfig(ctx.config)
-        mutex.withLock {
-            if (stamp != generation) return
-            // The backstop has done its job either way; it must not fire into the next timer.
-            alarm.cancel()
-            _timer.update { it?.copy(remainingMs = 0, isRinging = true) }
+        val timer = mutex.withLock {
+            val current = current(id) ?: return
+            if (current.isRinging) return
+            val ringing = current.copy(remainingMs = 0, isRinging = true)
+            publish(ctx, _running.value.map { if (it.id == id) ringing else it })
+            // This one no longer needs a backstop; whatever is counting behind it still does.
+            rearmAlarm(ctx)
+            ringing
         }
 
         ctx.screen.wakeFor(screenWakeSeconds)
         ctx.playback.requestTransientFocus(sockId)
-        ctx.announce(TIMER_EXPIRED)
+        ctx.announce(expired(timer))
 
         val until = clock.millis() + config.chimeMaxDurationMs
         try {
@@ -185,19 +286,9 @@ internal class TimerEngine(
             }
         } finally {
             // Reached both by the 60 s auto-stop and by cancellation. On the cancel path the
-            // stamp has already moved on and `cancel` did the cleanup itself, so this does
-            // nothing — which is why it may run unconditionally.
+            // timer is already gone and `forget` finds nothing, so this may run unconditionally.
             withContext(NonCancellable) {
-                mutex.withLock {
-                    if (stamp == generation) {
-                        _timer.value = null
-                        job = null
-                        // Only now: a process that dies mid-chime should ring again when it
-                        // comes back, because nobody has heard this timer yet.
-                        clearPending(ctx)
-                        silence(ctx)
-                    }
-                }
+                mutex.withLock { forget(ctx, id, cancelJob = false) }
             }
         }
     }
@@ -205,22 +296,30 @@ internal class TimerEngine(
     /**
      * The `AlarmManager` backstop fired.
      *
-     * In the normal case the coroutine has already rung and this finds nothing to do. It earns
-     * its keep exactly when the coroutine did not run: the process was dozing or was killed.
+     * In the normal case the coroutines have already rung and this finds nothing to do. It earns
+     * its keep exactly when they did not run: the process was dozing or was killed. Several
+     * timers may have come due in that gap, so this rings every one of them rather than the one
+     * the alarm was armed for.
      */
-    private suspend fun onBackstop(ctx: SockContext, stamp: Int) = mutex.withLock {
-        val current = _timer.value ?: return@withLock
-        if (stamp != generation || current.isRinging) return@withLock
-        if (clock.millis() < current.endsAt.toEpochMilli()) return@withLock
-        ctx.log.debug("clock: timer expiry came from the alarm backstop")
-        job?.cancel()
-        job = ctx.scope.launch { ring(ctx, stamp) }
+    private suspend fun onBackstop(ctx: SockContext) {
+        val due = mutex.withLock {
+            val now = clock.millis()
+            val due = _running.value.filter { !it.isRinging && now >= it.endsAt.toEpochMilli() }
+            for (timer in due) {
+                jobs[timer.id]?.cancel()
+                jobs[timer.id] = ctx.scope.launch { ring(ctx, timer.id) }
+            }
+            due
+        }
+        if (due.isNotEmpty()) ctx.log.debug("clock: ${due.size} timer expiry came from the alarm backstop")
     }
 
-    /** [SockConfigStore] has no remove, and a blank value is as absent as it needs to be. */
-    private fun clearPending(ctx: SockContext) {
-        ctx.config.put(PENDING_ENDS_AT, "")
-        ctx.config.put(PENDING_TOTAL_MS, "")
+    private fun current(id: Long): TimerState? = _running.value.firstOrNull { it.id == id }
+
+    /** The lowest number no default timer is using. Must be called with [mutex] held. */
+    private fun freeOrdinal(): Int {
+        val taken = _running.value.filter { it.name == null }.map { it.ordinal }.toSet()
+        return generateSequence(1) { it + 1 }.first { it !in taken }
     }
 
     /** Must be called with [mutex] held. */
@@ -229,16 +328,59 @@ internal class TimerEngine(
         ctx.playback.releaseFocus(sockId)
     }
 
+    /**
+     * One line per timer, `endsAt|totalMs|ordinal|name`.
+     *
+     * A name is Normalizer output with its first letters titlecased, so it holds letters, digits,
+     * apostrophes and spaces and nothing else — the separator cannot appear inside one.
+     */
+    private fun encode(timers: List<TimerState>): String = timers.joinToString("\n") {
+        "${it.endsAt.toEpochMilli()}|${it.totalMs}|${it.ordinal}|${it.name.orEmpty()}"
+    }
+
+    /** A line that does not parse is dropped, not fatal: a timer is not worth a crash loop. */
+    private fun decode(raw: String?): List<TimerState> = raw.orEmpty().lineSequence()
+        .mapNotNull { line ->
+            val parts = line.split('|')
+            if (parts.size != PERSISTED_FIELDS) return@mapNotNull null
+            val endsAt = parts[0].toLongOrNull() ?: return@mapNotNull null
+            val totalMs = parts[1].toLongOrNull() ?: return@mapNotNull null
+            val ordinal = parts[2].toIntOrNull() ?: return@mapNotNull null
+            TimerState(
+                id = 0,
+                endsAt = Instant.ofEpochMilli(endsAt),
+                totalMs = totalMs,
+                remainingMs = 0,
+                name = parts[3].ifEmpty { null },
+                ordinal = ordinal,
+            )
+        }
+        .toList()
+
     companion object {
-        /** German copy lives in the spec (§3). This is the only thing the Sock announces. */
+        /**
+         * German copy lives in the spec (§3). What the sole default timer announces, and the
+         * shape every other one follows: "Timer 2 ist abgelaufen", "Timer Nudeln ist abgelaufen".
+         */
         const val TIMER_EXPIRED: String = "Der Timer ist abgelaufen."
+
+        fun expired(timer: TimerState): String = "${timer.subject} ist abgelaufen."
+
+        /**
+         * More than this is not a kitchen, it is a stress test.
+         *
+         * The limit exists so a misheard sentence cannot fill the panel with timers nobody can
+         * name their way back out of, not because the engine would struggle.
+         */
+        const val MAX_TIMERS: Int = 8
 
         /** One countdown tick. The last one is short: it lands exactly on the deadline. */
         private const val TICK_MS = 1000L
 
-        /** Written by [arm], read by [restore]. Not user-facing config — see `ClockConfig`. */
-        private const val PENDING_ENDS_AT = "clock.pending_timer_ends_at"
-        private const val PENDING_TOTAL_MS = "clock.pending_timer_total_ms"
+        /** Written by [publish], read by [restore]. Not user-facing config — see `ClockConfig`. */
+        private const val PENDING_TIMERS = "clock.pending_timers"
+
+        private const val PERSISTED_FIELDS = 4
 
         /** Past this, a timer that came due while the process was dead is dropped. */
         private const val STALE_AFTER_MS = 60 * 60 * 1000L

@@ -1,6 +1,6 @@
 package io.dobby.socks.clock
 
-/** The sounds `clock.chime_sound` can select (`clock.specs.md` §9). */
+/** The sounds `clock.chime_sound` can select (`clock.specs.md` §11). */
 enum class ChimeSound(val configValue: String) {
     GLOCKE("glocke"),
     PIEP("piep"),

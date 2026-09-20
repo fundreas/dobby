@@ -3,7 +3,7 @@ package io.dobby.socks.clock
 import io.dobby.core.sock.SockConfigStore
 
 /**
- * The Sock's settings (`clock.specs.md` §9), read through [SockConfigStore].
+ * The Sock's settings (`clock.specs.md` §11), read through [SockConfigStore].
  *
  * Every value is read at the moment it is used rather than cached, so changing a setting takes
  * effect on the next chime instead of on the next restart.
