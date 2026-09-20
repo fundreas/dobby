@@ -93,7 +93,7 @@ Ships as a constant list; overridable from config later. **Verified on 2026-09-2
 | id | Display | Aliases (spoken) | `streamUrl` | `fallbackUrl` |
 |---|---|---|---|---|
 | `fm4` | FM4 | `fm vier`, `fm 4`, `f m 4`, `ef em vier`, `efemvier` | `https://orf-live.ors-shoutcast.at/fm4-q2a` | `…/fm4-q1a` |
-| `oe3` | Ö3 | `ö drei`, `oe drei`, `o3`, `hitradio`, `hitradio ö3`, `hitradio oe3` | `https://orf-live.ors-shoutcast.at/oe3-q2a` | `…/oe3-q1a` |
+| `oe3` | Hitradio Ö Drei | `ö drei`, `oe drei`, `o3`, `hitradio`, `hitradio ö3`, `hitradio oe3` | `https://orf-live.ors-shoutcast.at/oe3-q2a` | `…/oe3-q1a` |
 | `oe1` | Ö1 | `ö eins`, `oe eins`, `o1`, `österreich eins` | `https://orf-live.ors-shoutcast.at/oe1-q2a` | `…/oe1-q1a` |
 | `wien` | Radio Wien | `radio wien`, `wien`, `orf wien` | `https://orf-live.ors-shoutcast.at/wie-q2a` | `…/wie-q1a` |
 | `kronehit` | Kronehit | `krone hit`, `kronen hit`, `krone`, `kronehit 105 8` | `https://secureonair.krone.at/kronehit1058.mp3` | `…/kronehit.mp3` |
@@ -115,7 +115,7 @@ Four decisions inside that table:
 |---|---|
 | `title` | Radio hören |
 | `detail` | Spielt einen der eingebauten Sender als Internet-Stream. Ohne Sendernamen läuft der Standardsender aus den Einstellungen. |
-| `hints` | „Ich kenne FM4, Ö3, Ö1, Radio Wien und Kronehit.“ · „„Weiter“ holt den zuletzt gestoppten Sender zurück.“ |
+| `hints` | „Ich kenne FM4, Hitradio Ö Drei, Ö1, Radio Wien und Kronehit.“ · „„Weiter“ holt den zuletzt gestoppten Sender zurück.“ |
 | `aliases` | radio, sender, radio anmachen, radiosender |
 
 The usage line is not written here — `Syntax` derives it from the templates (README §6a).
@@ -130,7 +130,7 @@ The usage line is not written here — `Syntax` derives it from the templates (R
 
 ### Result
 
-- `Spoken("{displayName}.")` — e.g. "FM4." Deliberately terse; the audio starting is the real feedback.
+- `Ended()` — **nothing is said, and the turn is over.** The terse "FM4." this line used to ask for was one word too many: the audio starting *is* the feedback, and announcing the station over the first bar of it is a panel talking across the thing it was asked for. Ending the turn is the same reasoning one step on — the seconds after "radio an" are music, not a follow-up, so the microphone closes and the wake word comes straight back, exactly as `spotify.play_music` already does. Errors below still speak: a command that did *not* happen is the one case where silence is indistinguishable from a panel that did not hear.
 - Station named but unresolvable → `Failed`, "Den Sender kenne ich nicht."
 - Stream unreachable / timeout / 404 → `Failed`, "Der Sender ist gerade nicht erreichbar."
 - No network → `Failed`, "Ich habe gerade keine Internetverbindung."
@@ -190,7 +190,7 @@ Read from the Sock's own `StateFlow<RadioState>` (§7) — no player interrogati
 Consumes:
 
 - `shared.stop` while `ACTIVE` → stop + release the player, release focus → `Silent`.
-- `shared.resume` while `IDLE` → restart the remembered station → `Spoken("{displayName}.")`. Speaks here, unlike Spotify, because a radio stream takes a second to buffer and silence would read as a no-op.
+- `shared.resume` while `IDLE` → restart the remembered station → `Ended()`. Silent like every other way into `tuneTo`, and the earlier "speaks, because buffering reads as a no-op" is gone with it: the station is back within the second the sentence would have taken to say, and the card shows the spinner meanwhile.
 - `INACTIVE` → `NotForMe`, no player construction, no prefetch.
 
 **Priority 50 on `shared.stop`,** tied with Spotify. The tie is theoretical: `PlaybackCoordinator` guarantees only one of them can be `ACTIVE`. It is written down anyway so the ordering is deterministic if that invariant ever breaks.
@@ -236,6 +236,7 @@ So:
 - Station display name, large.
 - Stream metadata title (ICY `StreamTitle`). Measured on 2026-09-20: **all five stations carry one, and carry it reliably** — the first draft's "many do, most are unreliable" was wrong. What they do not carry uniformly is a *track*: FM4 and Ö1 broadcast the **programme** dressed in boilerplate (`FM4 Fivas Ponyhof | fm4.orf.at`, `Jetzt in Ö1: Im Zeit-Raum: …`), while Ö3, Radio Wien and Kronehit send artist and title. `NowPlaying.clean` strips the station prefix and the URL suffix and returns null for what is left over when it is empty or is just the station's own name. Render it only when non-empty; **never show a placeholder**, and never re-capitalise it — Kronehit lower-cases everything and a title-caser gets "Ac/Dc" wrong.
 - Buffering / reconnecting indicator.
+- **A stop button (X), at the trailing edge.** The one control on the card, and the counterpart to the X under the microphone: the room is playing music, which is the worst moment to make somebody say the wake word over it. It calls `RadioSock.stopFromPanel()` — the identical `release(remember = true)` that `radio.stop_radio` performs, so "weiter" still brings the station back afterwards — and the card closes because the state it draws became `Idle`. Shown in `Buffering` and `Error` too: a stream still connecting is exactly one somebody may want to give up on, and from `Error` the X is how a card nobody can act on gets dismissed.
 
 Exposed state: `StateFlow<RadioState>` = `Idle(lastStation: Station?)` | `Buffering(station)` | `Playing(station, nowPlaying: String?)` | `Error(station, reason)`. `lastStation` is what backs `IDLE` on `shared.resume`.
 

@@ -66,6 +66,7 @@ fun ChatScreen(
     nowPlaying: PlayerSnapshot?,
     artwork: Bitmap?,
     radio: RadioState,
+    onStopRadio: () -> Unit,
     onListen: () -> Unit,
     onAbort: () -> Unit,
     onSettings: () -> Unit,
@@ -82,7 +83,7 @@ fun ChatScreen(
         NowPlayingCard(nowPlaying, artwork)
         // Same rule, and the coordinator guarantees these two are never both drawn: only one
         // Sock can hold the channel (`radio.specs.md` §7).
-        RadioCard(radio)
+        RadioCard(radio, onStop = onStopRadio)
         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
         Conversation(state.messages, Modifier.weight(1f))
         Composer(state, onListen, onAbort, onHelp)

@@ -7,9 +7,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -31,9 +33,18 @@ import io.dobby.socks.radio.RadioState
  * clock at the top of the screen where it belongs. `Error` is drawn too, briefly: a stream that
  * has just been given up on is exactly the moment somebody looks at the panel to find out why
  * the kitchen went quiet.
+ *
+ * The X is the one thing on this card that is not a readout, and it is here for the same
+ * reason the one under the microphone is: the room is playing music, which is the worst
+ * possible moment to make somebody say "Dobby" twice over it. It runs the identical stop the
+ * voice command runs, so the card closing and the stream ending are one event — including
+ * from `Error`, where the X is how a card nobody can do anything about gets dismissed.
+ *
+ * @param onStop the Sock's stop. Defaulted to nothing so a preview and the off-device build
+ *   can draw the card without one.
  */
 @Composable
-fun RadioCard(state: RadioState, modifier: Modifier = Modifier) {
+fun RadioCard(state: RadioState, modifier: Modifier = Modifier, onStop: () -> Unit = {}) {
     if (state is RadioState.Idle) return
     Row(
         modifier
@@ -77,6 +88,16 @@ fun RadioCard(state: RadioState, modifier: Modifier = Modifier) {
                 modifier = Modifier.size(INDICATOR_SIZE),
                 color = MaterialTheme.colorScheme.primary,
                 strokeWidth = 2.dp,
+            )
+        }
+        // Beside the spinner rather than in place of it: a stream that is still connecting is
+        // exactly one a person may want to give up on, and a button that appears only once the
+        // sound does would be missing whenever it is most wanted.
+        IconButton(onClick = onStop) {
+            Icon(
+                Icons.Filled.Close,
+                contentDescription = "Radio ausschalten",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }

@@ -127,6 +127,7 @@ class MainActivity : ComponentActivity() {
                                     nowPlaying = nowPlaying,
                                     artwork = artwork,
                                     radio = radio,
+                                    onStopRadio = { connected.controller.stopRadio() },
                                     onListen = { connected.controller.listen() },
                                     onAbort = { connected.controller.stopListening() },
                                     onSettings = { settingsOpen = true },

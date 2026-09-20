@@ -46,7 +46,13 @@ object Stations {
         ),
         Station(
             id = "oe3",
-            displayName = "Ö3",
+            // The station's own branding, spelled the way it is said. "Ö3" read out by a
+            // speech engine is a letter and a digit; "Ö Drei" is the word a person hears on
+            // air, and the card says the same thing the announcer does.
+            displayName = "Hitradio Ö Drei",
+            // Untouched by the rename, and deliberately: an alias is matched through
+            // [StationKey.of], which turns "drei" into `3` — so "hitradio ö drei" already
+            // arrives as `hitradiooe3` and is covered by the entry below.
             aliases = listOf("ö drei", "oe drei", "o3", "hitradio", "hitradio ö3", "hitradio oe3"),
             streamUrl = "https://orf-live.ors-shoutcast.at/oe3-q2a",
             fallbackUrl = "https://orf-live.ors-shoutcast.at/oe3-q1a",

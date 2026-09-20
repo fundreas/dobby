@@ -108,7 +108,7 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
                 detail = "Spielt einen der eingebauten Sender als Internet-Stream. Ohne " +
                     "Sendernamen läuft der Standardsender aus den Einstellungen.",
                 hints = listOf(
-                    "Ich kenne FM4, Ö3, Ö1, Radio Wien und Kronehit.",
+                    "Ich kenne FM4, Hitradio Ö Drei, Ö1, Radio Wien und Kronehit.",
                     "„Weiter“ holt den zuletzt gestoppten Sender zurück.",
                 ),
                 aliases = listOf("radio", "sender", "radio anmachen", "radiosender"),
@@ -277,11 +277,14 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
     }
 
     /**
-     * Claims the channel, buffers, and says the station's name.
+     * Claims the channel, buffers, and gets out of the way.
      *
-     * Terse on purpose (`radio.specs.md` §3): the audio starting is the real feedback, and
-     * "FM4." is what is left when the sentence is cut down to the part that carries
-     * information.
+     * **Says nothing, and ends the turn.** The terse "FM4." the spec's §3 asked for was one
+     * word too many: the audio starting *is* the feedback, and a panel that announces the
+     * station over the first bar of it is talking across the thing it was asked for. Ending
+     * the turn is the same reasoning one step on — the seconds after "radio an" are music,
+     * not a follow-up, so the microphone closes and the wake word comes straight back, which
+     * is what `spotify.play_music` already does for the same reason ([SockResult.Ended]).
      */
     private suspend fun tuneTo(station: Station, config: RadioConfig): SockResult {
         val ctx = started()
@@ -297,13 +300,25 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
             return SockResult.Failed(UNREACHABLE)
         }
         _state.value = RadioState.Playing(station)
-        return SockResult.Spoken("${station.displayName}.")
+        return SockResult.Ended()
     }
 
     /** `radio.stop_radio` — explicitly addressed, and idempotent as the spec requires. */
     private suspend fun stopRadio(): SockResult {
         release(remember = true)
         return SockResult.Silent
+    }
+
+    /**
+     * The card's X (`radio.specs.md` §7): the same stop, from a finger instead of a sentence.
+     *
+     * Deliberately the *same* call `radio.stop_radio` makes, `remember = true` and all — a
+     * stop is a stop however it was asked for, and "weiter" must still bring the station back
+     * after one. Public because the panel holds this Sock directly, the way it already reads
+     * [state] directly; idempotent, so a second tap on a card mid-teardown is harmless.
+     */
+    suspend fun stopFromPanel() {
+        release(remember = true)
     }
 
     /**
@@ -325,8 +340,9 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
     /**
      * `shared.resume` — a bare "weiter" that reached this far down the chain.
      *
-     * **Speaks**, unlike Spotify's silent resume, and the spec says why: a radio stream takes a
-     * second to buffer, and silence would read as a no-op.
+     * Silent like every other way into [tuneTo], and the earlier "speaks, because buffering
+     * reads as a no-op" is gone with it: the station coming back is audible within the second
+     * the sentence would have taken to say, and the card shows the spinner meanwhile.
      */
     private suspend fun resumeChain(): SockResult {
         val last = (state.value as? RadioState.Idle)?.lastStation ?: return SockResult.NotForMe

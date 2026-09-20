@@ -214,6 +214,16 @@ class DobbyController(
     val radio: StateFlow<RadioState> get() = wiring.radio.state
 
     /**
+     * The X on the radio card: the Sock's own stop, run from a finger.
+     *
+     * Straight at the Sock rather than through the engine, and that is the same seam the card
+     * above reads [radio] across — there is no utterance to dispatch here, and inventing one
+     * to put "radio aus" through the matcher would route a button press through the one part
+     * of the system that can misunderstand it.
+     */
+    fun stopRadio(): Job = scope.launch { wiring.radio.stopFromPanel() }
+
+    /**
      * The cover, which comes from the hardware rather than the Sock.
      *
      * It is an Android `Bitmap`, and `:socks:spotify` is a plain JVM module that must not see
