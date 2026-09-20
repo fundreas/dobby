@@ -426,19 +426,37 @@ class SpotifySock(
     private suspend fun playSomething(): SockResult {
         val snapshot = player.state.value
         if (snapshot != null && snapshot.isPaused) {
-            return if (claimAnd { player.resume() }) SockResult.Spoken(RUNNING) else SockResult.Failed(UNREACHABLE)
+            return if (claimAnd { player.resume() }) ended() else SockResult.Failed(UNREACHABLE)
         }
         val name = claimAndReturn { player.resumeHome() } ?: return SockResult.Failed(NOT_FOUND)
-        return SockResult.Spoken("Spiele $name.")
+        return ended("spotify: playing $name")
     }
 
-    /** Plays one resolved hit and says its name — short on purpose; the card says the rest. */
+    /** Plays one resolved hit. Says nothing: the music is the answer, and the card names it. */
     private suspend fun start(hit: Hit): SockResult =
         if (claimAnd { player.play(hit.uri) }) {
-            SockResult.Spoken("Spiele ${hit.spoken}.")
+            ended("spotify: playing ${hit.spoken}")
         } else {
             SockResult.Failed(UNREACHABLE)
         }
+
+    /**
+     * How every successful `play_music` ends: without a word, and with the turn closed.
+     *
+     * Music is the case the whole panel was built around, and it is the one command whose
+     * result is *audible on its own*. "Spiele Blinding Lights." on top of Blinding Lights
+     * starting is Dobby talking over the thing it was asked for. Worse, the microphone would
+     * then stay open for a follow-up into a room that has just gone loud — the turn would end
+     * on the music rather than on silence. So the play command is [SockResult.Ended]: no
+     * speech, and straight back to the wake word (§3).
+     *
+     * What was played is not lost — the dashboard card names it (§7), and [trace] puts it in
+     * the log, which is where the confirmation went now that nobody says it out loud.
+     */
+    private fun ended(trace: String? = null): SockResult {
+        trace?.let { context?.log?.debug(it) }
+        return SockResult.Ended()
+    }
 
     /**
      * "Ich habe zwei Versionen: …" (`spotify.specs.md` §3).
@@ -594,7 +612,10 @@ class SpotifySock(
     private fun offline(query: String, hint: QueryHint): SockResult {
         if (query.isEmpty()) return SockResult.Failed(UNREACHABLE)
         if (!fallback.playFromSearch(query, hint)) return SockResult.Failed(UNREACHABLE)
-        return SockResult.Spoken(VIA_APP)
+        // Silent like every other successful play (see [ended]), and here the handoff shows
+        // itself: the intent starts an activity, so Spotify comes up over the panel. "Ich
+        // versuche es über die Spotify-App." was a sentence said over both that and the music.
+        return ended("spotify: handed \"$query\" to the Spotify app")
     }
 
     /** German copy for a search that failed, and the status it leaves behind (§3). */
@@ -687,6 +708,5 @@ class SpotifySock(
         const val NOTHING_PLAYING: String = "Auf Spotify läuft gerade nichts."
         const val NOTHING_PAUSED: String = "Auf Spotify ist nichts pausiert."
         const val RUNNING: String = "Läuft."
-        const val VIA_APP: String = "Ich versuche es über die Spotify-App."
     }
 }

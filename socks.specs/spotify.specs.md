@@ -357,10 +357,11 @@ Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH).apply {
 ```
 
 It brings Spotify to the foreground and tells us nothing — no URI, no confirmation, and an empty
-dashboard card — so the result is `Spoken("Ich versuche es über die Spotify-App.")`. Strictly
-better than "Ich komme gerade nicht an Spotify ran." for the one command where a blind attempt
-still does what the user wanted. **Only `play_music` gets this**; there is no meaningful intent
-fallback for pause or skip, and the empty query has nothing to search for.
+dashboard card — but it still does what the user wanted, so the result is `Ended()` like every
+other successful play, not `Failed("Ich komme gerade nicht an Spotify ran.")`. Nothing is spoken
+here either: the intent starts an *activity*, so the handoff shows itself — Spotify comes up over
+the panel. **Only `play_music` gets this**; there is no meaningful intent fallback for pause or
+skip, and the empty query has nothing to search for.
 
 This is also the argument for App Remote being the primary path rather than the intent: the
 intent starts an *activity*, so Spotify covers the panel; it reports neither what it played nor
@@ -369,12 +370,20 @@ whether it worked; and every other command here needs a live connection anyway, 
 
 ### Result
 
-- Success with a resolved name → `Spoken("Spiele {name}.")` — the track title, or
-  `Musik von {artist}`, or `Playlist {name}`.
-- Success on empty query → `Spoken("Läuft.")` on a resume, `Spoken("Spiele {name}.")` from the
-  home feed.
-- Success is also reflected in the dashboard card (§7) — the spoken line stays short
-  deliberately.
+- **Every success → `Ended()`: nothing spoken, and the turn is closed.** Not `Spoken`, and not
+  the open microphone every other command leaves behind. Two reasons, and the second is the
+  load-bearing one:
+  - The result is *audible on its own*. "Spiele Blinding Lights." arriving on top of Blinding
+    Lights starting is Dobby talking over the thing it was asked for.
+  - The room has just gone loud. Holding the microphone open for a follow-up now means
+    listening for a voice through the music this command started — so the play command hands
+    the turn back to the wake word instead of waiting out a window it cannot hear through.
+- This covers all three paths: a resolved hit, a resume or home feed on the empty query, and
+  the intent fallback (§3.5).
+- What was played is not lost: the dashboard card (§7) names it, and the Sock logs it. The
+  spoken confirmation was always short deliberately; now it is not spoken at all.
+- **Failures still speak** and still leave the microphone open — an error nobody hears is an
+  error nobody can answer, and the obvious next thing is to say it again.
 
 ### Failure modes
 
@@ -685,7 +694,8 @@ Manual, on the device, in this order — each step is a real failure mode no ass
 1. `adb shell am start -a android.media.action.MEDIA_PLAY_FROM_SEARCH -p com.spotify.music -e query "bohemian rhapsody queen"` — does the intent fallback (§3.5) exist on this device's Spotify build at all?
 2. Token fetch: one `curl` against `/api/token` with the real credentials.
 3. First App Remote connect → the consent dialog appears → "Spiele Blinding Lights von The
-   Weeknd" plays the right track. **This is M1's done-when.**
+   Weeknd" plays the right track, Dobby says nothing, and the panel goes back to the wake word
+   rather than listening into the music. **This is M1's done-when.**
 4. "Stopp" with music playing and no timer ringing → music pauses. "Stopp" with a timer ringing
    *and* music playing → the chime stops, the music does not. (The chain, with a real second
    subscriber for the first time.)

@@ -56,8 +56,11 @@ sealed interface SockResult {
      *
      * This is for the commands where that is wrong. "Gute Nacht" and "danke, das war's" are
      * finished sentences: holding the microphone open after them is a panel that did not take
-     * the hint, listening to a room that has stopped addressing it. [text] is spoken first if
-     * there is any; null closes the turn without a word.
+     * the hint, listening to a room that has stopped addressing it. The other kind is a command
+     * that makes the room too loud to listen to — `spotify.play_music` ends its turn because
+     * the next few seconds are music, not a follow-up. [text] is spoken first if there is any;
+     * null closes the turn without a word, which is what a command answered by its own side
+     * effect returns.
      */
     data class Ended(val text: String? = null) : SockResult
 
