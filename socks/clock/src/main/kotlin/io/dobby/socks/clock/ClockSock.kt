@@ -99,15 +99,18 @@ class ClockSock(
                 ParamSpec("unit", ParamType.Enumeration(TimerUnit.SPOKEN), required = false),
             ),
             templates = patterns(
-                "(stell|stelle|setz|setze|mach) (mir)? (einen|nen)? timer (auf|für)? {amount:int} {unit:enum}",
-                "(stell|stelle|setz|setze) (mir)? (einen|nen)? wecker (auf|für)? {amount:int} {unit:enum}",
+                // No "(mir)?" anywhere below: "mir" is filler and the matcher skips it (M6c).
+                // "(einen|nen)?" stays — it is what keeps the commonest phrasing of all,
+                // "stell einen timer auf 5 minuten", on the strict first pass.
+                "(stell|stelle|setz|setze|mach) (einen|nen)? timer (auf|für)? {amount:int} {unit:enum}",
+                "(stell|stelle|setz|setze) (einen|nen)? wecker (auf|für)? {amount:int} {unit:enum}",
                 "(erinner|erinnere) mich in {amount:int} {unit:enum}",
                 "timer (auf|für)? {amount:int} {unit:enum}",
                 "{amount:int} {unit:enum} timer",
                 // Unit-less forms, last: they are strictly less specific than the ones above,
                 // and the palette only reaches them once no fuller phrasing fits.
-                "(stell|stelle|setz|setze|mach) (mir)? (einen|nen)? timer (auf|für)? {amount:int}",
-                "(stell|stelle|setz|setze) (mir)? (einen|nen)? wecker (auf|für)? {amount:int}",
+                "(stell|stelle|setz|setze|mach) (einen|nen)? timer (auf|für)? {amount:int}",
+                "(stell|stelle|setz|setze) (einen|nen)? wecker (auf|für)? {amount:int}",
                 "timer (auf|für)? {amount:int}",
             ),
             description = "Stellt einen Timer für eine bestimmte Dauer.",
@@ -173,17 +176,22 @@ class ClockSock(
         ExclusiveCommandSpec(
             id = WHATS_THE_TIME,
             templates = patterns(
-                "wie (spät|viel uhr) ist (es|es jetzt)",
-                "wie spät",
-                "(wie viel uhr|uhrzeit|die uhrzeit)",
-                "sag (mir)? (die)? uhrzeit",
-                "was ist die uhrzeit",
+                // Three German templates, where there were seven. The matcher skips filler
+                // (M6c), so "ist", "es", "jetzt", "mir" and "denn" no longer need a template
+                // each: "wie spät" covers "wie spät ist es", "wie spät ist es denn jetzt" and
+                // the "wie spät ist das" the recogniser keeps producing. Enumerating the
+                // variants was the thing that did not scale — every command would have needed
+                // the same cross-product (`socks.specs/README.md` §6).
+                "wie (spät|viel uhr)",
                 // "zeit" appears only with keywords around it, never on its own. Bare, it is
                 // 4 chars and therefore fuzzed at tolerance 1, which would hand this command
                 // "seit", "weit" and "zeig" — all words somebody says in a kitchen without
-                // addressing the panel (`socks.specs/README.md` §6).
-                "was ist die zeit",
-                "sag (mir)? (die)? zeit",
+                // addressing the panel (`socks.specs/README.md` §6). "(die)?" stays: it keeps
+                // "was ist die zeit" on the strict first pass, where the common phrasings belong.
+                "(sag|was ist) (die)? (uhrzeit|zeit)",
+                // "die" is spelled out rather than skipped: a one-word template has no anchor,
+                // so nothing is skipped in front of it (`socks.specs/README.md` §6).
+                "(uhrzeit|die uhrzeit)",
                 // English, because Parakeet is multilingual and the tokens arrive intact
                 // (`dobby-plan.md` §4). Safe here and nowhere with an int or enum slot: the
                 // normalizer is German-only, so "ten" would never become 10. Dobby still
@@ -211,9 +219,15 @@ class ClockSock(
                 // Paraphrases Tier 1 is meant to miss — few-shots for the LLM tier (M6).
                 Example("kannst du mir sagen wie spät es ist", matchedByTemplates = false),
                 Example("hast du die genaue zeit", matchedByTemplates = false),
-                Example("was ist denn bitte gerade die uhrzeit", heldOut = true),
+                // Held out until M6c, when the matcher learned to skip "denn", "bitte" and
+                // "gerade" — this is "was ist die uhrzeit" with three particles in it, Tier 1
+                // reaches it, and a held-out case Tier 1 can reach measures the template
+                // matcher rather than the model. Promoted, and replaced below so the accuracy
+                // suite keeps three cases for this command.
+                Example("was ist denn bitte gerade die uhrzeit"),
                 Example("wie viel uhr haben wir gerade", heldOut = true),
                 Example("weißt du zufällig wie spät wir haben", heldOut = true),
+                Example("ich wollte nur wissen wie spät es ist", heldOut = true),
             ),
         ),
     )

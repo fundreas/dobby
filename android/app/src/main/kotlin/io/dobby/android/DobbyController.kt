@@ -7,6 +7,7 @@ import io.dobby.android.chat.detailLine
 import io.dobby.core.DobbyEngine
 import io.dobby.core.Fallthrough
 import io.dobby.core.FallthroughLog
+import io.dobby.core.Rescue
 import io.dobby.core.audio.TurnAudio
 import io.dobby.core.audio.TurnDuck
 import io.dobby.core.dispatch.Dispatcher
@@ -184,6 +185,7 @@ class DobbyController(
             val introspection = Introspection(registry, health)
             wiring.bindDirectory(introspection)
             registry.checkExamples().forEach { Log.w(TAG, "palette collision: $it") }
+            registry.checkFillers().forEach { Log.w(TAG, "filler conflict: $it") }
             // Never fatal: `lauter` and `stumm` are this shape and are correct. Logged so the
             // judgement behind each one stays visible (`socks.specs/README.md` §6).
             registry.checkSingleKeywordTemplates().forEach { Log.w(TAG, "single keyword: $it") }
@@ -197,6 +199,13 @@ class DobbyController(
                 // made of it, ready to be promoted into a template in the owning Sock's spec.
                 onFallthrough = { entry: Fallthrough ->
                     Log.i(TAG, "fallthrough: $entry")
+                    fallthrough.record(entry)
+                },
+                // The other end of the same flywheel (M6c): utterances the filler-skipping pass
+                // kept out of Tier 2. This is the number that says whether the filler list was
+                // worth adding — and a rescue that looks wrong is a word to take off it.
+                onRescue = { entry: Rescue ->
+                    Log.i(TAG, "rescued: $entry")
                     fallthrough.record(entry)
                 },
                 log = object : SockLog {

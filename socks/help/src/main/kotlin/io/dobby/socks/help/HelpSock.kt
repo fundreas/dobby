@@ -40,12 +40,14 @@ class HelpSock(
         ExclusiveCommandSpec(
             id = OVERVIEW,
             templates = patterns(
-                "was kannst du (alles|tun|machen|so)?",
-                "was kannst du denn (alles)?",
+                // "denn" and "so" are filler the matcher skips (M6c), so this one line covers
+                // "was kannst du denn alles" too; the alternation carries the words that mean
+                // something.
+                "was kannst du (alles|tun|machen)?",
                 "(hilfe|hilf mir)",
                 "welche befehle (gibt es|hast du|kennst du|gibt's)",
                 "was gibt es für befehle",
-                "wobei kannst du (mir)? helfen",
+                "wobei kannst du helfen",
                 "welche (bereiche|module|socks) (gibt es|hast du)",
                 "was für (bereiche|module|socks) (gibt es|hast du)",
             ),

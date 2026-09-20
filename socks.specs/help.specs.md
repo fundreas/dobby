@@ -49,15 +49,16 @@ An unbound Sock answers `Failed("Ich kann meine Befehle gerade nicht nachschlage
 ### Tier 1 templates
 
 ```
-was kannst du (alles|tun|machen|so)?
-was kannst du denn (alles)?
+was kannst du (alles|tun|machen)?
 (hilfe|hilf mir)
 welche befehle (gibt es|hast du|kennst du|gibt's)
 was gibt es für befehle
-wobei kannst du (mir)? helfen
+wobei kannst du helfen
 welche (bereiche|module|socks) (gibt es|hast du)
 was für (bereiche|module|socks) (gibt es|hast du)
 ```
+
+"was kannst du denn alles" and "wobei kannst du mir helfen" need no templates of their own: `denn`, `so` and `mir` are filler and the matcher skips them ([README](README.md) §6).
 
 ### Utterances → invocation
 

@@ -24,9 +24,13 @@ object SharedCommands {
         examples = listOf(
             Example("stopp"),
             Example("pause"),
-            // Paraphrases: Tier 1 cannot reach these, which is precisely what Tier 2 is for.
+            // Was a Tier 2 few-shot until the matcher learned to skip filler (M6c): "mal" is
+            // noise, so this is "mach das aus" and Tier 1 reaches it for free. Kept as a Tier 1
+            // example rather than deleted — it is the phrasing that pays for the filler list.
+            Example("mach das mal aus"),
+            // A paraphrase Tier 1 still cannot reach — "damit" is a word, not filler — which is
+            // precisely what Tier 2 is for.
             Example("hör bitte auf damit", matchedByTemplates = false),
-            Example("mach das mal aus", matchedByTemplates = false),
         ),
         unconsumedResponse = SockResult.Spoken("Es läuft gerade nichts."),
     )

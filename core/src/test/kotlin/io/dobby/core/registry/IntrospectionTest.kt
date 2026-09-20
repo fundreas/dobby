@@ -104,7 +104,9 @@ class IntrospectionTest {
     fun `only tier 1 examples are advertised`() {
         // Tier 2 paraphrases are not phrasings a user can rely on, so they are not shown.
         val stop = introspection.command("shared.stop")!!
-        assertEquals(listOf("stopp", "pause"), stop.examples)
+        // "mach das mal aus" is a Tier 1 example since M6c — the matcher skips the "mal" — so
+        // it is a phrasing a user can rely on and is advertised like any other.
+        assertEquals(listOf("stopp", "pause", "mach das mal aus"), stop.examples)
     }
 
     @Test
@@ -214,7 +216,7 @@ class IntrospectionTest {
         // extraExamples reach the prompt, which until now nothing read at all: the catalog's
         // own paraphrases first, then this Sock's contribution, then the catalog's Tier 1 ones.
         assertEquals(
-            listOf("hör bitte auf damit", "mach das mal aus", "ofen aus", "stopp", "pause"),
+            listOf("hör bitte auf damit", "ofen aus", "stopp", "pause", "mach das mal aus"),
             directory.promptExamples("shared.stop").map { it.utterance },
         )
         assertEquals(emptyList(), directory.promptExamples("kitchen.nope"))

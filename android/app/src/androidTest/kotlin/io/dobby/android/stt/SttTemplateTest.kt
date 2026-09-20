@@ -37,6 +37,10 @@ import java.io.File
  * One recording per Tier-1 template is the target (`dobby-plan.md` §5.2). Record them in the
  * room the panel lives in, at the distance it is spoken to from — a clean desk recording proves
  * the wiring and nothing about the product.
+ *
+ * The recordings M6c is waiting for are named in that README: "wie spät ist das" and three more
+ * filler-heavy takes. They are the cases the filler list was written from, and this is the only
+ * suite that can tell whether the recogniser really produces what the list assumes.
  */
 @RunWith(AndroidJUnit4::class)
 class SttTemplateTest {

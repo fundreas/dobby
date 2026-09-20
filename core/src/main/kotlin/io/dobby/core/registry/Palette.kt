@@ -1,5 +1,6 @@
 package io.dobby.core.registry
 
+import io.dobby.core.nlu.Fillers
 import io.dobby.core.nlu.GermanNumbers
 import io.dobby.core.nlu.template.CompiledTemplate
 import io.dobby.core.nlu.template.KeywordMatcher
@@ -23,7 +24,16 @@ data class PaletteEntry(
     val order: Int,
 )
 
-data class PaletteMatch(val invocation: CommandInvocation, val entry: PaletteEntry)
+/**
+ * @param skippedFillers true when only the second, filler-skipping pass reached this entry.
+ *   Fed to [io.dobby.core.FallthroughLog] so the number of utterances the skipping rescued is
+ *   visible on the device — that number is how anybody knows whether it was worth adding.
+ */
+data class PaletteMatch(
+    val invocation: CommandInvocation,
+    val entry: PaletteEntry,
+    val skippedFillers: Boolean = false,
+)
 
 /**
  * Every template from every Sock, ordered specific → generic.
@@ -34,8 +44,15 @@ data class PaletteMatch(val invocation: CommandInvocation, val entry: PaletteEnt
  * @param phonetic whether keywords may also be matched by their Kölner code. On by default;
  *   the tests turn it off to A/B a palette against the pre-M6 behaviour, and a spec utterance
  *   that resolves differently with it on is a bug in the guards, not a new feature.
+ * @param fillers words the second pass of [match] may skip. Defaults to [Fillers.NONE], which
+ *   is a single strict pass and therefore the pre-M6c matcher; the registry and the follow-up
+ *   palette pass [Fillers.DE].
  */
-class Palette(entries: List<PaletteEntry>, phonetic: Boolean = true) {
+class Palette(
+    entries: List<PaletteEntry>,
+    phonetic: Boolean = true,
+    val fillers: Fillers = Fillers.NONE,
+) {
 
     val entries: List<PaletteEntry> = entries.sortedWith(
         Comparator { a, b ->
@@ -56,17 +73,13 @@ class Palette(entries: List<PaletteEntry>, phonetic: Boolean = true) {
     /**
      * Templates matched strictly, whatever the palette-wide tier says.
      *
-     * A template whose cheapest path is one literal word and no slots has no anchor: nothing
-     * else in the utterance has to agree with it, so a single phonetic near-miss is the whole
-     * match. `aus` is already too short to be phonetic, but `weitermachen` is not, and neither
-     * is anything a future Sock declares — so the exclusion is structural rather than a list.
+     * A template with no anchor — see [CompiledTemplate.isBareKeyword] — is one where a single
+     * phonetic near-miss would be the whole match. `aus` is already too short to be phonetic,
+     * but `weitermachen` is not, and neither is anything a future Sock declares, so the
+     * exclusion is structural rather than a list.
      */
     private fun matcherFor(entry: PaletteEntry): KeywordMatcher =
-        if (entry.template.specificity.literalWords == 1 && entry.template.slots.isEmpty()) {
-            KeywordMatcher.STRICT
-        } else {
-            keywords
-        }
+        if (entry.template.isBareKeyword) KeywordMatcher.STRICT else keywords
 
     /** True if [entry] is matched with [KeywordMatcher.STRICT] regardless of the palette tier. */
     fun isStrict(entry: PaletteEntry): Boolean = matcherFor(entry) === KeywordMatcher.STRICT
@@ -74,13 +87,27 @@ class Palette(entries: List<PaletteEntry>, phonetic: Boolean = true) {
     /**
      * Resolves normalized tokens to an invocation.
      *
+     * **Two passes over the whole palette, not one.** The first is strict, byte for byte what
+     * the matcher did before filler skipping existed; only if it comes back empty does the
+     * second run with [fillers]. Two consequences, and they are the entire safety argument:
+     *
+     * - Every utterance that resolves today resolves to the same entry, by the same template.
+     *   Specificity ordering is untouched and there is nothing to re-verify about it.
+     * - Skipping only ever acts on an utterance that was otherwise headed for Tier 2 or a buzz,
+     *   so the bar it has to clear is "does it create a *new* false positive" and nothing else.
+     *
      * An entry whose template matches but whose params fail to coerce is skipped, not fatal —
      * the next entry gets its chance.
      */
     fun match(tokens: List<String>): PaletteMatch? {
         if (tokens.isEmpty()) return null
+        return match(tokens, Fillers.NONE)
+            ?: if (fillers.isEmpty) null else match(tokens, fillers)?.copy(skippedFillers = true)
+    }
+
+    private fun match(tokens: List<String>, fillers: Fillers): PaletteMatch? {
         for (entry in entries) {
-            val bindings = entry.template.match(tokens, matcherFor(entry)) { slot ->
+            val bindings = entry.template.match(tokens, matcherFor(entry), fillers) { slot ->
                 enumValuesFor(entry.command, slot)
             } ?: continue
             val params = ParamCoercion.coerce(entry.command, bindings, entry.staticParams) ?: continue
@@ -125,7 +152,12 @@ fun compileScopedPalette(command: CommandSpec): ScopedPaletteBuild {
         }
         entries += PaletteEntry(command, compiled, template.params, null, order)
     }
-    return ScopedPaletteBuild(if (errors.isEmpty()) Palette(entries) else null, errors)
+    // Same two passes as the global palette, so "ja bitte" answers a question exactly the way
+    // "ja" does. A question that hears fewer phrasings than the palette around it is a trap.
+    return ScopedPaletteBuild(
+        if (errors.isEmpty()) Palette(entries, fillers = Fillers.DE) else null,
+        errors,
+    )
 }
 
 /** Turns raw slot strings into typed params, applying defaults for absent optionals. */

@@ -1,5 +1,6 @@
 package io.dobby.core.registry
 
+import io.dobby.core.nlu.Fillers
 import io.dobby.core.nlu.Normalizer
 import io.dobby.core.nlu.template.CompiledTemplate
 import io.dobby.core.nlu.template.Levenshtein
@@ -142,6 +143,130 @@ class SockRegistry private constructor(
                 }
         }
 
+    /**
+     * What the filler list must never cost, checked against the palette that was actually built.
+     *
+     * [io.dobby.core.nlu.Fillers] is a judgement — "no command's meaning changes when this word
+     * is dropped" — and this is the mechanical form of it. Two rules, and both of them have
+     * already fired on this catalog: `halt` and `danke` are commands in one word, and a first
+     * draft of the list carried them.
+     *
+     * 1. **A filler is never a command on its own.** If a bare template can be satisfied by one
+     *    word, that word means something, whatever a grammar book says about it.
+     * 2. **Two commands never become the same sentence once fillers are gone.** This is the
+     *    distinguishing-word check: if the only thing telling `a.x` and `b.y` apart is a word
+     *    the recogniser swaps at random, then the utterance was always a coin flip and skipping
+     *    is about to make it one in practice.
+     *
+     * Errors rather than warnings, and surfaced wherever the registry is assembled — the CLI
+     * prints them at startup and the tests assert they are empty.
+     */
+    fun checkFillers(): List<String> {
+        val fillers = palette.fillers
+        if (fillers.isEmpty) return emptyList()
+        val problems = mutableListOf<String>()
+
+        for (entry in palette.entries) {
+            for (keyword in soleKeywords(entry.template.root).distinct()) {
+                if (keyword in fillers) {
+                    problems += "${entry.command.id}: \"$keyword\" satisfies template " +
+                        "\"${entry.template.source}\" on its own and is also a ${fillers.language} " +
+                        "filler — a command is never noise; take it off the list"
+                }
+            }
+        }
+
+        // backbone → the wordings already claimed for it, and by whom.
+        val claimed = mutableMapOf<List<String>, MutableList<Triple<String, String, Wording>>>()
+        for (entry in palette.entries) {
+            val wordings = wordings(entry.template.root, fillers) ?: run {
+                problems += "${entry.command.id}: template \"${entry.template.source}\" has more " +
+                    "than $MAX_TEMPLATE_PATHS wordings; split it, or the filler check cannot see it"
+                continue
+            }
+            for (wording in wordings) {
+                if (wording.backbone.isEmpty()) {
+                    problems += "${entry.command.id}: template \"${entry.template.source}\" has a " +
+                        "wording made of nothing but ${fillers.language} fillers"
+                    continue
+                }
+                val others = claimed.getOrPut(wording.backbone) { mutableListOf() }
+                for ((id, source, other) in others) {
+                    if (id == entry.command.id || !other.confusableWith(wording)) continue
+                    problems += "$id (\"$source\") and ${entry.command.id} " +
+                        "(\"${entry.template.source}\") are both " +
+                        "\"${wording.backbone.joinToString(" ")}\" once fillers are dropped — one " +
+                        "of the words telling them apart is on the list"
+                }
+                others += Triple(entry.command.id, entry.template.source, wording)
+            }
+        }
+        return problems.distinct()
+    }
+
+    /**
+     * One wording of one template: the words that carry it, and where filler sat between them.
+     *
+     * The [backbone] is the template with its fillers removed, a slot standing in for itself by
+     * kind — `{amount:int}` and `{query}` are not the same surface even where the words around
+     * them are. [precededByFiller] has one more entry than the backbone: entry *k* is whether
+     * filler ran immediately before backbone word *k*, and the last is whether any trailed.
+     */
+    private data class Wording(val backbone: List<String>, val precededByFiller: List<Boolean>) {
+
+        /**
+         * Whether some utterance could match both wordings once filler skipping is on.
+         *
+         * Equal backbones are necessary and not sufficient, and the difference is the whole
+         * reason this is not a set comparison. Such an utterance has to contain both wordings'
+         * filler words, and each side then has to *skip* the other's — which the matcher only
+         * does in front of a keyword, never in front of a slot. So `{a:int} mal` and
+         * `mal {b:int}` share the backbone `{int}` and are still not confusable: the utterance
+         * that would prove it has to put a "mal" in front of an integer slot, and no skipping
+         * happens there. `timer aus` and `timer das aus` are, and that is the pair this rule is
+         * for.
+         */
+        fun confusableWith(other: Wording): Boolean {
+            if (backbone != other.backbone) return false
+            return backbone.indices.all { k ->
+                (!precededByFiller[k] && !other.precededByFiller[k]) || !backbone[k].startsWith("{")
+            }
+        }
+    }
+
+    /** Every wording of [node], fillers folded away, or null if there are too many. */
+    private fun wordings(node: Node, fillers: Fillers): Set<Wording>? {
+        val all = mutableSetOf<Wording>()
+        for (path in paths(node)) {
+            if (all.size > MAX_TEMPLATE_PATHS) return null
+            val backbone = mutableListOf<String>()
+            val preceded = mutableListOf<Boolean>()
+            var gap = false
+            for (item in path) {
+                if (item in fillers) {
+                    gap = true
+                } else {
+                    backbone += item
+                    preceded += gap
+                    gap = false
+                }
+            }
+            all += Wording(backbone, preceded + gap)
+        }
+        return all
+    }
+
+    /** Every literal path through a template, a slot standing in for itself. */
+    private fun paths(node: Node): Sequence<List<String>> = when (node) {
+        is Node.Word -> sequenceOf(listOf(node.text))
+        is Node.Slot -> sequenceOf(listOf("{${node.kind.name.lowercase()}}"))
+        is Node.Alt -> node.options.asSequence().flatMap { paths(it) }
+        is Node.Opt -> paths(node.node) + sequenceOf(emptyList())
+        is Node.Seq -> node.nodes.fold(sequenceOf(emptyList())) { prefixes, next ->
+            prefixes.flatMap { prefix -> paths(next).map { prefix + it } }
+        }
+    }
+
     /** The keywords that alone satisfy [node]; empty when it needs more than one word. */
     private fun soleKeywords(node: Node): List<String> = when (node) {
         is Node.Word -> listOf(node.text)
@@ -158,6 +283,16 @@ class SockRegistry private constructor(
 
         /** Tolerance 1: long enough to be fuzzed, short enough to have close neighbours. */
         private val FUZZED_ALONE = 4..7
+
+        /**
+         * How many wordings one template may have before [checkFillers] gives up on it.
+         *
+         * The calculator's optional run-up alone is sixty-odd, and it multiplies with the
+         * operator alternation and the trailing verb. Ten thousand is comfortably above every
+         * template in the catalog and far below anything that would make the check slow; a
+         * template past it is reported rather than silently skipped.
+         */
+        private const val MAX_TEMPLATE_PATHS = 10_000
 
         fun buildOrThrow(socks: List<Sock>): SockRegistry {
             val build = build(socks)
@@ -249,7 +384,10 @@ class SockRegistry private constructor(
 
             val registry = SockRegistry(
                 socks = socks,
-                palette = Palette(paletteEntries),
+                // German is the only language the engine has: the normalizer's locale, the
+                // Kölner phonetics and this list are one decision, and they move together
+                // the day a language setting lands.
+                palette = Palette(paletteEntries, fillers = Fillers.DE),
                 commands = commands,
                 owners = owners,
                 chains = chains,

@@ -121,14 +121,25 @@ carries every phrasing of it. `{ASK}` and `{TAIL}` below are written out once in
 ```
 ASK  = ((wie viel|wieviel|wie viele|was) (ist|sind|ergibt|ergeben|macht|machen) (denn)?
        |(rechne|berechne) (mir)?
-       |sag mir (mal)? (wie viel|was) (ist|ergibt)?)?
+       |sag mir (wie viel|was) (ist|ergibt)?)?
 TAIL = (ist|sind|ergibt|ergeben|macht|machen)?
 ```
 
 `ASK` is optional because "3 plus 5" on its own is the commonest thing anybody says to a
-calculator. `TAIL` is the verb German strands at the end — "sag mir mal, was 6 mal 7 **ist**".
-Both are optional groups, so they contribute no keywords and change neither specificity nor
-match order.
+calculator. `TAIL` is the verb German strands at the end — "sag mir mal, was 6 mal 7 **ist**";
+the `(mal)?` that used to sit inside `ASK` is gone, because the matcher skips filler
+([README](README.md) §6). Both are optional groups, so they contribute no keywords and change
+neither specificity nor match order.
+
+`(denn)?` and `(mir)?` stay, and the reason is the one rule filler skipping does not cover:
+both sit directly in front of `{a:int}`, and skipping happens in front of a *keyword*, never in
+front of a slot. Without them "was ergibt denn 6 mal 7" tries to read "denn" as a number.
+
+**`mal` is the one word that is content here and filler everywhere else.** It is on the filler
+list — "stell mal einen timer" — and it is also `TIMES_OP`. That works because the palette is
+matched strictly first: "6 mal 7" and "mal 2" both resolve on the first pass, where no skipping
+happens at all. The build-time check in `SockRegistry.checkFillers` knows the difference and
+says so.
 
 ```
 ASK (die)? (hälfte|haelfte) von {a:int} TAIL            → op=geteilt, b=2

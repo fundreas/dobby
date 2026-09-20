@@ -429,10 +429,16 @@ class CalculatorSock(
          * calculator, and a template that insists on "wie viel ist" would miss it. Breadth
          * here is nearly free — more templates only enlarge a lookup table
          * (`socks.specs/README.md` §6).
+         *
+         * The `(mal)?` in the last branch is gone: the matcher skips filler (M6c) and the
+         * word after it is a keyword. `(denn)?` and `(mir)?` stay, and the difference between
+         * them is the rule worth remembering — both sit directly in front of `{a:int}`, and
+         * skipping never happens in front of a slot, so without them "was ergibt denn 6 mal 7"
+         * would try to read "denn" as a number (`socks.specs/README.md` §6).
          */
         private const val ASK =
             "((wie viel|wieviel|wie viele|was) (ist|sind|ergibt|ergeben|macht|machen) (denn)?|" +
-                "(rechne|berechne) (mir)?|sag mir (mal)? (wie viel|was) (ist|ergibt)?)?"
+                "(rechne|berechne) (mir)?|sag mir (wie viel|was) (ist|ergibt)?)?"
 
         /**
          * The optional run-up to a continuation: "und jetzt davon mal 2".

@@ -59,7 +59,7 @@ class PaletteCollisionTest {
             mapOf(
                 KeywordMatcher.Trust.PHONETIC to 43,
                 KeywordMatcher.Trust.TOO_SHORT to 64,
-                KeywordMatcher.Trust.CORPUS to 34,
+                KeywordMatcher.Trust.CORPUS to 33,
                 KeywordMatcher.Trust.CONTESTED to 6,
                 KeywordMatcher.Trust.CODE_TOO_SHORT to 8,
             ),

@@ -83,6 +83,14 @@ fun main(args: Array<String>) = runBlocking {
         collisions.forEach { System.err.println("  - $it") }
     }
 
+    // A failure, unlike the list below: a filler that is a command on its own, or a pair of
+    // commands that only a filler tells apart, is a misroute waiting for the right sentence.
+    val fillers = registry.checkFillers()
+    if (fillers.isNotEmpty()) {
+        System.err.println("Filler list conflicts:")
+        fillers.forEach { System.err.println("  - $it") }
+    }
+
     // Not a failure — `lauter` and `stumm` are this shape and are correct. Listed so whoever
     // added one looks at it again (`socks.specs/README.md` §6).
     val singles = registry.checkSingleKeywordTemplates()
@@ -104,6 +112,7 @@ fun main(args: Array<String>) = runBlocking {
         registry = registry,
         dispatcher = Dispatcher(registry, health),
         onFallthrough = fallthrough::record,
+        onRescue = fallthrough::record,
         tier2 = program?.let { Tier2(registry, scripted, it) },
     )
     val context = ConsoleContext(scope) { verbose }
@@ -140,16 +149,7 @@ fun main(args: Array<String>) = runBlocking {
                 )
                 "keywords", "keyword", "phonetics" -> println(discovery.keywords())
                 "find", "search" -> println(find(introspection, argument))
-                "fallthrough" -> {
-                    val entries = fallthrough.entries.value
-                    println(
-                        if (entries.isEmpty()) {
-                            "  (none)"
-                        } else {
-                            entries.joinToString("\n") { "  $it" }
-                        },
-                    )
-                }
+                "fallthrough" -> println(fallthroughView(fallthrough))
 
                 "trace" -> {
                     verbose = !verbose
@@ -279,10 +279,29 @@ private fun help() = """
     |  /grammar [command]   the route GBNF, or one command's fill GBNF
     |  /prompt [command]    the route prompt and its headroom, or one command's fill turn
     |  /tier2 <utterance>   run both Tier 2 steps; "= <label> | <json>" forces the answers
-    |  /fallthrough         utterances Tier 1 could not match, and what Tier 2 made of them
+    |  /fallthrough         utterances Tier 1 could not match, plus the ones filler skipping saved
     |  /trace               toggle normalizer and template output
     |  /quit                exit
 """.trimMargin()
+
+/**
+ * `/fallthrough` — what Tier 1 missed, and what the second pass caught.
+ *
+ * Both halves in one view because they are the two ends of the same question. A phrasing that
+ * keeps appearing under "missed" is a template somebody should add; a phrasing that keeps
+ * appearing under "skipped filler" is the filler list earning its keep — or, if it looks wrong,
+ * a word that should come off it.
+ */
+private fun fallthroughView(log: FallthroughLog): String {
+    val missed = log.entries.value
+    val rescued = log.rescues.value
+    return buildString {
+        appendLine("  missed (${missed.size}):")
+        appendLine(if (missed.isEmpty()) "    (none)" else missed.joinToString("\n") { "    $it" })
+        appendLine("  skipped filler (${rescued.size}):")
+        append(if (rescued.isEmpty()) "    (none)" else rescued.joinToString("\n") { "    $it" })
+    }
+}
 
 private fun render(outcome: EngineOutcome, verbose: Boolean) {
     if (verbose) {

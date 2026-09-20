@@ -33,18 +33,41 @@ class FallthroughLog(private val capacity: Int = CAPACITY) {
 
     val entries: StateFlow<List<Fallthrough>> = _entries.asStateFlow()
 
+    /**
+     * Utterances the filler-skipping pass rescued (M6c), newest last.
+     *
+     * The same ring, the same bound, the same rules: these are also things somebody said in
+     * their own home, and the fact that one of them resolved to a command does not make the
+     * sentence around it less theirs. Kept beside the fallthroughs rather than in a counter
+     * because the question this answers is "*which* utterances", and a bare number cannot say
+     * whether a word belongs on the list.
+     */
+    private val _rescues = MutableStateFlow<List<Rescue>>(emptyList())
+
+    val rescues: StateFlow<List<Rescue>> = _rescues.asStateFlow()
+
     fun record(fallthrough: Fallthrough) {
-        _entries.update { current ->
-            val next = current + fallthrough
-            if (next.size > capacity) next.subList(next.size - capacity, next.size) else next
-        }
+        _entries.update { it.ring(fallthrough) }
     }
 
+    fun record(rescue: Rescue) {
+        _rescues.update { it.ring(rescue) }
+    }
+
+    /** Immediate and total, as the class doc promises — both halves, or it is not "clear". */
     fun clear() {
         _entries.value = emptyList()
+        _rescues.value = emptyList()
     }
 
     val size: Int get() = _entries.value.size
+
+    val rescueCount: Int get() = _rescues.value.size
+
+    private fun <T> List<T>.ring(next: T): List<T> {
+        val grown = this + next
+        return if (grown.size > capacity) grown.subList(grown.size - capacity, grown.size) else grown
+    }
 
     companion object {
         /**

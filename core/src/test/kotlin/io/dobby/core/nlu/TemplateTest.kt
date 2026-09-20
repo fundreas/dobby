@@ -1,5 +1,6 @@
 package io.dobby.core.nlu
 
+import io.dobby.core.nlu.template.KeywordMatcher
 import io.dobby.core.nlu.template.Levenshtein
 import io.dobby.core.nlu.template.Node
 import io.dobby.core.nlu.template.SlotKind
@@ -165,6 +166,122 @@ class TemplateMatcherTest {
         assertNull(
             ambiguous.match("timer zdunden".split(" ")) { listOf("stunden", "schtunden") },
         )
+    }
+}
+
+/**
+ * Filler skipping, at the level of one template (M6c).
+ *
+ * The palette runs these rules only on a second pass, once nothing has matched strictly — that
+ * is asserted in [io.dobby.core.registry.SpecPaletteTest]. Here the question is narrower: given
+ * that skipping is on, what does one template do with a sentence full of particles?
+ */
+class FillerSkippingTest {
+
+    private fun match(
+        template: String,
+        utterance: String,
+        fillers: Fillers = Fillers.DE,
+        enums: Map<String, List<String>> = emptyMap(),
+    ) = compileTemplate(template)
+        .match(Normalizer.tokenize(utterance), KeywordMatcher.STRICT, fillers) { enums[it] }
+
+    @Test
+    fun `the recorded case`() {
+        // "wie spät ist das" for "wie spät ist es" is what the whole milestone is about: two
+        // content words heard perfectly, one function word wrong, and a 2-4 s round trip.
+        assertNull(match("wie spät", "wie spät ist das", Fillers.NONE))
+        assertNotNull(match("wie spät", "wie spät ist das"))
+    }
+
+    @Test
+    fun `filler is skipped before a keyword, between keywords and after the last one`() {
+        assertNotNull(match("wie spät", "ähm wie spät"))
+        assertNotNull(match("was ist die uhrzeit", "was ist denn bitte gerade die uhrzeit"))
+        assertNotNull(match("wie spät", "wie spät ist es denn jetzt"))
+        assertNotNull(match("wie spät", "ähm wie spät ist es bitte"))
+    }
+
+    @Test
+    fun `a word that is not filler still anchors the template`() {
+        // The end anchor holds: "damit" is a word, so this is still Tier 2's problem.
+        assertNull(match("hör auf", "hör bitte auf damit"))
+        // …and so does the front of it.
+        assertNull(match("wie spät", "weißt du zufällig wie spät"))
+    }
+
+    @Test
+    fun `a slot captures filler verbatim`() {
+        // A song title is not a sentence to be tidied up. "es muss liebe sein" keeps its "es".
+        assertEquals(
+            mapOf("query" to "es muss liebe sein"),
+            match("spiele {query}", "spiele es muss liebe sein"),
+        )
+        // An int slot takes the token in front of it, never the filler before that.
+        assertEquals(
+            mapOf("amount" to "5", "unit" to "minuten"),
+            match("timer auf {amount:int} {unit:enum}", "timer doch mal auf 5 minuten",
+                enums = mapOf("unit" to listOf("sekunden", "minuten", "stunden"))),
+        )
+    }
+
+    @Test
+    fun `a filler that is also a literal takes the literal path first`() {
+        // "das" is on the list and is also this template's second word. Skipping only ever adds
+        // paths, so the exact one is still found first and the slot binds what it always did.
+        assertEquals(mapOf("query" to "lied"), match("spiele das {query}", "spiele das lied"))
+        assertNotNull(match("wie spät ist es", "wie spät ist es"))
+        assertNotNull(match("mach das aus", "mach das aus"))
+    }
+
+    @Test
+    fun `Fillers NONE is the matcher as it was`() {
+        // The A/B in one place: with an empty list every one of these is exactly what the
+        // pre-M6c matcher answered, which is what makes the palette's first pass free.
+        assertNotNull(match("pause", "pause", Fillers.NONE))
+        assertNull(match("pause", "pause bitte", Fillers.NONE))
+        assertNull(match("wie spät", "wie spät ist es", Fillers.NONE))
+        assertEquals(
+            mapOf("query" to "es muss liebe sein"),
+            match("spiele {query}", "spiele es muss liebe sein", Fillers.NONE),
+        )
+
+        // …and with the list, these are the ones that change.
+        assertNotNull(match("pause", "pause bitte"))
+        assertNotNull(match("wie spät", "wie spät ist es"))
+    }
+
+    @Test
+    fun `a one-word template skips only what trails it`() {
+        // The template with no anchor. "stopp bitte" is politeness and matches; "es ist jetzt
+        // aus" is somebody talking about the oven, and a bare "aus" that skipped its way past
+        // three particles would stop the music for it. Same argument as the phonetic tier's
+        // exclusion of these templates, applied to the other kind of tolerance.
+        assertNotNull(match("aus", "aus"))
+        assertNotNull(match("aus", "aus jetzt"))
+        assertNull(match("aus", "es ist jetzt aus"))
+        assertNull(match("aus", "das ist jetzt aus"))
+        assertNull(match("pause", "bitte pause"))
+
+        // Two words is an anchor, and then leading filler is skipped like any other.
+        assertNotNull(match("hör auf", "jetzt hör auf"))
+        assertNotNull(match("wie spät", "ähm wie spät"))
+    }
+
+    @Test
+    fun `fillers are compared exactly, never fuzzily`() {
+        // "bitter" is not "bitte", and a fuzzy filler would start eating content words.
+        assertNull(match("wie spät", "wie spät bitter"))
+        assertNull(match("wie spät", "wie spät jetz"))
+    }
+
+    @Test
+    fun `an utterance of nothing but filler matches nothing`() {
+        // Every template has at least one literal or slot to satisfy, so there is nothing for
+        // "ähm also jetzt mal" to reach. Stated because it is the failure that would be worst.
+        for (template in listOf("wie spät", "spiele {query}", "pause", "timer {amount:int}")) {
+            assertNull(match(template, "ähm also jetzt mal"), template)
+        }
     }
 }
 

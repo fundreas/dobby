@@ -121,8 +121,8 @@ object SpecFixtures {
                     ParamSpec("unit", ParamType.Enumeration(listOf("sekunden", "minuten", "stunden"))),
                 ),
                 templates = patterns(
-                    "(stell|stelle|setz|setze|mach) (mir)? (einen|nen)? timer (auf|für)? {amount:int} {unit:enum}",
-                    "(stell|stelle|setz|setze) (mir)? (einen|nen)? wecker (auf|für)? {amount:int} {unit:enum}",
+                    "(stell|stelle|setz|setze|mach) (einen|nen)? timer (auf|für)? {amount:int} {unit:enum}",
+                    "(stell|stelle|setz|setze) (einen|nen)? wecker (auf|für)? {amount:int} {unit:enum}",
                     "(erinner|erinnere) mich in {amount:int} {unit:enum}",
                     "timer (auf|für)? {amount:int} {unit:enum}",
                     "{amount:int} {unit:enum} timer",
@@ -141,13 +141,9 @@ object SpecFixtures {
             ExclusiveCommandSpec(
                 id = "clock.whats_the_time",
                 templates = patterns(
-                    "wie (spät|viel uhr) ist (es|es jetzt)",
-                    "wie spät",
-                    "(wie viel uhr|uhrzeit|die uhrzeit)",
-                    "sag (mir)? (die)? uhrzeit",
-                    "was ist die uhrzeit",
-                    "was ist die zeit",
-                    "sag (mir)? (die)? zeit",
+                    "wie (spät|viel uhr)",
+                    "(sag|was ist) (die)? (uhrzeit|zeit)",
+                    "(uhrzeit|die uhrzeit)",
                     "what time is it",
                     "(whats|what's|what is) the time (now)?",
                 ),

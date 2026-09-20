@@ -202,7 +202,7 @@ Dobby can be asked what it can do, two ways.
 | `/prompt`, `/prompt <command>` | the Tier 2 route prompt and its headroom, or one command's fill turn |
 | `/grammar`, `/grammar <command>` | the route GBNF, or one command's fill GBNF |
 | `/tier2 <utterance>` | run both Tier 2 steps and the gate, with the model scripted from the registry's own few-shots |
-| `/fallthrough` | utterances Tier 1 could not match, and what Tier 2 made of them |
+| `/fallthrough` | utterances Tier 1 could not match, plus the ones filler skipping saved |
 | `/trace`, `/quit` | |
 
 Both read the same `Introspection` API in `:core`, so the terminal, the app's header line and the generated Tier 2 prompts answer identical questions. `:` also works as a prefix.
@@ -218,6 +218,19 @@ Phonetik, and almost all of it is guards: a code ignores vowels entirely, so `sp
 if no other palette keyword shares its code, if no frequent German word does either, and if a
 consonant actually moved — which is what separates "schbiele" (a misheard cluster) from "spüle"
 (the kitchen sink). `/keywords` says which keywords qualify and why the others do not.
+
+The palette runs **twice**: once strictly, and — only if nothing matched — once more ignoring
+filler words. Parakeet gets the content words right and the function words wrong ("wie spät ist
+**das**"), and particles like "denn", "mal" and "bitte" appear and vanish at random, so templates
+name content words and the matcher tolerates the rest. `Fillers.DE` is that list; it holds no
+word that can carry a command, which is checked against the assembled palette at build time —
+no filler may satisfy a template on its own, and no two commands may become the same sentence
+once fillers are dropped. Nothing is skipped in front of a template a single
+keyword satisfies — that one has no anchor, and a sentence of particles with one command word
+in it is what an ordinary remark looks like. Because skipping is a *second* pass, every
+utterance that resolved before resolves to the same command by the same template; it only ever
+acts on one that was otherwise headed for Tier 2. `/fallthrough` counts both: what was missed, and what skipping
+saved.
 
 **Tier 2 — a local model**, only when Tier 1 matches nothing, only on the first utterance of a
 turn, under one 5 s deadline, and only on the phone. Qwen3 1.7B through llama.cpp, in two steps:
@@ -235,11 +248,21 @@ own few-shots.
 
 ## What the tests cover
 
-All 491 tests are plain JVM tests. Nothing needs an emulator, including the wake word.
+> **This is a playground project, and tests are not part of the deliverable.** New work does not
+> need a test written for it, and a change that breaks one of the tests below does not need that
+> test updated — say what broke and move on. The suite exists because it was cheap to write while
+> the engine was being designed, not because anything here is promised to anybody. Anyone
+> (human or agent) working on this repo should spend the effort on the thing being built.
+>
+> The inventory below is a map of what already exists, not a standard to keep up.
+
+All 523 tests are plain JVM tests. Nothing needs an emulator, including the wake word.
 
 - `GermanNumbersTest`, `NormalizerTest` — German cardinals, and why `ein` is left alone while `eins` is not.
 - `TemplateParserTest`, `TemplateMatcherTest`, `SpecificityTest` — the DSL, backtracking, fuzzy tolerance, palette ordering.
 - **`SpecPaletteTest`** — the utterance tables from every file in `socks.specs/`, run against fixture Socks carrying the real templates. This is the collision gate: it is what fails when a new template shadows another Sock.
+- **`FillerSkippingTest`, `FillersTest`, `NegativeSentencesTest`, `FillerRegistryTest`** — *(M6c)* filler skipping from four sides: what one template does with a sentence full of particles; what may be on `Fillers.DE` at all, including the three words (`ein`, `halt`, `danke`) that lost an argument with a real Sock; sixty everyday German sentences that must still reach nothing with skipping on; and the same two questions asked again against the Socks that actually ship, because `:core`'s fixtures and the device's catalog barely overlap. `SpecPaletteTest` carries the A/B that the whole design rests on — an utterance the strict pass matched resolves to the same command by the same template with skipping on — and pins, by name, the three spec phrasings that pruning moved onto the second pass.
+- `RescueTest` — *(M6c)* the other end of the flywheel: an utterance only the second pass reached is reported as a rescue, one the first pass reached is not, one nothing reached is a fallthrough, and the log keeps, bounds and clears both halves together.
 - `RegistryValidationTest` — every way a Sock can be malformed.
 - `IntrospectionTest`, `HelpSockTest` — discovery, including that spoken lists are ordered by display name.
 - `GermanTimeTest`, `ClockSockTest`, `ClockTemplatesTest` — the Clock Sock's answers and its utterance tables, including that German "halb 3" means 14:30 and not 15:30, and that "stopp den timer" is a different command from "stopp".

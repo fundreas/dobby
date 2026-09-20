@@ -139,7 +139,6 @@ class KeywordMatcher private constructor(
             "fährt",
             "gehört",
             "hab's",
-            "jetzt",
             "kommt",
             "löschen",
             "nacht",

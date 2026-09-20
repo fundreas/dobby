@@ -1,5 +1,6 @@
 package io.dobby.core.nlu.template
 
+import io.dobby.core.nlu.Fillers
 import io.dobby.core.nlu.GermanNumbers
 
 /**
@@ -42,52 +43,85 @@ class CompiledTemplate(val source: String, val root: Node.Seq) {
     )
 
     /**
+     * True if one literal word and nothing else satisfies this template.
+     *
+     * The template with no anchor: nothing else in the utterance has to agree with it, so
+     * whatever protects it has to come from the word alone. Two rules hang off this, and they
+     * are the same argument twice:
+     *
+     * - [io.dobby.core.registry.Palette] matches it with [KeywordMatcher.STRICT], because a
+     *   single phonetic near-miss would be the whole match.
+     * - Filler is never skipped *in front of* it — see [match]. A sentence of filler words with
+     *   one command word somewhere inside it is what an ordinary remark looks like ("es ist
+     *   jetzt aus"), and a bare `aus` would take all of them.
+     */
+    val isBareKeyword: Boolean = specificity.literalWords == 1 && slots.isEmpty()
+
+    /**
      * Matches the whole token list, anchored at both ends.
      *
      * @param keywords how a literal is compared to a spoken token. Defaults to
      *   [KeywordMatcher.STRICT], the pre-M6 behaviour, so a caller with no palette behind it —
      *   a test, a follow-up template — keeps exact-plus-Levenshtein and nothing more.
+     * @param fillers tokens the matcher may skip before a keyword and after the last one.
+     *   Defaults to [Fillers.NONE], which is this method byte for byte as it was — the palette
+     *   turns skipping on for a second pass only, once nothing has matched strictly. An
+     *   [isBareKeyword] template skips only what *trails* it: "stopp bitte" is politeness,
+     *   "es ist jetzt aus" is somebody talking about the oven.
      * @param enumValues allowed values for an `{x:enum}` slot, by slot name.
      * @return raw slot bindings, or null if the template does not match.
      */
     fun match(
         tokens: List<String>,
         keywords: KeywordMatcher = KeywordMatcher.STRICT,
+        fillers: Fillers = Fillers.NONE,
         enumValues: (String) -> List<String>?,
     ): Map<String, String>? =
-        walk(root, tokens, State(0, emptyMap()), keywords, enumValues)
-            .firstOrNull { it.position == tokens.size }
+        walk(root, tokens, State(0, emptyMap()), keywords, fillers, enumValues)
+            // The end anchor holds: everything left over has to be filler, and with
+            // [Fillers.NONE] "filler" is nothing at all.
+            .firstOrNull { state -> (state.position until tokens.size).all { tokens[it] in fillers } }
             ?.bindings
 
     override fun toString(): String = source
 
     private data class State(val position: Int, val bindings: Map<String, String>)
 
+    @Suppress("LongParameterList")
     private fun walk(
         node: Node,
         tokens: List<String>,
         state: State,
         keywords: KeywordMatcher,
+        fillers: Fillers,
         enums: (String) -> List<String>?,
     ): Sequence<State> = when (node) {
+        // A keyword may be preceded by filler: try it where it stands first, so an exact path
+        // is always found before a skipping one, then after 1..n consecutive filler tokens.
+        // Skipping only ever *adds* paths, which is why a filler that is also a literal (`es`,
+        // `ist`, `die`, `mir`) still takes the literal path — and why an [isBareKeyword]
+        // template, which has no anchor to add them to, gets none.
         is Node.Word ->
-            if (state.position < tokens.size && keywords.matches(tokens[state.position], node.text)) {
-                sequenceOf(state.copy(position = state.position + 1))
-            } else {
-                emptySequence()
-            }
+            skips(tokens, state.position, if (isBareKeyword) Fillers.NONE else fillers)
+                .filter { at -> at < tokens.size && keywords.matches(tokens[at], node.text) }
+                .map { at -> state.copy(position = at + 1) }
 
         is Node.Seq ->
             node.nodes.fold(sequenceOf(state)) { states, next ->
-                states.flatMap { walk(next, tokens, it, keywords, enums) }
+                states.flatMap { walk(next, tokens, it, keywords, fillers, enums) }
             }
 
-        is Node.Alt -> node.options.asSequence().flatMap { walk(it, tokens, state, keywords, enums) }
+        is Node.Alt ->
+            node.options.asSequence().flatMap { walk(it, tokens, state, keywords, fillers, enums) }
 
         // Try consuming first: in "spiele {query}( ab)?" the trailing "ab" should be the optional,
         // not part of the query.
-        is Node.Opt -> walk(node.node, tokens, state, keywords, enums) + sequenceOf(state)
+        is Node.Opt -> walk(node.node, tokens, state, keywords, fillers, enums) + sequenceOf(state)
 
+        // Slots are untouched by filler skipping: "{query}" captures what was said, fillers
+        // included, or "spiele es muss liebe sein" would lose its first two words. An INT or
+        // ENUM slot takes exactly one token as before — filler in front of one is skipped by
+        // the keyword or the start of the utterance, not here.
         is Node.Slot -> matchSlot(node, tokens, state, enums)
     }
 
@@ -138,6 +172,26 @@ class CompiledTemplate(val source: String, val root: Node.Seq) {
     }
 
     private companion object {
+        /**
+         * The positions a keyword may be tried at: [from], then past each consecutive filler.
+         *
+         * [from] comes first and unconditionally, so the no-skip path is always explored before
+         * any skipping one and an utterance that matched before matches the same way now.
+         */
+        fun skips(tokens: List<String>, from: Int, fillers: Fillers): Sequence<Int> =
+            if (fillers.isEmpty) {
+                sequenceOf(from)
+            } else {
+                sequence {
+                    var at = from
+                    yield(at)
+                    while (at < tokens.size && tokens[at] in fillers) {
+                        at++
+                        yield(at)
+                    }
+                }
+            }
+
         /**
          * Whether a spoken token is a garble of one closed-set candidate.
          *

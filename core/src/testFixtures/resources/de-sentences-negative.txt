@@ -1,0 +1,94 @@
+# Everyday German sentences that are not commands (M6c).
+#
+# The negative corpus for *filler skipping*. `de-frequent.txt` is single words and answers a
+# different question — whether a word can reach a keyword phonetically. This one is sentences,
+# because skipping is a sentence-level rule: it lets a template match an utterance with extra
+# words in it, and the risk it creates is that an ordinary remark, said in a kitchen with the
+# wake word open, now lands inside a template that was anchored against exactly that.
+#
+# Every line is a sentence somebody says in a flat, dense in the particles the list skips —
+# "doch", "mal", "eben", "denn", "jetzt", "eigentlich", "bitte", "das", "die", "ist". None of
+# them may match any template with skipping on. A line that starts matching is a word that has
+# to come off `Fillers.DE`, or a template that was never as anchored as it looked.
+#
+# The last block is a shape of its own: a sentence made of nothing but filler words and one
+# command word ("es ist jetzt aus", "jetzt ist auch mal pause"). Those are remarks about the
+# world, not instructions, and they are why nothing is skipped in *front* of a one-word template
+# — a bare `aus` with leading skipping takes every one of them.
+#
+# "das war es dann" is deliberately **not** in here, although it has the same shape: it reaches
+# `conversation.dismiss` through "das wars", and "that was it, then" really is a person ending
+# the conversation. The line between the two groups is meaning, not shape.
+#
+# Several are deliberately one word away from a real command: "komm wir machen dann einfach weiter"
+# against bare `weiter`, "hast du die zeit vergessen" against `was ist die zeit`, "weißt du eigentlich
+# noch wie spät wir gestern wach waren" against `wie spät`. Those are the lines worth keeping when this file
+# is edited.
+#
+# Lines starting with '#' are comments.
+
+das ist mir jetzt eigentlich egal
+ist das denn so schwer
+das haben wir doch schon mal besprochen
+ich glaube das war eben der postbote
+kannst du mir mal eben helfen
+das kann doch jetzt nicht wahr sein
+wo ist denn die fernbedienung
+ich hab die milch vergessen
+das schmeckt eigentlich ganz gut
+wann kommen die gäste denn
+hast du das eigentlich schon gelesen
+die kinder sind gerade eingeschlafen
+also ich finde das ja ganz nett
+das müssen wir dann später noch machen
+mir ist gerade ein bisschen kalt
+was hast du denn heute so gemacht
+der zug hatte mal wieder verspätung
+das war jetzt aber wirklich knapp
+ich muss noch schnell mal einkaufen gehen
+bitte mach die tür zu
+das licht ist doch schon an
+ich hab mir das anders vorgestellt
+wie war denn dein tag so
+das ist echt mal was anderes
+der kaffee ist eben schon kalt geworden
+da müssen wir uns jetzt mal drum kümmern
+ich weiß auch nicht so genau
+das riecht ja richtig gut hier
+jetzt mach dir mal keinen kopf
+kannst du das bitte nachher erledigen
+mir fällt der name gerade nicht ein
+hast du eigentlich noch hunger
+das dauert doch viel zu lange
+die nachbarn sind auch schon da
+ich geh dann mal ins bett
+das war doch eigentlich ganz einfach
+wo hab ich denn meine brille hingelegt
+es regnet jetzt schon den ganzen tag
+da hab ich echt mal gar keine lust drauf
+das musst du dir mal anschauen
+das kann ja wohl nicht dein ernst sein
+ich hab gerade keine zeit dafür
+hast du die zeit vergessen
+wir sollten mal wieder essen gehen
+das ist ja mal eine gute idee
+jetzt reicht es mir aber langsam
+komm wir machen dann einfach weiter
+das ist doch eh schon alles erledigt
+ich wollte dir das eigentlich noch sagen
+mal sehen was das wetter morgen macht
+bitte sag mir nicht dass du das vergessen hast
+das ist eben so bei uns
+er hat mir das gestern schon erzählt
+na dann viel spaß euch beiden
+damals war das alles noch ganz anders
+weißt du eigentlich noch wie spät wir gestern wach waren
+ähm ich glaube das reicht dann erst mal
+der ist doch schon lange nicht mehr da
+das hat mir eben erst jemand erzählt
+wollen wir dann mal so langsam los
+es ist jetzt aus
+das ist jetzt aus
+ist das jetzt aus
+jetzt ist auch mal pause
+so das ist dann ja auch mal gut

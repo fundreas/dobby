@@ -61,20 +61,22 @@ The STT normalizer in core has already turned German number words into digits ("
 ### Tier 1 templates
 
 ```
-(stell|stelle|setz|setze|mach) (mir )?(einen |nen )?timer( auf| für)? {amount:int} {unit:enum}
+(stell|stelle|setz|setze|mach) (einen |nen )?timer( auf| für)? {amount:int} {unit:enum}
 timer( auf| für)? {amount:int} {unit:enum}
 {amount:int} {unit:enum} timer
-(stell|stelle|setz|setze) (mir )?(einen |nen )?wecker( auf| für)? {amount:int} {unit:enum}
+(stell|stelle|setz|setze) (einen |nen )?wecker( auf| für)? {amount:int} {unit:enum}
 (erinner|erinnere) mich in {amount:int} {unit:enum}
 ```
 
 Plus the unit-less forms, which sit **last** — they are strictly less specific, and a palette that reached them first would ask "10 was?" about "timer 10 minuten":
 
 ```
-(stell|stelle|setz|setze|mach) (mir )?(einen |nen )?timer( auf| für)? {amount:int}
-(stell|stelle|setz|setze) (mir )?(einen |nen )?wecker( auf| für)? {amount:int}
+(stell|stelle|setz|setze|mach) (einen |nen )?timer( auf| für)? {amount:int}
+(stell|stelle|setz|setze) (einen |nen )?wecker( auf| für)? {amount:int}
 timer( auf| für)? {amount:int}
 ```
+
+No `(mir )?` anywhere above: "mir" is filler and the matcher skips it (README §6). `(einen |nen )?` stays, because it is what keeps the commonest phrasing of all — "stell einen timer auf 5 minuten" — on the strict first pass; "stelle mir einen timer für 90 sekunden" resolves on the second.
 
 The `{unit:enum}` slot matches the enum values plus their singular forms (`sekunde`, `minute`, `stunde`) — singular/plural folding happens in the enum matcher, not in five extra templates.
 
@@ -84,7 +86,7 @@ The `{unit:enum}` slot matches the enum values plus their singular forms (`sekun
 |---|---|
 | timer zehn minuten *(normalized: `timer 10 minuten`)* | `set_timer(amount=10, unit=minuten)` |
 | stell einen timer auf 5 minuten | `set_timer(amount=5, unit=minuten)` |
-| stelle mir einen timer für 90 sekunden | `set_timer(amount=90, unit=sekunden)` |
+| stelle mir einen timer für 90 sekunden | `set_timer(amount=90, unit=sekunden)` — filler pass, "mir" skipped |
 | 3 minuten timer | `set_timer(amount=3, unit=minuten)` |
 | timer eine minute | `set_timer(amount=1, unit=minuten)` |
 | setz einen wecker auf 2 stunden | `set_timer(amount=2, unit=stunden)` |
@@ -208,33 +210,36 @@ Two decisions worth stating plainly, because both are easy to get wrong later:
 ### Tier 1 templates
 
 ```
-wie (spät|viel uhr) ist (es|es jetzt)
-wie spät
-(wie viel uhr|uhrzeit|die uhrzeit)
-sag (mir )?(die )?uhrzeit
-was ist die uhrzeit
-was ist die zeit
-sag (mir )?(die )?zeit
+wie (spät|viel uhr)
+(sag|was ist) (die )?(uhrzeit|zeit)
+uhrzeit
 what time is it
 (whats|what's|what is) the time( now)?
 ```
 
-This is the broadest command in the catalog on purpose. Tier 1 is the cheap tier — more
-templates enlarge a lookup table, while the expensive thing is the Tier 2 system prompt, which
-grows with `description` and `examples` and not with templates ([`dobby-plan.md`](../dobby-plan.md)
-§9). The constraint on breadth is never the count; it is the two rules below.
+**Three German templates, where there were seven.** The matcher skips filler words on a second
+pass ([`../socks.specs/README.md`](README.md) §6), so `ist`, `es`, `jetzt`, `mir` and `denn` no
+longer need a template each: `wie spät` covers "wie spät ist es", "wie spät ist es denn jetzt"
+and the "wie spät ist **das**" the recogniser really produces. Enumerating those variants was
+what did not scale — every command would have needed the same cross-product.
+
+Tier 1 is still the cheap tier: more templates only enlarge a lookup table, while the expensive
+thing is the Tier 2 system prompt, which grows with `description` and `examples` and not with
+templates ([`dobby-plan.md`](../dobby-plan.md) §9). The constraint on breadth is never the
+count; it is the two rules below.
 
 ### Utterances → invocation
 
 | Utterance | Invocation |
 |---|---|
-| wie spät ist es | `whats_the_time()` |
+| wie spät ist es | `whats_the_time()` — filler pass, "ist es" skipped |
+| wie spät ist das | `whats_the_time()` — the recorded mishearing, filler pass |
 | wie spät | `whats_the_time()` |
-| wie viel uhr ist es | `whats_the_time()` |
+| wie viel uhr ist es | `whats_the_time()` — filler pass |
 | uhrzeit | `whats_the_time()` |
-| sag mir die uhrzeit | `whats_the_time()` |
+| sag mir die uhrzeit | `whats_the_time()` — filler pass, "mir" skipped |
 | was ist die zeit | `whats_the_time()` |
-| sag mir die zeit | `whats_the_time()` |
+| sag mir die zeit | `whats_the_time()` — filler pass, "mir" skipped |
 | whats the time | `whats_the_time()` |
 | what's the time | `whats_the_time()` |
 | whats the time now | `whats_the_time()` |

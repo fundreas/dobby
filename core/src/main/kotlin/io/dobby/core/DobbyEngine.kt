@@ -9,6 +9,7 @@ import io.dobby.core.nlu.llm.Tier2Outcome
 import io.dobby.core.nlu.llm.Tier2Trace
 import io.dobby.core.registry.Palette
 import io.dobby.core.registry.PaletteEntry
+import io.dobby.core.registry.PaletteMatch
 import io.dobby.core.registry.SockRegistry
 import io.dobby.core.registry.compileScopedPalette
 import io.dobby.core.sock.CommandInvocation
@@ -91,6 +92,24 @@ data class Fallthrough(
 }
 
 /**
+ * An utterance Tier 1 reached only by ignoring filler words.
+ *
+ * The other half of the flywheel, and the number M6c is judged by: "wie spät ist das" resolving
+ * here rather than spending 2–4 s in the local model is the whole point of the filler list, and
+ * a rescue that looks wrong is a word that should come off it. Recorded alongside the
+ * fallthroughs, under the same rules — see [FallthroughLog].
+ */
+data class Rescue(
+    /** The normalized utterance, exactly as the matcher saw it. */
+    val utterance: String,
+    val commandId: String,
+    /** The template it reached, so a phrasing worth adding outright is obvious. */
+    val template: String,
+) {
+    override fun toString(): String = "$utterance → $commandId via \"$template\""
+}
+
+/**
  * Wires normalize → match → dispatch.
  *
  * This is the whole of "raw Dobby": everything above the microphone and below the Socks.
@@ -101,6 +120,8 @@ class DobbyEngine(
     private val dispatcher: Dispatcher = Dispatcher(registry),
     /** Feeds the flywheel: utterances Tier 1 could not match, and what Tier 2 made of them. */
     private val onFallthrough: (Fallthrough) -> Unit = {},
+    /** The other direction: utterances the filler-skipping pass kept out of Tier 2 (M6c). */
+    private val onRescue: (Rescue) -> Unit = {},
     private val log: SockLog = SockLog.NONE,
     /**
      * The local model, or null.
@@ -166,6 +187,7 @@ class DobbyEngine(
             val answer = ask.palette.match(tokens)
             if (answer != null) {
                 pending = null
+                record(answer, normalized)
                 val invocation = answer.invocation.copy(answering = ask.token)
                 return finish(
                     raw = raw,
@@ -180,6 +202,7 @@ class DobbyEngine(
 
         val match = registry.palette.match(tokens)
             ?: return fallThrough(raw, normalized, tokens, ask, useTier2)
+        record(match, normalized)
 
         // Something else entirely was said while a question was open — "stopp", "lauter", "wie
         // spät ist es". It wins, and the question is abandoned rather than answered. Without
@@ -198,6 +221,12 @@ class DobbyEngine(
             outcome = dispatcher.dispatch(match.invocation),
             depth = 0,
         )
+    }
+
+    /** Notes a match the strict pass did not make, and lets one that it did make pass in silence. */
+    private fun record(match: PaletteMatch, normalized: String) {
+        if (!match.skippedFillers) return
+        onRescue(Rescue(normalized, match.invocation.commandId, match.entry.template.source))
     }
 
     /**

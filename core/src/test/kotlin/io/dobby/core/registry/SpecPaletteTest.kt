@@ -1,5 +1,6 @@
 package io.dobby.core.registry
 
+import io.dobby.core.nlu.Fillers
 import io.dobby.core.nlu.Normalizer
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -45,6 +46,19 @@ class SpecPaletteTest {
             "gute Nacht", "Wann fährt der nächste Bus", "Wann kommt die nächste Bim",
             "Abfahrten", "Fahrplan", "Wann fährt der nächste 14A", "Wann kommt der U6",
             "wie wird das wetter morgen", "ruf meine mutter an", "erzähl mir einen witz",
+        )
+
+        /**
+         * Spec phrasings that only the second pass reaches, in [SPEC_UTTERANCES] order.
+         *
+         * All three are a filler away from a template that is still there: "mir" in the timer
+         * forms, "ist es" after "wie spät". Pinned rather than counted so that a *fourth* one
+         * appearing is a decision somebody makes on purpose.
+         */
+        val RESCUED_SPEC_UTTERANCES: List<String> = listOf(
+            "stelle mir einen Timer für 90 Sekunden",
+            "Wie spät ist es",
+            "sag mir die Zeit",
         )
     }
 
@@ -237,8 +251,9 @@ class SpecPaletteTest {
      */
     @Test
     fun `phonetics changes nothing about an utterance Tier 1 already heard`() {
+        // Fillers held constant, or this would be an A/B over two changes at once.
         val strict = SockRegistry.buildOrThrow(SpecFixtures.all()).palette.entries
-            .let { Palette(it, phonetic = false) }
+            .let { Palette(it, phonetic = false, fillers = Fillers.DE) }
 
         for (utterance in SPEC_UTTERANCES) {
             val tokens = Normalizer.tokenize(utterance)
@@ -255,6 +270,89 @@ class SpecPaletteTest {
                 "\"$utterance\" takes a different template with phonetics on",
             )
         }
+    }
+
+    /**
+     * The other A/B, and the one M6c rests on: filler skipping is a second pass, never a first.
+     *
+     * The palette runs the whole ordered list strictly before it runs it again with fillers, so
+     * every utterance that resolved before resolves to the same command *by the same template*.
+     * If this fails, the two-pass structure has been lost somewhere and the specificity ordering
+     * is now being decided by which template tolerates the most noise.
+     */
+    @Test
+    fun `filler skipping changes nothing about an utterance the strict pass already heard`() {
+        val strict = Palette(registry.palette.entries, fillers = Fillers.NONE)
+
+        for (utterance in SPEC_UTTERANCES) {
+            val tokens = Normalizer.tokenize(utterance)
+            val before = strict.match(tokens) ?: continue
+            val after = registry.palette.match(tokens)
+            assertEquals(
+                before.invocation,
+                after?.invocation,
+                "\"$utterance\" resolves differently with filler skipping on",
+            )
+            assertEquals(
+                before.entry.template.source,
+                after?.entry?.template?.source,
+                "\"$utterance\" takes a different template with filler skipping on",
+            )
+            assertEquals(false, after?.skippedFillers, "\"$utterance\" was marked a rescue")
+        }
+    }
+
+    /**
+     * What the pruning cost, pinned by name.
+     *
+     * The clock used to carry seven templates for "what time is it" and now carries three
+     * (M6c §D), which means a handful of the spec's own phrasings resolve on the *second* pass
+     * now — same command, one palette sweep later, and logged as a rescue. That is the trade
+     * the milestone made deliberately, and this list is what makes it reviewable: a phrasing
+     * appearing here that somebody thinks belongs on the fast path is an argument for a
+     * template, not against the filler list.
+     */
+    @Test
+    fun `the spec phrasings that now resolve on the second pass`() {
+        val rescued = SPEC_UTTERANCES.filter { utterance ->
+            registry.palette.match(Normalizer.tokenize(utterance))?.skippedFillers == true
+        }
+        assertEquals(RESCUED_SPEC_UTTERANCES, rescued)
+    }
+
+    @Test
+    fun `the sentences the filler list was added for`() {
+        val strict = Palette(registry.palette.entries, fillers = Fillers.NONE)
+        // Left column: what the recogniser really produced, or a particle away from it. Right:
+        // where it goes now. Every one of these was a 2-4 s Tier 2 round trip the day before.
+        for ((utterance, commandId) in listOf(
+            "wie spät ist das" to "clock.whats_the_time",
+            "wie spät ist es denn jetzt" to "clock.whats_the_time",
+            "ähm wie spät ist es bitte" to "clock.whats_the_time",
+            "was ist denn bitte gerade die uhrzeit" to "clock.whats_the_time",
+            "mach das mal aus" to "shared.stop",
+            "stell mir doch mal einen timer auf 5 minuten" to "clock.set_timer",
+            "mach doch bitte die musik aus" to "spotify.pause",
+            "timer doch bitte stopp" to "clock.cancel_timer",
+        )) {
+            val tokens = Normalizer.tokenize(utterance)
+            assertNull(strict.match(tokens), "\"$utterance\" already matched before M6c")
+            val match = registry.palette.match(tokens)
+            assertNotNull(match, "\"$utterance\" still matches nothing")
+            assertEquals(commandId, match.invocation.commandId, utterance)
+            assertTrue(match.skippedFillers, "\"$utterance\" was not marked as a rescue")
+        }
+    }
+
+    @Test
+    fun `filler skipping does not put a song title through the grinder`() {
+        // The slot rule, at palette level: "es muss liebe sein" is a title, not three
+        // particles and a verb. It matches on the first pass and keeps every word.
+        assertResolves(
+            "spiele es muss liebe sein",
+            "spotify.play_music",
+            mapOf("query" to "es muss liebe sein"),
+        )
     }
 
     @Test
