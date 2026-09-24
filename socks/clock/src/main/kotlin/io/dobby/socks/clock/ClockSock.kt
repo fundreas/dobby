@@ -713,6 +713,21 @@ class ClockSock(
         return SockResult.Silent
     }
 
+    /**
+     * The X on a timer row (§9): the same cancel, from a finger instead of a sentence.
+     *
+     * The precedent is `RadioSock.stopFromPanel`, and so is the reasoning — straight at the
+     * Sock rather than through the engine, across the same seam the card already reads [state]
+     * over. Public because the panel holds this Sock by name.
+     *
+     * No context means nothing has started and so nothing is running; that is a no-op rather
+     * than the [started] exception, because unlike a spoken command a button press has nobody
+     * to apologise to.
+     */
+    suspend fun cancelFromPanel(id: Long) {
+        timers.cancelById(context ?: return, id)
+    }
+
     /** The dashboard's clock, ticking no faster than it has to (§9). */
     private suspend fun tick(config: ClockConfig) {
         while (coroutineContext.isActive) {

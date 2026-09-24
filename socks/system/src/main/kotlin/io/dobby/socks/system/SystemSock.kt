@@ -206,6 +206,23 @@ class SystemSock(private val volume: VolumeControl = VolumeControl.NONE) : Sock 
         ),
     )
 
+    private val _muted = MutableStateFlow(false)
+
+    /**
+     * Whether the room is silent, for the panel's speaker button (`system.specs.md` §4).
+     *
+     * The same shape `ClockSock.state` and `RadioSock.state` have: the Sock owns the fact and
+     * the panel draws it. Published by [publishMuted] after every path in here that can change
+     * it, which is every path in here.
+     *
+     * **A hardware volume key is not observed.** [VolumeControl] is a pull interface with no
+     * change callback, and giving it one to catch a rocker press would mean a `ContentObserver`
+     * in the Android half and a new seam in the JVM half for a case the panel's own button
+     * already handles: [toggleMuteFromPanel] reads the live stream rather than this flow, so a
+     * lagging icon still does the right thing when it is pressed.
+     */
+    val muted: StateFlow<Boolean> = _muted.asStateFlow()
+
     override suspend fun onStart(ctx: SockContext) {
         config = SystemConfig(ctx.config)
         _status.value = if (volume.isAvailable) {
@@ -214,6 +231,7 @@ class SystemSock(private val volume: VolumeControl = VolumeControl.NONE) : Sock 
             // Not `Degraded`: there is no reduced service here, there is no stream at all.
             SockStatus.Unavailable(NO_STREAM)
         }
+        publishMuted()
     }
 
     override suspend fun onStop() {
@@ -223,12 +241,46 @@ class SystemSock(private val volume: VolumeControl = VolumeControl.NONE) : Sock 
     override suspend fun handle(invocation: CommandInvocation): SockResult {
         if (!volume.isAvailable) return SockResult.Failed(NO_STREAM_SPOKEN)
         val settings = config ?: return SockResult.Failed(NO_STREAM_SPOKEN)
-        return when (invocation.commandId) {
+        val result = when (invocation.commandId) {
             VOLUME -> change(invocation, settings)
             SET_VOLUME -> setTo(invocation.int("level"), settings)
             MUTE -> mute(invocation.textOrNull("state") != MuteState.AUS.spoken, settings)
             else -> SockResult.NotForMe
         }
+        // One place rather than four: every branch above can end silent or not, and the panel
+        // only cares which of the two the stream ended up in.
+        publishMuted()
+        return result
+    }
+
+    /**
+     * The panel's speaker button (§4): the same mute, from a finger instead of a sentence.
+     *
+     * `RadioSock.stopFromPanel` is the precedent — straight at the Sock, over the same seam
+     * the button reads [muted] across, with no utterance invented to put a tap through the one
+     * part of the system that can misunderstand it.
+     *
+     * The *live* stream decides which way to toggle, not [muted]: the flow can be one rocker
+     * press out of date and a button that toggles the wrong way is worse than one that is drawn
+     * the wrong way for a moment.
+     */
+    fun toggleMuteFromPanel() {
+        val settings = config ?: return
+        if (!volume.isAvailable) return
+        mute(muted = !isSilent, settings = settings)
+        publishMuted()
+    }
+
+    /**
+     * A stream turned all the way down is silent whatever the platform's mute flag says.
+     *
+     * The same reading [unmute] already uses, named once so the button, the flow and the
+     * restore cannot drift apart.
+     */
+    private val isSilent: Boolean get() = volume.isMuted || volume.index == 0
+
+    private fun publishMuted() {
+        _muted.value = isSilent
     }
 
     /** `system.volume` — a relative move, in whole steps of [SystemConfig.stepPercent]. */
@@ -275,7 +327,7 @@ class SystemSock(private val volume: VolumeControl = VolumeControl.NONE) : Sock 
      */
     private fun mute(muted: Boolean, settings: SystemConfig): SockResult {
         if (muted) {
-            if (volume.isMuted || volume.index == 0) return SockResult.Silent
+            if (isSilent) return SockResult.Silent
             beforeMute = volume.index
             volume.setMuted(true)
             // Silent, obviously: an acknowledgement would be the last thing the room hears, and
@@ -283,7 +335,7 @@ class SystemSock(private val volume: VolumeControl = VolumeControl.NONE) : Sock 
             return SockResult.Silent
         }
 
-        val wasSilent = volume.isMuted || volume.index == 0
+        val wasSilent = isSilent
         unmute(settings)
         // Already audible: nothing happened, so nothing is said (§4).
         return if (wasSilent) SockResult.Spoken(SOUND_BACK) else SockResult.Silent

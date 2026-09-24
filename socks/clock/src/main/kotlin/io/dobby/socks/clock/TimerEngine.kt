@@ -169,6 +169,21 @@ internal class TimerEngine(
         }
     }
 
+    /**
+     * The panel's X on one timer row (`clock.specs.md` §9).
+     *
+     * By id and not by name, because a finger on a row is *pointing* rather than describing:
+     * there is no name to resolve, no fuzzy match to risk and no tie to break — which is the
+     * whole of what [cancel] exists to get right and none of what this needs. Silencing a
+     * ringing timer comes free, because [forget] already owns that.
+     *
+     * Returns null for an id that is no longer running: a tap that landed in the same instant
+     * the timer expired and cleared itself is a no-op, not an error.
+     */
+    suspend fun cancelById(ctx: SockContext, id: Long): TimerState? = mutex.withLock {
+        forget(ctx, id, cancelJob = true)
+    }
+
     /** "Brich alle Timer ab" — the one command that needs no name and no tie to break. */
     suspend fun cancelAll(ctx: SockContext): List<TimerState> = mutex.withLock {
         val all = _running.value

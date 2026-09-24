@@ -565,6 +565,55 @@ class SpotifySock(
     }
 
     /**
+     * The card's transport controls (`spotify.specs.md` §7): the same moves, from a finger.
+     *
+     * `RadioSock.stopFromPanel` is the precedent and the argument. These go straight at the
+     * player rather than through the engine — there is no utterance to dispatch, and inventing
+     * one to put "nächster song" through the matcher would route a button press through the
+     * one part of the system that can misunderstand it.
+     *
+     * None of them opens a connection, and that is deliberate rather than lazy: the card is
+     * drawn only while [nowPlaying] holds a snapshot, and a snapshot exists only while the App
+     * Remote is subscribed. A button nobody can see cannot be pressed, so the `open()` dance
+     * the spoken commands need has nothing to do here.
+     */
+    suspend fun playPauseFromPanel() {
+        val snapshot = player.state.value ?: return
+        // Claiming only on the way *in* to sound, exactly as `resume` and `resumeChain` do:
+        // pausing takes nothing from anyone.
+        if (snapshot.isPaused) claimAnd { player.resume() } else player.pause()
+    }
+
+    /** The card's ›|. Silent like its spoken twin — the music changing is the feedback. */
+    suspend fun skipNextFromPanel() {
+        if (player.state.value == null) return
+        player.skipNext()
+    }
+
+    /** The card's |‹. */
+    suspend fun skipPreviousFromPanel() {
+        if (player.state.value == null) return
+        player.skipPrevious()
+    }
+
+    /**
+     * The card's X: pause, then let go of the App Remote.
+     *
+     * The radio's X ends the stream and the card goes with it. Spotify has no equivalent stop —
+     * App Remote can pause a queue but not unload it — so the closest honest reading of "close
+     * this card" is the one below: stop the sound, then drop the connection, which clears the
+     * snapshot the card is drawn from. The next music command reconnects, the way it does after
+     * any overnight disconnect (§10), so nothing here is a state somebody has to talk their way
+     * back out of.
+     */
+    suspend fun dismissFromPanel() {
+        val snapshot = player.state.value ?: return
+        if (!snapshot.isPaused) player.pause()
+        player.disconnect()
+        connected = false
+    }
+
+    /**
      * Claims the audio channel, then does the thing that makes sound.
      *
      * [io.dobby.core.sock.PlaybackCoordinator.claimExternal] and **not** `requestFocus`, and

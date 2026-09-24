@@ -227,6 +227,41 @@ class DobbyController(
     fun stopRadio(): Job = scope.launch { wiring.radio.stopFromPanel() }
 
     /**
+     * The card's transport controls (`spotify.specs.md` §7), run from a finger.
+     *
+     * Four one-liners rather than one `enum` and a `when`, because that is all they are: the
+     * same seam [stopRadio] opened, at the Sock that owns the playback. [dismissSpotify] is the
+     * card's X — it pauses and lets go of the App Remote, which is what clears [spotify] and so
+     * takes the card off the screen.
+     */
+    fun spotifyPlayPause(): Job = scope.launch { wiring.spotify.playPauseFromPanel() }
+
+    fun spotifyNext(): Job = scope.launch { wiring.spotify.skipNextFromPanel() }
+
+    fun spotifyPrevious(): Job = scope.launch { wiring.spotify.skipPreviousFromPanel() }
+
+    fun dismissSpotify(): Job = scope.launch { wiring.spotify.dismissFromPanel() }
+
+    /**
+     * The X on a timer row (`clock.specs.md` §9).
+     *
+     * By id, because the panel is pointing at a row rather than describing one — none of the
+     * name resolution `clock.cancel_timer` needs applies to a finger.
+     */
+    fun cancelTimer(id: Long): Job = scope.launch { wiring.clock.cancelFromPanel(id) }
+
+    /**
+     * Whether the room is silent, and the button that changes it (`system.specs.md` §4).
+     *
+     * Drawn only while something is playing, so the panel does not carry a speaker button for
+     * a room that is already quiet — see `ChatScreen`. Muting leaves playback alone: it does
+     * not pause Spotify, does not stop the stream and does not stop a timer counting.
+     */
+    val muted: StateFlow<Boolean> get() = wiring.system.muted
+
+    fun toggleMute() = wiring.system.toggleMuteFromPanel()
+
+    /**
      * The cover, which comes from the hardware rather than the Sock.
      *
      * It is an Android `Bitmap`, and `:socks:spotify` is a plain JVM module that must not see

@@ -12,7 +12,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -36,8 +40,17 @@ private val HOURS_MINUTES = DateTimeFormatter.ofPattern("HH:mm")
  * redraws once a second is an OLED burning itself in for no information. The countdown is the
  * exception — it is on screen for minutes, not for weeks, and there a second matters.
  */
+/**
+ * @param onCancelTimer the X on a timer row: [io.dobby.socks.clock.ClockSock.cancelFromPanel],
+ *   by id. Defaulted to nothing so a preview and the off-device build can draw the card without
+ *   a controller behind it, exactly as the radio card's stop is.
+ */
 @Composable
-fun ClockCard(state: ClockState, modifier: Modifier = Modifier) {
+fun ClockCard(
+    state: ClockState,
+    modifier: Modifier = Modifier,
+    onCancelTimer: (Long) -> Unit = {},
+) {
     Row(
         modifier
             .fillMaxWidth()
@@ -61,7 +74,9 @@ fun ClockCard(state: ClockState, modifier: Modifier = Modifier) {
             Column(horizontalAlignment = Alignment.End) {
                 // Soonest first, and only the ones that fit: a panel that lists eight timers in
                 // 6-point type is a list nobody reads across a kitchen. The rest are a count.
-                for (timer in state.timers.take(VISIBLE_TIMERS)) Timer(timer)
+                for (timer in state.timers.take(VISIBLE_TIMERS)) {
+                    Timer(timer) { onCancelTimer(timer.id) }
+                }
                 val hidden = state.timers.size - VISIBLE_TIMERS
                 if (hidden > 0) {
                     Text(
@@ -76,7 +91,7 @@ fun ClockCard(state: ClockState, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun Timer(timer: TimerState) {
+private fun Timer(timer: TimerState, onCancel: () -> Unit) {
     // A ringing timer has to be visible on a muted panel, so it flashes rather than only
     // sounding. A counting one stays still: it is information, not an alarm.
     val flash by rememberInfiniteTransition(label = "chime").animateFloat(
@@ -86,43 +101,61 @@ private fun Timer(timer: TimerState) {
         label = "flash",
     )
 
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier.alpha(flash),
-    ) {
-        // The label earns its place only once there is something to tell apart: a single
-        // default timer is just a countdown, exactly as it was before multi-timer.
-        if (timer.numbered || timer.name != null) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        // The readout flashes; the button beside it does not. A control that fades to a fifth
+        // of its opacity twice a second is one somebody stabs at, and the whole reason the
+        // chime flashes is that it is the row you most want to be able to switch off.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.alpha(flash),
+        ) {
+            // The label earns its place only once there is something to tell apart: a single
+            // default timer is just a countdown, exactly as it was before multi-timer.
+            if (timer.numbered || timer.name != null) {
+                Text(
+                    timer.label,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Text(
-                timer.label,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Text(
-            if (timer.isRinging) "${timer.label}!" else SpokenTime.countdown(timer.remainingMs),
-            style = MaterialTheme.typography.headlineSmall,
-            color = if (timer.isRinging) {
-                MaterialTheme.colorScheme.error
-            } else {
-                MaterialTheme.colorScheme.onBackground
-            },
-        )
-        Box(contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(
-                progress = { timer.progress },
-                modifier = Modifier.size(28.dp),
-                strokeWidth = 3.dp,
+                if (timer.isRinging) "${timer.label}!" else SpokenTime.countdown(timer.remainingMs),
+                style = MaterialTheme.typography.headlineSmall,
                 color = if (timer.isRinging) {
                     MaterialTheme.colorScheme.error
                 } else {
-                    MaterialTheme.colorScheme.primary
+                    MaterialTheme.colorScheme.onBackground
                 },
+            )
+            Box(contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(
+                    progress = { timer.progress },
+                    modifier = Modifier.size(28.dp),
+                    strokeWidth = 3.dp,
+                    color = if (timer.isRinging) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                )
+            }
+        }
+        // One X per row, and per row is the point: "brich Timer 2 ab" is a sentence somebody
+        // has to compose while three countdowns are on the wall in front of them, and pointing
+        // at the one they mean skips both the naming and the tie-break the spoken command needs.
+        IconButton(onClick = onCancel, modifier = Modifier.size(CANCEL_SIZE)) {
+            Icon(
+                Icons.Filled.Close,
+                contentDescription = "${timer.label} abbrechen",
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
 }
+
+private val CANCEL_SIZE = 36.dp
 
 private const val FLASH_MILLIS = 450
 

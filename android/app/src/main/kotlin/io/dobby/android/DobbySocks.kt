@@ -42,6 +42,11 @@ object DobbySocks {
         val spotify: SpotifySock,
         /** And the station, and its ICY title (`radio.specs.md` §7). */
         val radio: RadioSock,
+        /**
+         * And whether the room is silent, for the panel's speaker button
+         * (`system.specs.md` §4).
+         */
+        val system: SystemSock,
         val bindDirectory: (Introspection) -> Unit,
     )
 
@@ -77,16 +82,17 @@ object DobbySocks {
             fallback = spotify?.fallback ?: IntentFallback.NONE,
         )
         val tuner = RadioSock(player = radio?.player ?: RadioPlayer.NONE)
+        val device = SystemSock(system?.volume ?: VolumeControl.NONE)
         val socks = buildList {
             add(clock)
             add(music)
             add(tuner)
-            add(SystemSock(system?.volume ?: VolumeControl.NONE))
+            add(device)
             add(CalculatorSock())
             add(ConversationSock())
             add(HelpSock { directory })
             addAll(DevSocks.create())
         }
-        return Wiring(socks, clock, music, tuner) { directory = it }
+        return Wiring(socks, clock, music, tuner, device) { directory = it }
     }
 }

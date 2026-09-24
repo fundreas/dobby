@@ -611,6 +611,27 @@ not a ticker: the card advances from `positionMs` plus elapsed wall time while `
 way `ClockSock.tick` aligns a countdown to the second boundary. The App Remote is never asked
 for it.
 
+**Transport controls on the card**: |‹ · ▶/❚❚ · ›| on their own centred row, and an X on the
+right of the title row. The argument is the radio card's X (`radio.specs.md` §7) and it is the
+same one: the room is playing music, which is the worst possible moment to make somebody say
+"Dobby" twice over it. Their own row because three targets at the size a wall panel is pressed
+at do not fit beside a cover and two lines of text; the X apart from them because closing the
+card is not a thing you do to the music, and a finger reaching for "next" must not land on it.
+The play/pause button replaces the non-pressable paused marker that was there before.
+
+Each runs `SpotifySock.playPauseFromPanel` / `skipNextFromPanel` / `skipPreviousFromPanel` —
+the identical `SpotifyPlayer` calls the spoken commands run, so a tap and an utterance are one
+event. None of them opens a connection, and that is deliberate: the card is drawn only while
+`nowPlaying` holds a snapshot, and a snapshot exists only while the App Remote is subscribed,
+so the `open()` dance the spoken commands need has nothing to do here.
+
+**The X is `dismissFromPanel`: pause, then disconnect.** The radio's X ends the stream and the
+card goes with it; Spotify has no equivalent stop — App Remote can pause a queue but not unload
+it — so the closest honest reading of "close this card" is to stop the sound and drop the
+connection, which clears the snapshot the card is drawn from. The next music command reconnects
+the way it does after any overnight disconnect (§10), so this is not a state somebody has to
+talk their way back out of.
+
 ## 8. Utterance collision surface
 
 Exclusively claimed by this Sock: `spiele`, `spiel`, `mach … an`, `leg … auf`, `musik an`,

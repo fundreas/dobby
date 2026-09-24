@@ -579,6 +579,14 @@ Always-present `DashboardCard` (this Sock owns the panel's clock):
   rest are a count ("+2 weitere"): a panel listing eight timers in six-point type is a list nobody
   reads across a kitchen.
 - Chime state: visibly flashing while ringing, so a muted device still shows it.
+- An **X on each timer row**, running `ClockSock.cancelFromPanel(id)`. Per row is the point:
+  "brich Timer 2 ab" is a sentence somebody has to compose while three countdowns are on the
+  wall in front of them, and pointing at the one they mean skips both the naming and the
+  tie-break `clock.cancel_timer` needs (§4). By **id**, so none of that resolution applies —
+  a finger is pointing, not describing. The X sits outside the flashing alpha: a control that
+  fades to a fifth of its opacity twice a second is one somebody stabs at, and a ringing timer
+  is the row you most want to be able to switch off. Silencing a chime comes free, because
+  `TimerEngine.forget` already owns it.
 
 Exposed state: `StateFlow<ClockState>` = `now: LocalDateTime`, `timers: List<TimerState>` sorted by
 deadline, each (`id`, `endsAt`, `totalMs`, `remainingMs`, `isRinging`, `name`, `ordinal`,

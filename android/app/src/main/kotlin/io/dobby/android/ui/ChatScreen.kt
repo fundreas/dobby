@@ -20,6 +20,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Settings
@@ -66,7 +68,14 @@ fun ChatScreen(
     nowPlaying: PlayerSnapshot?,
     artwork: Bitmap?,
     radio: RadioState,
+    muted: Boolean,
     onStopRadio: () -> Unit,
+    onSpotifyPrevious: () -> Unit,
+    onSpotifyPlayPause: () -> Unit,
+    onSpotifyNext: () -> Unit,
+    onCloseSpotify: () -> Unit,
+    onCancelTimer: (Long) -> Unit,
+    onToggleMute: () -> Unit,
     onListen: () -> Unit,
     onAbort: () -> Unit,
     onSettings: () -> Unit,
@@ -77,18 +86,40 @@ fun ChatScreen(
         Header(state, onSettings)
         // The Clock Sock owns the panel's clock, so the panel asks it rather than the system
         // (`clock.specs.md` §7). It is also where a running timer becomes visible.
-        ClockCard(clock)
+        ClockCard(clock, onCancelTimer = onCancelTimer)
         // Drawn only while something is loaded, so a panel nobody has asked for music keeps
         // the clock at the top of the screen where it belongs (`spotify.specs.md` §7).
-        NowPlayingCard(nowPlaying, artwork)
+        NowPlayingCard(
+            nowPlaying,
+            artwork,
+            onPrevious = onSpotifyPrevious,
+            onPlayPause = onSpotifyPlayPause,
+            onNext = onSpotifyNext,
+            onClose = onCloseSpotify,
+        )
         // Same rule, and the coordinator guarantees these two are never both drawn: only one
         // Sock can hold the channel (`radio.specs.md` §7).
         RadioCard(radio, onStop = onStopRadio)
         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
         Conversation(state.messages, Modifier.weight(1f))
-        Composer(state, onListen, onAbort, onHelp)
+        // The speaker button exists only while there is something to silence — see [playing].
+        Composer(state, playing(nowPlaying, radio), muted, onToggleMute, onListen, onAbort, onHelp)
     }
 }
+
+/**
+ * Whether the room is making a noise Dobby put there (`system.specs.md` §4).
+ *
+ * The same two cards the screen already draws, asked a second question: mute is a control for
+ * sound that is happening, and a speaker button on a silent panel is one more thing to read
+ * past. `Buffering` counts — a stream connecting is about to be loud, and the moment before it
+ * is, is exactly when somebody reaches for the button. `Error` does not: that card is a card
+ * about silence, and it has its own X.
+ */
+private fun playing(nowPlaying: PlayerSnapshot?, radio: RadioState): Boolean =
+    (nowPlaying != null && !nowPlaying.isPaused) ||
+        radio is RadioState.Playing ||
+        radio is RadioState.Buffering
 
 @Composable
 private fun Header(state: DobbyUiState, onSettings: () -> Unit) {
@@ -244,6 +275,9 @@ private fun Bubble(message: ChatMessage) {
 @Composable
 private fun Composer(
     state: DobbyUiState,
+    playing: Boolean,
+    muted: Boolean,
+    onToggleMute: () -> Unit,
     onListen: () -> Unit,
     onAbort: () -> Unit,
     onHelp: () -> Unit,
@@ -261,6 +295,33 @@ private fun Composer(
             .padding(horizontal = 12.dp, vertical = 16.dp),
         horizontalArrangement = Arrangement.Center,
     ) {
+        // Here rather than in the header, and for the same reason the help button is: this row
+        // is where a hand already is. It appears with the sound and goes away with it, so the
+        // panel carries a speaker button only in the one situation it means anything.
+        //
+        // Muting leaves playback alone (`system.specs.md` §4) — it does not pause Spotify, does
+        // not stop the stream and does not stop a timer counting. That is the difference between
+        // this and the X on the cards above it, and it is the whole reason both exist.
+        if (playing) {
+            IconButton(onClick = onToggleMute, modifier = Modifier.size(72.dp)) {
+                val speaker = if (muted) {
+                    Icons.AutoMirrored.Filled.VolumeOff
+                } else {
+                    Icons.AutoMirrored.Filled.VolumeUp
+                }
+                Icon(
+                    speaker,
+                    contentDescription = if (muted) "Ton wieder an" else "Stummschalten",
+                    modifier = Modifier.size(28.dp),
+                    tint = if (muted) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
+        }
+
         // One control, sized to be hit from across a room rather than from a thumb's reach —
         // the panel is on a wall, and this is the only thing on it you touch.
         FilledIconButton(

@@ -204,6 +204,30 @@ Muting does **not** stop playback and does **not** release playback focus.
 
 **Announcements still speak while muted?** No — TTS shares `STREAM_MUSIC`, so a muted device is silent, including timer alarms. Mitigation: while muted, timer expiry additionally flashes the dashboard (see `clock.specs.md` §6) and posts a notification. Accept that "stumm" means stumm.
 
+### Dashboard
+
+`val muted: StateFlow<Boolean>` on the Sock, and a speaker button in `ChatScreen`'s control row
+beside the microphone — `RadioSock.state` and its X are the precedent for both halves. The
+button runs `SystemSock.toggleMuteFromPanel()`, which is `mute()` with the state flipped: the
+same call `system.mute` makes, from a finger instead of a sentence.
+
+**Drawn only while something is playing** — Spotify unpaused, or the radio `Playing`/`Buffering`.
+Mute is a control for sound that is happening, and a speaker button on a silent panel is one
+more thing to read past. `Buffering` counts: a stream connecting is about to be loud, and the
+moment before it is, is exactly when somebody reaches for the button; `Error` does not, because
+that card is a card about silence and it has its own X. It is in the control row
+rather than the header for the same reason the help button is — that row is where a hand
+already is.
+
+The X on the cards above it stops the sound; this only makes the device silent. That difference
+is the whole reason both exist.
+
+**A hardware volume key is not observed.** `VolumeControl` is a pull interface with no change
+callback, and giving it one would mean a `ContentObserver` in the Android half and a new seam
+in the JVM half. The flow is published after every path in the Sock that can change it, and
+`toggleMuteFromPanel` reads the *live* stream rather than the flow — so a rocker press can leave
+the icon one tap stale, and the tap that follows still does the right thing.
+
 ### Result
 
 | Case | Result | German TTS |
