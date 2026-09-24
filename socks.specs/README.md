@@ -265,6 +265,7 @@ Keep German user-facing strings **in the spec**, verbatim. They are product copy
 | **Calculator** ✅ | [calculator.specs.md](calculator.specs.md) | `calculate`, `continue_with`, `last_result`, `clear` | — | M3 |
 | **System** ⬤ | [system.specs.md](system.specs.md) | `volume`, `set_volume`, `mute` ✅ · `turn_on_screen`, `turn_off_screen` | — | M3 |
 | **Radio** ✅ | [radio.specs.md](radio.specs.md) | `play_radio`, `stop_radio` | `shared.stop`, `shared.resume` | M4 |
+| **Memo** ✅ | [memo.specs.md](memo.specs.md) | `create_memo`, `latest_memo`, `oldest_memo`, `next_memo`, `previous_memo`, `close_memo` | — | M5 |
 | Departures | [departures.specs.md](departures.specs.md) | `departures` | — | M4 |
 
 ✅ built · ⬤ partly built. Plus the shared-command catalog, which is not a Sock: [shared-commands.specs.md](shared-commands.specs.md).

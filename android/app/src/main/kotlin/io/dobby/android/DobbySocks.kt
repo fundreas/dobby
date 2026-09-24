@@ -6,6 +6,7 @@ import io.dobby.socks.calculator.CalculatorSock
 import io.dobby.socks.clock.ClockSock
 import io.dobby.socks.conversation.ConversationSock
 import io.dobby.socks.help.HelpSock
+import io.dobby.socks.memo.MemoSock
 import io.dobby.socks.radio.RadioPlayer
 import io.dobby.socks.radio.RadioSock
 import io.dobby.socks.spotify.MusicSearch
@@ -47,6 +48,8 @@ object DobbySocks {
          * (`system.specs.md` §4).
          */
         val system: SystemSock,
+        /** And the open memos, and which one was last read out (`memo.specs.md` §8). */
+        val memo: MemoSock,
         val bindDirectory: (Introspection) -> Unit,
     )
 
@@ -83,6 +86,7 @@ object DobbySocks {
         )
         val tuner = RadioSock(player = radio?.player ?: RadioPlayer.NONE)
         val device = SystemSock(system?.volume ?: VolumeControl.NONE)
+        val notes = MemoSock()
         val socks = buildList {
             add(clock)
             add(music)
@@ -90,9 +94,10 @@ object DobbySocks {
             add(device)
             add(CalculatorSock())
             add(ConversationSock())
+            add(notes)
             add(HelpSock { directory })
             addAll(DevSocks.create())
         }
-        return Wiring(socks, clock, music, tuner, device) { directory = it }
+        return Wiring(socks, clock, music, tuner, device, notes) { directory = it }
     }
 }

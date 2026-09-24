@@ -50,6 +50,7 @@ import io.dobby.android.chat.ChatMessage
 import android.graphics.Bitmap
 import io.dobby.android.chat.Voice
 import io.dobby.socks.clock.ClockState
+import io.dobby.socks.memo.MemoState
 import io.dobby.socks.radio.RadioState
 import io.dobby.socks.spotify.PlayerSnapshot
 
@@ -68,6 +69,7 @@ fun ChatScreen(
     nowPlaying: PlayerSnapshot?,
     artwork: Bitmap?,
     radio: RadioState,
+    memos: MemoState,
     muted: Boolean,
     onStopRadio: () -> Unit,
     onSpotifyPrevious: () -> Unit,
@@ -75,6 +77,7 @@ fun ChatScreen(
     onSpotifyNext: () -> Unit,
     onCloseSpotify: () -> Unit,
     onCancelTimer: (Long) -> Unit,
+    onCloseMemo: (Long) -> Unit,
     onToggleMute: () -> Unit,
     onListen: () -> Unit,
     onAbort: () -> Unit,
@@ -100,6 +103,10 @@ fun ChatScreen(
         // Same rule, and the coordinator guarantees these two are never both drawn: only one
         // Sock can hold the channel (`radio.specs.md` §7).
         RadioCard(radio, onStop = onStopRadio)
+        // Not "only while something is running", unlike the three above: an open memo is open
+        // until somebody closes it, and a list that is only visible while you are asking about
+        // it would be a list nobody is reminded by (`memo.specs.md` §8).
+        MemoCard(memos, onClose = onCloseMemo)
         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
         Conversation(state.messages, Modifier.weight(1f))
         // The speaker button exists only while there is something to silence — see [playing].

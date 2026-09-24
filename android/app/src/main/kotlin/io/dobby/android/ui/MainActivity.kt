@@ -90,6 +90,7 @@ class MainActivity : ComponentActivity() {
                             val artwork by connected.controller.spotifyArtwork
                                 .collectAsStateWithLifecycle()
                             val radio by connected.controller.radio.collectAsStateWithLifecycle()
+                            val memos by connected.controller.memos.collectAsStateWithLifecycle()
                             val muted by connected.controller.muted.collectAsStateWithLifecycle()
                             var settingsOpen by remember { mutableStateOf(false) }
                             var helpOpen by remember { mutableStateOf(false) }
@@ -128,6 +129,7 @@ class MainActivity : ComponentActivity() {
                                     nowPlaying = nowPlaying,
                                     artwork = artwork,
                                     radio = radio,
+                                    memos = memos,
                                     muted = muted,
                                     onStopRadio = { connected.controller.stopRadio() },
                                     onSpotifyPrevious = { connected.controller.spotifyPrevious() },
@@ -137,6 +139,7 @@ class MainActivity : ComponentActivity() {
                                     onSpotifyNext = { connected.controller.spotifyNext() },
                                     onCloseSpotify = { connected.controller.dismissSpotify() },
                                     onCancelTimer = { connected.controller.cancelTimer(it) },
+                                    onCloseMemo = { connected.controller.closeMemo(it) },
                                     onToggleMute = { connected.controller.toggleMute() },
                                     onListen = { connected.controller.listen() },
                                     onAbort = { connected.controller.stopListening() },

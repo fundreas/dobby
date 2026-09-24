@@ -20,6 +20,7 @@ import io.dobby.core.sock.SockResult
 import io.dobby.socks.calculator.CalculatorSock
 import io.dobby.socks.clock.ClockSock
 import io.dobby.socks.conversation.ConversationSock
+import io.dobby.socks.memo.MemoSock
 import io.dobby.socks.radio.RadioSock
 import io.dobby.socks.spotify.SpotifySock
 import io.dobby.socks.system.SystemSock
@@ -68,6 +69,11 @@ object DobbySocks {
             // change a number here — the same reason the terminal's chime prints itself
             // instead of being silent.
             SystemSock(VolumeControl.inMemory()),
+            // The memos live in the config store, which the terminal keeps in memory — so they
+            // are real for the length of a session and gone with it. Everything above the
+            // storage is the same code the panel runs: the walk, the five-minute session and
+            // every sentence.
+            MemoSock(),
             WinkySock(),
             HelpSock { directory },
         )

@@ -31,6 +31,7 @@ import io.dobby.pipeline.tts.VoiceModelState
 import io.dobby.pipeline.tts.VoiceOption
 import io.dobby.pipeline.wakeword.WakeWordOption
 import io.dobby.socks.clock.ClockState
+import io.dobby.socks.memo.MemoState
 import io.dobby.socks.spotify.PlayerSnapshot
 import io.dobby.socks.radio.RadioConfig
 import io.dobby.socks.radio.RadioState
@@ -249,6 +250,17 @@ class DobbyController(
      * name resolution `clock.cancel_timer` needs applies to a finger.
      */
     fun cancelTimer(id: Long): Job = scope.launch { wiring.clock.cancelFromPanel(id) }
+
+    /** The open memos and the one last read out, straight from the Sock (`memo.specs.md` §8). */
+    val memos: StateFlow<MemoState> get() = wiring.memo.state
+
+    /**
+     * The check mark on a memo row: the Sock's own close, run from a finger.
+     *
+     * By id, for the same reason [cancelTimer] is: pointing at a memo says which one, so this
+     * needs neither the memo session nor the five minutes it lives for.
+     */
+    fun closeMemo(id: Long): Job = scope.launch { wiring.memo.closeFromPanel(id) }
 
     /**
      * Whether the room is silent, and the button that changes it (`system.specs.md` §4).

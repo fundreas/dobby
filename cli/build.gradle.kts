@@ -13,6 +13,7 @@ dependencies {
     implementation(project(":socks:spotify"))
     implementation(project(":socks:radio"))
     implementation(project(":socks:system"))
+    implementation(project(":socks:memo"))
 }
 
 application {
