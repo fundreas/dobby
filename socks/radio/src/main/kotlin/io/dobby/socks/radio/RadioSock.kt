@@ -174,6 +174,8 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
     override val shared: List<SharedSubscription> = listOf(
         SharedSubscription(SharedCommands.STOP, priority = STOP_PRIORITY),
         SharedSubscription(SharedCommands.RESUME, priority = RESUME_PRIORITY),
+        SharedSubscription(SharedCommands.WHATS_THE_SONG, priority = NOW_PLAYING_PRIORITY),
+        SharedSubscription(SharedCommands.WHATS_THE_ARTIST, priority = NOW_PLAYING_PRIORITY),
     )
 
     override suspend fun onStart(ctx: SockContext) {
@@ -246,6 +248,15 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
                 else -> SockActivity.INACTIVE
             }
 
+            // ACTIVE whenever a stream is on, with or without a title. A station that sends
+            // no ICY metadata is still the thing the question is about, and "der Sender sagt
+            // gerade nicht, was läuft" is a better answer than Spotify's cache from an hour
+            // ago — which is also the case Spotify's `IDLE`-while-paused exists for: audible
+            // beats loaded. Buffering is not ACTIVE: there is no sound yet, so there is
+            // nothing to ask about.
+            SharedCommands.WHATS_THE_SONG.id, SharedCommands.WHATS_THE_ARTIST.id ->
+                if (state.value is RadioState.Playing) SockActivity.ACTIVE else SockActivity.INACTIVE
+
             else -> SockActivity.INACTIVE
         }
 
@@ -255,6 +266,8 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
             STOP_RADIO -> stopRadio()
             SharedCommands.STOP.id -> stopChain()
             SharedCommands.RESUME.id -> resumeChain()
+            SharedCommands.WHATS_THE_SONG.id -> whatsPlaying(withTitle = true)
+            SharedCommands.WHATS_THE_ARTIST.id -> whatsPlaying(withTitle = false)
             // Unreachable in practice: the dispatcher only routes commands this Sock owns.
             else -> SockResult.NotForMe
         }
@@ -352,6 +365,40 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
     }
 
     /**
+     * `shared.whats_the_song` and `shared.whats_the_artist`
+     * (`shared-commands.specs.md` §5, §6).
+     *
+     * **A pure read of [state], the same field [activityFor] ranks on and the same one the
+     * card draws.** No player call and no network: the ICY title has been arriving on its own
+     * since [onStart], and a question about what is already true has nothing to fetch.
+     *
+     * The answers are word for word Spotify's, which is the whole point of the pair being
+     * shared — "wie heißt das Lied" must not tell you which of the two happens to be playing.
+     * What the radio has and Spotify does not is a third case: a stream whose station sends a
+     * programme name rather than a track ([NowPlaying.split] returns no artist for it), and
+     * one that sends nothing at all.
+     *
+     * @param withTitle true for the song, which names the artist too; false for the artist
+     *   alone, which is the whole of what "wer spielt das" asked.
+     */
+    private fun whatsPlaying(withTitle: Boolean): SockResult {
+        val playing = state.value as? RadioState.Playing ?: return SockResult.NotForMe
+        // Many titles arrive a few seconds after the sound does, so this is a real state and
+        // not an edge case: the stream is up and the station has not said anything yet.
+        val line = playing.nowPlaying?.trim()?.takeIf { it.isNotEmpty() }
+            ?: return SockResult.Spoken(NO_TITLE)
+        val track = NowPlaying.split(line)
+        val artist = track.artist
+        if (!withTitle) {
+            return if (artist == null) SockResult.Spoken(NO_ARTIST) else SockResult.Spoken { "$artist." }
+        }
+        if (artist == null) return SockResult.Spoken { "${track.title}." }
+        return SockResult.Spoken { lang ->
+            if (lang == Lang.EN) "${track.title} by $artist." else "${track.title} von $artist."
+        }
+    }
+
+    /**
      * Stops the stream and gives the channel back.
      *
      * @param remember whether the station survives in [RadioState.Idle], which is what
@@ -444,6 +491,16 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
         /** Behind Spotify's 50 on `shared.resume` (§5). */
         const val RESUME_PRIORITY: Int = 40
 
+        /**
+         * Tied with Spotify on both now-playing chains (§5, §6).
+         *
+         * A tie that cannot be reached: the channel is held by one of them at a time, so at
+         * most one ever reports `ACTIVE`. Written down for the same reason the `shared.stop`
+         * tie is — if that invariant ever breaks, the order should still be decided here and
+         * not by registration order.
+         */
+        const val NOW_PLAYING_PRIORITY: Int = 50
+
         /** The spec's backoff. A shorter ladder takes the first rungs, never the last. */
         val BACKOFF_MS: List<Long> = listOf(1_000, 3_000, 9_000)
 
@@ -469,5 +526,22 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
         val NO_FOCUS: Phrase = Phrase.of("Gerade nicht möglich.", "Not possible right now.")
         val STREAM_DROPPED: Phrase =
             Phrase.of("Der Radiostream ist abgerissen.", "The radio stream dropped.")
+
+        /**
+         * The two answers a stream can give that a Spotify snapshot never has to.
+         *
+         * [NO_TITLE] is a station that sends no ICY metadata, or one whose title has not
+         * arrived yet — both are "the radio is on and I cannot tell you more", and neither is
+         * worth two sentences. [NO_ARTIST] is FM4 and Ö1 on a programme rather than a track:
+         * there is a name, it is just not a person's.
+         */
+        val NO_TITLE: Phrase = Phrase.of(
+            "Der Sender sagt gerade nicht, was läuft.",
+            "The station isn't saying what's on right now.",
+        )
+        val NO_ARTIST: Phrase = Phrase.of(
+            "Der Sender nennt dazu keinen Künstler.",
+            "The station doesn't name an artist for this.",
+        )
     }
 }

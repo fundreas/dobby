@@ -24,8 +24,17 @@ The anti-pattern this replaces: "bare *stopp* belongs to Spotify, everyone else 
 |---|---|---|---|
 | `shared.stop` | — | `FIRST_CONSUMER` | Clock ✅ (100), Radio ✅ (50), Spotify ✅ (50) |
 | `shared.resume` | — | `FIRST_CONSUMER` | Spotify ✅ (50), Radio ✅ (40) |
+| `shared.whats_the_song` | — | `FIRST_CONSUMER` | Spotify ✅ (50), Radio ✅ (50) |
+| `shared.whats_the_artist` | — | `FIRST_CONSUMER` | Spotify ✅ (50), Radio ✅ (50) |
 
-✅ = built. Both chains have every subscriber they were designed around since M4.
+✅ = built. All four chains have every subscriber they were designed around.
+
+The two now-playing chains were `spotify.whats_the_song` and `spotify.whats_the_artist` until
+the Radio turned out to carry the same information — the ICY `StreamTitle` is an artist and a
+title for three of the five stations — and they are the clearest case §1 has yet produced: the
+same sentence, the same answer, and *which source* decided by what is playing rather than by a
+word in the utterance. "Wie heißt das Lied im Radio" is not a thing anybody says at a wall
+panel, so re-wording either side was never an option.
 
 Numbers in brackets are `priority` — used **only** to break ties between Socks reporting the same `SockActivity`.
 
@@ -145,7 +154,175 @@ That third row is the one that justifies the whole design.
 
 ---
 
-## 5. Cross-cutting testing
+## 5. `shared.whats_the_song`
+
+### Definition
+
+| | |
+|---|---|
+| **id** | `shared.whats_the_song` |
+| **params** | none |
+| **description** (Tier 2, German) | Sagt, welcher Titel gerade läuft — mit Künstler. |
+| **chainMode** | `FIRST_CONSUMER` |
+| **unconsumedResponse** | `Spoken("Es läuft gerade nichts.")` |
+
+### 5.1 Tier 1 templates
+
+```
+was ist das für ein (lied|song|titel|stück)
+was für ein (lied|song|titel|stück) ist das
+(wie|welches) (heißt|heisst) (das lied|das stück|die nummer)
+wie (heißt|heisst) (der song|der titel)
+welches (lied|stück) ist das
+welcher (song|titel) ist das
+was (läuft|spielt) (da|hier)?
+welche musik (läuft|spielt)
+wie (heißt|heisst) das
+```
+
+**The articles are written out although `das`, `der` and `die` are fillers.** Skipping drops
+*extra* words from the utterance; it does not make a template's own literals optional. "Wie
+heißt das Lied" needs its `das`, and what the filler list buys is "wie heißt denn gerade das
+Lied" for free — the particles, not the articles.
+
+**Both spellings of `heißt`.** The phonetic tier folds ß to ss and would reach `heisst` anyway,
+but the commonest phrasing in this catalog belongs on the strict first pass rather than on the
+fallback ([README.md](README.md) §6).
+
+**`wie heißt das` is the loosest wording here and resolves to the song, not the artist.**
+Somebody pointing at a speaker with three words is asking what the thing is called, and that
+answer names the artist as well.
+
+### 5.2 Tier 2 examples
+
+| Utterance | Invocation |
+|---|---|
+| was ist das für ein lied | `whats_the_song()` |
+| wie heißt der song | `whats_the_song()` |
+| wie heißt das | `whats_the_song()` |
+| welches lied ist das | `whats_the_song()` |
+| was läuft gerade | `whats_the_song()` |
+| welche musik läuft | `whats_the_song()` |
+
+### 5.3 Subscribers, ranking and behavior
+
+| Sock | Priority | `ACTIVE` when | `IDLE` when | Consumes by |
+|---|---|---|---|---|
+| **Spotify** ✅ | 50 | the cached `PlayerState` has a title or an artist and `isPaused == false` | a track is loaded but paused | `Spoken("{title} von {artist}.")` |
+| **Radio** ✅ | 50 | a stream is `Playing` | never | `Spoken` from the ICY title, split on `" - "` |
+
+- **`IDLE` for a paused Spotify is what makes this chain correct, and it is the one row that
+  differs from §3.3's reasoning.** Pausing a paused player is a no-op, which is why `shared.stop`
+  treats `IDLE` as "pass"; answering about a paused track is not, so here `IDLE` still consumes
+  — it just does it *after* anything audible. The scenario that needs it is ordinary: music
+  paused an hour ago, FM4 on now, "was läuft gerade". Both Socks can answer, and the room can
+  only hear one of them.
+- **The tie at 50 is therefore between an `ACTIVE` and an `IDLE`, and activity outranks
+  priority** — which is the whole ranking rule, not a special case. Two Socks both `ACTIVE`
+  cannot happen: `PlaybackCoordinator` hands the channel to one at a time. The number is
+  written down anyway so the order is decided here rather than by registration order if that
+  invariant ever breaks.
+- **Neither Sock ever speaks its own "nothing is playing".** Both return `NotForMe`, and the
+  sentence comes from `unconsumedResponse`. This is the one behavioural change the promotion
+  made: as an exclusive command, Spotify answered "Auf Spotify läuft gerade nichts" from the
+  top of the chain and would now swallow a question the Radio can answer. Spotify not being
+  installed or not configured passes for the same reason — the standing `Failed` reason belongs
+  to a command that was *addressed* to Spotify.
+- **Buffering is not `ACTIVE` for the Radio.** There is no sound yet, so there is nothing to
+  ask about; `shared.stop` treats the same state as `ACTIVE` because a stop two seconds after
+  "radio fm4" means the thing that is connecting.
+- **Both read a cache and neither does I/O.** Spotify reads the App Remote subscription, the
+  Radio reads its own `RadioState` — the same fields `activityFor` ranks on and the same ones
+  the wall panel draws. A question that opens a connection is a question that can hang for two
+  seconds and then put a consent dialog over its own answer.
+
+### 5.4 Answers
+
+| Case | Consumer | German TTS |
+|---|---|---|
+| Spotify, title and artist | Spotify | "Blinding Lights von The Weeknd." |
+| Spotify, no artist | Spotify | "Blinding Lights." |
+| Radio, ICY `Artist - Title` | Radio | "Voyage Voyage von Desireless." |
+| Radio, programme name only | Radio | "Fivas Ponyhof." |
+| Radio playing, no ICY title yet | Radio | "Der Sender sagt gerade nicht, was läuft." |
+| Spotify paused, radio playing | Radio | the stream — `ACTIVE` outranks Spotify's `IDLE` |
+| Spotify paused, radio stopped | Spotify | the paused track, answered from `IDLE` |
+| Nothing playing anywhere | nobody | "Es läuft gerade nichts." |
+
+`whats_the_song` names the artist too, because "Blinding Lights" on its own is half an answer
+and nobody asks the follow-up out loud.
+
+**The Radio's split is a hyphen with spaces around it, first occurrence wins.** Three of the
+five stations follow ICY's `Artist - Title` convention; FM4 and Ö1 broadcast a programme name
+instead, which has no artist, and Ö1's "Im Zeit-Raum: Judith Mangelsdorf" is why the hyphen
+must be surrounded by spaces to count. A missing separator is *no artist*, never a guess.
+
+---
+
+## 6. `shared.whats_the_artist`
+
+### Definition
+
+| | |
+|---|---|
+| **id** | `shared.whats_the_artist` |
+| **params** | none |
+| **description** (Tier 2, German) | Sagt, wer den Titel spielt, der gerade läuft. |
+| **chainMode** | `FIRST_CONSUMER` |
+| **unconsumedResponse** | `Spoken("Es läuft gerade nichts.")` |
+
+### 6.1 Tier 1 templates
+
+```
+was ist das für ein (künstler|interpret|sänger|artist)
+was ist das für eine (band|sängerin|gruppe)
+wie (heißt|heisst) (der künstler|der interpret|der sänger|der artist)
+wie (heißt|heisst) (die band|die sängerin|die gruppe)
+wer (spielt|singt) (das|den song|das lied|hier)?
+von wem ist (das|der song|das lied|das stück)
+wer ist (der|die) (künstler|interpret|sänger|band|sängerin)
+```
+
+**Bare `wer ist das` is deliberately not claimed.** It is a question about a person at least as
+often as about a song — at a door, in a photo, on the radio news — and nothing in the chain can
+tell which was meant. `wer spielt das` and `wer singt das` name the act of playing and cannot
+be about anything else.
+
+### 6.2 Tier 2 examples
+
+| Utterance | Invocation |
+|---|---|
+| wer spielt das | `whats_the_artist()` |
+| wer singt das | `whats_the_artist()` |
+| wie heißt der künstler | `whats_the_artist()` |
+| was ist das für eine band | `whats_the_artist()` |
+| von wem ist der song | `whats_the_artist()` |
+
+### 6.3 Subscribers, ranking and behavior
+
+Identical to §5.3 — same subscribers, same priorities, same `ACTIVE` conditions, same reasons.
+A Sock that can answer "what is this" can answer "who is this", and one that cannot answer
+either passes.
+
+### 6.4 Answers
+
+| Case | Consumer | German TTS |
+|---|---|---|
+| Spotify, artist known | Spotify | "The Weeknd." |
+| Spotify, no artist | Spotify | "Spotify nennt dazu keinen Künstler." |
+| Radio, ICY `Artist - Title` | Radio | "Desireless." |
+| Radio, programme name only | Radio | "Der Sender nennt dazu keinen Künstler." |
+| Radio playing, no ICY title yet | Radio | "Der Sender sagt gerade nicht, was läuft." |
+| Spotify paused, radio playing | Radio | the stream — `ACTIVE` outranks Spotify's `IDLE` |
+| Nothing playing anywhere | nobody | "Es läuft gerade nichts." |
+
+`whats_the_artist` does **not** name the title, because "wer spielt das" asked one thing and
+got it. The two "keinen Künstler" sentences differ by one word — *Spotify* against *der Sender*
+— and that is deliberate: the answer says where it looked.
+
+---
+
+## 7. Cross-cutting testing
 
 Owned by `core/dispatch`, not by any Sock. The suite is a **matrix**, not a list of examples:
 
@@ -161,16 +338,16 @@ Owned by `core/dispatch`, not by any Sock. The suite is a **matrix**, not a list
 - **No-I/O contract:** a fake `SockContext` whose `http` and App Remote fakes fail the test on any call, driven through a full chain run where every Sock is `INACTIVE`.
 - Registry validation: two Socks subscribing to the same shared id with structurally different params → startup failure.
 
-## 6. Adding a Sock to a chain
+## 8. Adding a Sock to a chain
 
 1. Add the `SharedSubscription` to the Sock, with a priority justified in **its** spec.
 2. Define its `ACTIVE` / `IDLE` / `INACTIVE` conditions in that spec's "Activity" section.
-3. Add a row to §3.3 or §4.3 here, and the resulting scenarios to §3.4.
+3. Add a row to §3.3, §4.3, §5.3 or §6.3 here, and the resulting scenarios to §3.4.
 4. Extend the chain matrix test with the new axis.
 
 Never resolve a new ambiguity by re-wording an existing Sock's templates.
 
-## 7. Open questions / out of scope (v1)
+## 9. Open questions / out of scope (v1)
 
 - **`BROADCAST` mode** is specified but unused. Its intended first customer is `shared.stop_all` ("alles aus" — stop music *and* radio *and* chime in one word). Deliberately not in v1 so the mode ships with a real use case rather than on speculation.
 - `shared.next` / `shared.previous` — a chain of one today (only Spotify can skip). Promote when a second skippable Sock exists (podcasts, playlists); until then `spotify.skip_next` stays exclusive.

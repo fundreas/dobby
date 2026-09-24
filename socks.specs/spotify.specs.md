@@ -136,13 +136,13 @@ must contain every command whether or not a device is present.
 | `spotify.skip_next` | — | Springt zum nächsten Titel. |
 | `spotify.skip_previous` | — | Springt zum vorherigen Titel. |
 | `spotify.restart_song` | — | Spielt den laufenden Titel von vorne. |
-| `spotify.whats_the_song` | — | Sagt, welcher Titel gerade auf Spotify läuft — mit Künstler. |
-| `spotify.whats_the_artist` | — | Sagt, wer den Titel spielt, der gerade auf Spotify läuft. |
 
 `skip_previous` and `restart_song` are the two commands that were missing from a music Sock
-somebody actually talks to. `whats_the_song` and `whats_the_artist` are the two that were
-missing from one somebody *listens* to: every other command in this Sock changes what is
-playing, and these are the only ones that ask about it.
+somebody actually talks to. The two that were missing from one somebody *listens* to —
+"wie heißt das Lied" and "wer spielt das" — started out here as `spotify.whats_the_song` and
+`spotify.whats_the_artist` and are now the shared chains below: the Radio carries the same
+information in its ICY `StreamTitle`, so which source answers depends on what is playing and
+not on a word in the utterance.
 
 ### Shared subscriptions
 
@@ -150,6 +150,8 @@ playing, and these are the only ones that ask about it.
 |---|---|---|
 | `shared.stop` | 50 | Bare "stopp" / "pause" / "aus" — target depends on what is running |
 | `shared.resume` | 50 | Bare "weiter" — a paused song is the likeliest referent |
+| `shared.whats_the_song` | 50 | "Wie heißt das Lied" — Spotify or the radio, whichever is on |
+| `shared.whats_the_artist` | 50 | "Wer spielt das" — same question, half the answer |
 
 Bare stop/pause/resume phrasings are **not** owned by this Sock; they live in
 [shared-commands.specs.md](shared-commands.specs.md). The exclusive `pause`/`resume` commands
@@ -605,71 +607,23 @@ Behavior: `playerApi.seekTo(0)` — a seek, not a re-`play(uri)`, which would re
 
 ---
 
-## 5a. `whats_the_song`, `whats_the_artist`
+## 5a. `shared.whats_the_song`, `shared.whats_the_artist`
 
-The two commands that only read. Both take no params and both answer from the cached snapshot.
+**Specified in [shared-commands.specs.md](shared-commands.specs.md) §5 and §6, not here.** The
+templates, the German answers and the "nothing is playing" sentence are the catalog's; what
+follows is only what this Sock contributes to those two chains.
 
-### Tier 1 templates
+### Activity
 
-`spotify.whats_the_song`:
+`ACTIVE` when the cached snapshot has a title or an artist and is playing. **`IDLE` when that
+track is paused** — which is not the same `IDLE` `shared.stop` reports. There, `IDLE` means
+"pass": pausing a paused player does nothing. Here it means "ask me second": the track is
+loaded, it is on the card, and "what is this" is a perfectly good question about it — but if a
+radio stream is audible in the room right now, that is what the question was about. With
+nothing else running the chain comes back round and the paused track is the answer.
 
-```
-was ist das für ein (lied|song|titel|stück)
-was für ein (lied|song|titel|stück) ist das
-(wie|welches) (heißt|heisst) (das lied|das stück|die nummer)
-wie (heißt|heisst) (der song|der titel)
-welches (lied|stück) ist das
-welcher (song|titel) ist das
-was (läuft|spielt) (da|hier)?
-welche musik (läuft|spielt)
-wie (heißt|heisst) das
-```
-
-`spotify.whats_the_artist`:
-
-```
-was ist das für ein (künstler|interpret|sänger|artist)
-was ist das für eine (band|sängerin|gruppe)
-wie (heißt|heisst) (der künstler|der interpret|der sänger|der artist)
-wie (heißt|heisst) (die band|die sängerin|die gruppe)
-wer (spielt|singt) (das|den song|das lied|hier)?
-von wem ist (das|der song|das lied|das stück)
-wer ist (der|die) (künstler|interpret|sänger|band|sängerin)
-```
-
-**The articles are written out although `das`, `der` and `die` are fillers.** Skipping drops
-*extra* words from the utterance; it does not make a template's own literals optional. "Wie
-heißt das Lied" needs its `das`, and what the filler list buys is "wie heißt denn gerade das
-Lied" for free — the particles, not the articles.
-
-**Both spellings of `heißt`.** The phonetic tier folds ß to ss and would reach `heisst` anyway,
-but the commonest phrasing in this Sock belongs on the strict first pass rather than on the
-fallback (`README.md` §6).
-
-**`wie heißt das` is the loosest wording here and resolves to the song, not the artist.**
-Somebody pointing at a speaker with three words is asking what the thing is called, and that
-answer names the artist as well.
-
-**Bare `wer ist das` is deliberately not claimed** — the one wording from the original request
-that is absent. It is a question about a person at least as often as about a song (at a door,
-in a photo, on the radio news), and this Sock cannot tell which was meant. `wer spielt das` and
-`wer singt das` name the act of playing and cannot be about anything else.
-
-### Utterances → invocation
-
-| Utterance | Invocation |
-|---|---|
-| was ist das für ein lied | `whats_the_song()` |
-| wie heißt der song | `whats_the_song()` |
-| wie heißt das | `whats_the_song()` |
-| welches lied ist das | `whats_the_song()` |
-| was läuft gerade | `whats_the_song()` |
-| welche musik läuft | `whats_the_song()` |
-| wer spielt das | `whats_the_artist()` |
-| wer singt das | `whats_the_artist()` |
-| wie heißt der künstler | `whats_the_artist()` |
-| was ist das für eine band | `whats_the_artist()` |
-| von wem ist der song | `whats_the_artist()` |
+`INACTIVE` when nothing is loaded, when both halves of the snapshot are blank, or when the
+Spotify app is missing or the credentials are absent.
 
 ### Behavior
 
@@ -680,12 +634,16 @@ truth lives — the same cache §6 requires `activityFor` to read and the same o
 draws. A question that opens a connection is a question that can hang for two seconds and then
 put a dialog over its own answer.
 
-The consequence is the one §6 already accepts and writes down: a silently dead App Remote leaves
-a stale cache, and the answer is then the last track it knew about. The subscription's error
-callback clears the cache, which turns most of that window into an honest "nothing is playing".
+**Nothing loaded is `NotForMe`, not a sentence, and not the standing `Failed` reason.** That is
+the one thing the move from exclusive to shared changed here. "Was läuft gerade" while FM4 is
+playing must reach the Radio, and a Sock that answers "Auf Spotify läuft gerade nichts" from
+the top of the chain would swallow it. Not installed and not configured pass for the same
+reason: the standing reason belongs to a command that was *addressed* to Spotify.
 
-Paused or playing makes no difference. The track is loaded, it is on the card, and "what is
-this" is asked about it either way.
+The consequence is the one §6 already accepts and writes down: a silently dead App Remote
+leaves a stale cache, and the answer is then the last track it knew about. The subscription's
+error callback clears the cache, which turns most of that window into an honest pass down the
+chain.
 
 ### Result
 
@@ -695,8 +653,8 @@ this" is asked about it either way.
 | `whats_the_song`, no artist | `Spoken` | "Blinding Lights." |
 | `whats_the_artist` | `Spoken` | "The Weeknd." |
 | `whats_the_artist`, no artist | `Spoken` | "Spotify nennt dazu keinen Künstler." |
-| Nothing loaded | `Spoken` | "Auf Spotify läuft gerade nichts." |
-| Not installed / not configured | `Failed` | the standing reason (§3) |
+| Paused, and the radio is playing | not asked | the Radio answers first (`IDLE` ranks below `ACTIVE`) |
+| Nothing loaded / not installed / not configured | `NotForMe` | the chain's, or the Radio's |
 
 `whats_the_song` names the artist too, because "Blinding Lights" on its own is half an answer
 and nobody asks the follow-up out loud. `whats_the_artist` does **not** name the title, because
@@ -710,8 +668,10 @@ and nobody asks the follow-up out loud. `whats_the_artist` does **not** name the
 |---|---|---|---|
 | `shared.stop` | a track is loaded and `isPaused == false` | a track is loaded but paused | no track loaded (includes "not connected") |
 | `shared.resume` | never — resuming something already playing is a no-op | a track is loaded and paused | no track loaded, or currently playing |
+| `shared.whats_the_song` | a track is loaded with a title or an artist and is **playing** | a track is loaded but paused | no track loaded, both halves blank, not installed, not configured |
+| `shared.whats_the_artist` | as above | never | as above |
 
-Both read the **cached** snapshot from the App Remote subscription
+All four read the **cached** snapshot from the App Remote subscription
 (`playerApi.subscribeToPlayerState`), which the device module keeps in a `StateFlow`.
 `activityFor` never calls into the Spotify app — that is a Binder round-trip and the no-I/O
 contract forbids it.
@@ -740,12 +700,19 @@ Consumes:
 - `shared.stop` while `IDLE` → **`NotForMe`.** Pausing an already-paused player consumes the
   command without doing anything, and would starve a Sock further down the chain.
 - `shared.resume` while `IDLE` → `playerApi.resume()` → `Silent`.
+- `shared.whats_the_song` / `shared.whats_the_artist` while `ACTIVE` → `Spoken`, from the
+  cache, with no connection (§5a).
 - Anything while `INACTIVE` → `NotForMe`, no I/O, no reconnect attempt.
 
-**Priority 50 on both chains**, tied with Radio on `shared.stop` (activity ranking separates them
-in practice — only one can be playing, because `PlaybackCoordinator` enforces it) and ahead of
-Radio's 40 on `shared.resume` (a paused song is the far likelier referent of "weiter" than a radio
-station stopped earlier).
+**Priority 50 on all four chains**, tied with Radio on `shared.stop` and on both now-playing
+chains (activity ranking separates them in practice — only one can be playing, because
+`PlaybackCoordinator` enforces it) and ahead of Radio's 40 on `shared.resume` (a paused song is
+the far likelier referent of "weiter" than a radio station stopped earlier).
+
+One asymmetry worth naming: on the two now-playing chains a stale cache does **not** produce the
+"Ich komme gerade nicht an Spotify ran." above. Those handlers never connect, so there is nothing
+to fail — they read the cache and speak it, and the worst case is an answer one track out of
+date.
 
 ---
 

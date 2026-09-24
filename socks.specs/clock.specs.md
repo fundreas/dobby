@@ -706,7 +706,7 @@ Contributed to `shared.stop`, not owned: `ich hab's gehört`, `ja ja`, `ist gut`
   without, so an unnamed phrasing is always tried first. What they *do* claim is the token
   between those keywords, whatever it is — which is why every name is cleaned before use (§3,
   *Names*) rather than trusted.
-- **`was für ein …` is shared with Spotify, and `heute` is what separates them.** "Was für ein Lied ist das" is `spotify.whats_the_song`; "was für ein Tag ist heute" is `whats_the_date` (§8a). The nouns differ and the date forms require `heute`, so neither reaches the other — and "was für ein schöner Tag", which is somebody talking about the weather, reaches neither.
+- **`was für ein …` is shared with the now-playing chain, and `heute` is what separates them.** "Was für ein Lied ist das" is `shared.whats_the_song`; "was für ein Tag ist heute" is `whats_the_date` (§8a). The nouns differ and the date forms require `heute`, so neither reaches the other — and "was für ein schöner Tag", which is somebody talking about the weather, reaches neither.
 - ⚠️ `stell einen wecker auf 7 uhr` (an alarm at a wall-clock time) currently matches **nothing** — `7 uhr` is not `{amount}{unit}`, and `uhr` is not a unit the follow-up offers either. It falls through to Tier 2 and then to `none`. See §14.
 
 ## 11. Config

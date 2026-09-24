@@ -34,6 +34,8 @@
 |---|---|---|
 | `shared.stop` | 50 | Bare "stopp" / "aus" while the stream is running |
 | `shared.resume` | 40 | Bare "weiter" — below Spotify, because a paused song is the likelier referent |
+| `shared.whats_the_song` | 50 | "Wie heißt das Lied" — the ICY title is an answer to it |
+| `shared.whats_the_artist` | 50 | "Wer spielt das" — the same title, left half only |
 
 See [shared-commands.specs.md](shared-commands.specs.md).
 
@@ -184,6 +186,8 @@ Stop and release the ExoPlayer, release playback focus, **cancel any pending rec
 |---|---|---|---|
 | `shared.stop` | ExoPlayer exists and is playing or buffering | never | player released, or idle/ended |
 | `shared.resume` | never | a station was stopped **in this session** and is remembered | no station history since service start |
+| `shared.whats_the_song` | a stream is `Playing` — with or without an ICY title | never | anything else, including `Buffering` |
+| `shared.whats_the_artist` | as above | never | as above |
 
 Read from the Sock's own `StateFlow<RadioState>` (§7) — no player interrogation, no network. Trivially satisfies the no-I/O contract.
 
@@ -191,13 +195,52 @@ Consumes:
 
 - `shared.stop` while `ACTIVE` → stop + release the player, release focus → `Silent`.
 - `shared.resume` while `IDLE` → restart the remembered station → `Ended()`. Silent like every other way into `tuneTo`, and the earlier "speaks, because buffering reads as a no-op" is gone with it: the station is back within the second the sentence would have taken to say, and the card shows the spinner meanwhile.
+- `shared.whats_the_song` / `shared.whats_the_artist` while `ACTIVE` → `Spoken`, from the ICY title the card already shows (§5a).
 - `INACTIVE` → `NotForMe`, no player construction, no prefetch.
 
 **Priority 50 on `shared.stop`,** tied with Spotify. The tie is theoretical: `PlaybackCoordinator` guarantees only one of them can be `ACTIVE`. It is written down anyway so the ordering is deterministic if that invariant ever breaks.
 
 **Priority 40 on `shared.resume`,** below Spotify's 50. "Weiter" after pausing a song means the song; only if Spotify passes does the last radio station become the sensible referent.
 
+**Priority 50 on both now-playing chains,** tied with Spotify, and unreachable for the same reason the `shared.stop` tie is.
+
 `last_station` is deliberately **session-scoped, not persisted**: after a service restart, "weiter" with no history must be `NotForMe`, not a surprise burst of FM4 at 3 a.m.
+
+---
+
+## 5a. `shared.whats_the_song`, `shared.whats_the_artist`
+
+**Specified in [shared-commands.specs.md](shared-commands.specs.md) §5 and §6, not here.** The templates and the German copy are the catalog's, and they are word for word what Spotify answers — "wie heißt das Lied" must not tell you which of the two happens to be playing. What follows is only what this Sock contributes.
+
+### Where the answer comes from
+
+The ICY `StreamTitle` that §7's card already draws, cleaned by `NowPlaying.clean` and then **split into an artist and a title by `NowPlaying.split`**. No new subscription, no second request, no network: the title has been arriving on its own since `onStart`, and a question about what is already true has nothing to fetch.
+
+**The separator is a hyphen with spaces around it, and the first occurrence wins.**
+
+```
+Desireless - Voyage Voyage             → artist "Desireless", title "Voyage Voyage"
+bebe rexha & faithless - new religion  → artist "bebe rexha & faithless", title "new religion"
+Fivas Ponyhof                          → no artist, title "Fivas Ponyhof"
+Im Zeit-Raum: Judith Mangelsdorf       → no artist, title as it stands
+```
+
+Three of the five stations follow ICY's `Artist - Title` convention; FM4 and Ö1 broadcast a programme name instead, which genuinely has no artist. Ö1's row is why the hyphen has to be surrounded by spaces to count — "Zeit-Raum" is one word. **A missing separator is *no artist*, never a guess**, and never the station's name standing in for one.
+
+Same rule as `clean`: the halves are rendered as they come. Kronehit lower-cases everything and a title-caser gets "Ac/Dc" and "R.e.m." wrong.
+
+### Result
+
+| Case | Result | German TTS |
+|---|---|---|
+| `whats_the_song`, artist and title | `Spoken` | "Voyage Voyage von Desireless." |
+| `whats_the_song`, programme name | `Spoken` | "Fivas Ponyhof." |
+| `whats_the_artist`, artist known | `Spoken` | "Desireless." |
+| `whats_the_artist`, programme name | `Spoken` | "Der Sender nennt dazu keinen Künstler." |
+| Playing, no ICY title yet | `Spoken` | "Der Sender sagt gerade nicht, was läuft." |
+| Not playing | `NotForMe` | the chain's, or Spotify's |
+
+The fifth row is not an edge case. Many titles arrive a few seconds after the sound does, and somebody who says "was läuft" in that window gets a true sentence rather than a pass down a chain to a Spotify cache from an hour ago — which is also why `ACTIVE` does not wait for a title to exist. `Buffering` is the other way round: there is no sound yet, so there is nothing to ask about.
 
 ---
 

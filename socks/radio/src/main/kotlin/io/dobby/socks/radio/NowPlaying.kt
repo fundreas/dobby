@@ -39,4 +39,40 @@ object NowPlaying {
         // already shows in much larger type.
         return stripped.takeIf { it.isNotEmpty() && !it.equals(station.displayName, ignoreCase = true) }
     }
+
+    /**
+     * The cleaned line split into the two halves a question can ask about.
+     *
+     * ICY's one convention is `Artist - Title`, and three of the five stations follow it
+     * exactly ("Desireless - Voyage Voyage"). The other two send a programme name, which has
+     * no artist at all — so a missing separator is [Track.artist] `null` rather than a guess.
+     *
+     * **The separator is a hyphen with spaces around it, and the first one wins.** Ö1's
+     * "Im Zeit-Raum: Judith Mangelsdorf" is a hyphen inside a word and must not split, and
+     * "bebe rexha & faithless - new religion" has exactly one candidate. A title with a second
+     * " - " in it keeps the rest — "Artist - Live - 1978" is one title, not two.
+     */
+    fun split(cleaned: String): Track {
+        for (separator in SEPARATORS) {
+            val at = cleaned.indexOf(separator)
+            if (at <= 0) continue
+            val artist = cleaned.take(at).trim()
+            val title = cleaned.substring(at + separator.length).trim()
+            // A line that is all separator and no halves is not a split worth having.
+            if (artist.isNotEmpty() && title.isNotEmpty()) return Track(artist, title)
+        }
+        return Track(artist = null, title = cleaned)
+    }
+
+    /** The en dash is second because Kronehit and the ORF both send the plain hyphen. */
+    private val SEPARATORS = listOf(" - ", " – ")
+
+    /**
+     * What the stream says is on, as far as it can be told apart.
+     *
+     * [artist] is null for the two stations that broadcast a programme name: there is no
+     * artist in "Fivas Ponyhof", and inventing one from the station name would be worse than
+     * saying so.
+     */
+    data class Track(val artist: String?, val title: String)
 }
