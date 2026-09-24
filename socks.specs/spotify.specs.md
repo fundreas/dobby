@@ -172,6 +172,14 @@ bypass the chain.
 ```
 (spiele|spiel) (den song|das lied|den titel|die playlist) {query}
 (spiele|spiel) (etwas|was|irgendwas) von {query}          → hint = artist_only
+(spiele|spiel|starte|start) spotify                       → query = ""
+spotify (abspielen|starten)                               → query = ""
+(mach|schalt|schalte|leg) spotify (an|auf)                → query = ""
+(spiele|spiel) (die)? musik                               → query = ""
+(mach|schalt|schalte|leg) (die)? musik (an|auf)           → query = ""
+musik (abspielen|starten)                                 → query = ""
+(spiele|spiel) (etwas|was|irgendwas)                      → query = ""
+(spiele|spiel) (etwas|was|irgendwas) musik                → query = ""
 (mach|leg|spiel) {query} (an|auf)
 (spiele|spiel) {query}( ab)?
 (musik|spotify) (an|einschalten)
@@ -180,6 +188,14 @@ bypass the chain.
 Order matters: the bare `{query}` template is greedy and must stay second-to-last;
 `(musik|spotify) an` is last so it cannot swallow "spiele musik von …". `Specificity.ORDER`
 produces this ordering from the templates themselves — it is not declared.
+
+**The eight empty-query templates are closed on purpose, and that is the whole point of them.**
+A slot takes whatever token is sitting there, so before they existed "spiele Spotify" bound the
+query `spotify` and searched the catalogue for the word Spotify; "spiele Musik" searched for
+`musik`, "mach die Musik an" for `die musik`, and "spiele was" for `was`. None of those is a
+thing anybody wanted played — they are sentences *about* playing. Being closed, they sort ahead
+of both slot templates by specificity and bind nothing, which is what makes the empty-query
+behaviour below reachable by the words people actually use for it.
 
 `spiel mir` and `spiele mir` are gone from every branch: "mir" is filler and the matcher skips it
 (M6c). What is **not** gone is any optional in front of a `{query}` slot — skipping happens
@@ -197,6 +213,16 @@ before a keyword, never before a slot ([README §6](README.md#6-template-dsl-tie
 | schbiele bleinding leitz | `play_music(query="bleinding leitz")` — phonetic hit on "spiele" |
 | musik an | `play_music(query="")` |
 | spotify einschalten | `play_music(query="")` |
+| spiele spotify | `play_music(query="")` |
+| spotify starten | `play_music(query="")` |
+| mach spotify an | `play_music(query="")` |
+| spiele musik | `play_music(query="")` |
+| mach die musik an | `play_music(query="")` |
+| spiele was | `play_music(query="")` |
+
+> `spiele musik von queen` still binds `query="musik von queen"` and searches, because the closed
+> `(spiele|spiel) (die)? musik` cannot match an utterance with three more content words in it.
+> Anchoring at both ends is what keeps the two apart.
 
 ### Behavior
 
@@ -211,10 +237,26 @@ before a keyword, never before a slot ([README §6](README.md#6-template-dsl-tie
    reaches Dobby's ExoPlayer through the OS. Turn ducking (M2b) is untouched —
    `requestTransientFocus` → `GAIN_TRANSIENT_MAY_DUCK` is cross-process, so Spotify ducks while
    Dobby speaks and comes back up by itself, which is what makes barge-in over music work at all.
-2. **Empty query:** no Web API call at all. If the cached snapshot has a track and it is paused,
-   `resume()`. Otherwise `resumeHome()` — App Remote's `contentApi.getRecommendedContentItems`,
-   which is the user's own home feed (recently played, their playlists, made-for-you) running
-   inside their session, with none of §1.2's limits. Nothing playable at all → `Failed`.
+2. **Empty query — "spiele Spotify":** no Web API call at all. Three cases, in order:
+   - Cached snapshot has a track and it is **paused** → `resume()`. This is the one people mean:
+     Spotify is sitting in the background on a track somebody paused an hour ago, possibly from
+     Spotify's own UI and with Dobby never having connected, and "spiele Spotify" picks it up
+     where it was left. It works from cold because the snapshot is read *after* the lazy connect,
+     and `connect()` waits (up to `FIRST_STATE_MS`, 1 s) for the subscription's first event
+     before returning — so the track the app is paused on is already in the cache by then.
+   - Cached snapshot has a track and it is **playing** → `Spoken("Läuft.")`, and nothing else.
+     Falling through to the home feed here would *change the track*: "mach mal Musik an" said
+     into a room that already has music is a remark, not an instruction to play something else.
+     Same sentence `spotify.resume` says for the same state.
+   - **No snapshot** → `resumeHome()`, App Remote's `contentApi.getRecommendedContentItems`,
+     which is the user's own home feed (recently played, their playlists, made-for-you) running
+     inside their session, with none of §1.2's limits. In practice that is the same track again:
+     recently-played is what the feed leads with. Nothing playable at all → `Failed`.
+
+   There is deliberately **no separate `spotify.play_spotify` command.** "Continue whatever
+   Spotify was doing" is exactly what `play_music` with no query already meant; a second command
+   would be a second name for one behaviour, and the palette would then have two commands one
+   sentence could plausibly land on.
 3. **Non-empty query:** resolve, then `playerApi.play(uri)`. See §3.1–§3.3.
 4. Connect the App Remote **lazily** on the first music command; on a dead cached connection
    reconnect exactly once before failing. Long-lived connections die overnight, and that is
@@ -462,6 +504,10 @@ All four answer `Silent` on success. The music changing *is* the feedback, and a
 
 ### `spotify.resume` (explicitly addressed)
 
+`weiter mit spotify` / `weiter auf spotify` are here rather than on the chain: they name their
+target, so they bypass `shared.resume` the way every other template in this section does. Bare
+`weiter` stays the chain's.
+
 ```
 (die musik|die wiedergabe|spotify) (weiter|fortsetzen|weiterspielen)
 (spiel|spiele|mach) (die musik|spotify) weiter
@@ -677,6 +723,17 @@ call on every "stopp". What the implementation does add, because it costs nothin
 **subscription's error callback clears the flow to null**, which turns most of that window into a
 correct `INACTIVE`.
 
+**A cold panel therefore does not answer bare "weiter".** Dobby has just started, has never
+connected, and Spotify is sitting in the background on a paused track: the cache is empty, this
+Sock reports `INACTIVE`, the chain runs out and the answer is "Es ist gerade nichts pausiert."
+That is the no-I/O contract doing exactly what it says, and it is not fixable here — an
+`activityFor` that connects is an `activityFor` that takes a second and may put a consent dialog
+up, on every "stopp" as well as every "weiter". The wordings that **name** their target sidestep
+it entirely, because they are exclusive commands and never consult the chain: "spiele Spotify"
+(§3), "spiel die Musik weiter" and "weiter mit Spotify" (§5) all connect first and then look. So
+does the panel's play button (§7). Once anything has connected once, bare "weiter" works for the
+rest of the session.
+
 Consumes:
 
 - `shared.stop` while `ACTIVE` → `playerApi.pause()` → `Silent`.
@@ -738,7 +795,10 @@ talk their way back out of.
 ## 8. Utterance collision surface
 
 Exclusively claimed by this Sock: `spiele`, `spiel`, `mach … an`, `leg … auf`, `musik an`,
-`musik aus`, `spotify …`, `wiedergabe …`, `nächster/nächstes/nächste <song|lied|titel|stück|track>`,
+`musik aus`, `spiele|starte spotify`, `<mach|schalt|leg> spotify <an|auf>`, `spotify <abspielen|starten>`, `spiele (die) musik`,
+`musik <abspielen|starten>`,
+`spiele <etwas|was|irgendwas> (musik)`, `weiter <mit|auf> <spotify|der musik>`, `spotify …`,
+`wiedergabe …`, `nächster/nächstes/nächste <song|lied|titel|stück|track>`,
 `überspringen`, `skip`, `skippen`, `weiter zum nächsten`,
 `vorheriger/vorheriges/vorherige/letzter/letztes/letzte <song|lied|titel|stück|track>`,
 `… zurück`, `zurück zum <vorherigen|letzten> …`, `von vorne`, `von anfang`, `nochmal von vorne`,

@@ -120,12 +120,34 @@ class SpotifySock(
                     "(spiele|spiel) (etwas|was|irgendwas) von {query}",
                     "hint" to QueryHint.ARTIST_ONLY.name.lowercase(),
                 ),
+                // **The empty query, spelled out.** These are closed templates and that is
+                // the whole point of them: "spiele spotify" against `(spiele|spiel) {query}`
+                // binds the query `spotify` and searches the catalogue for the word Spotify,
+                // which is never what anybody meant by it. Same for "spiele musik" (`musik`),
+                // "mach die musik an" (`die musik`) and "spiele was" (`was`) — a slot takes
+                // whatever token is sitting there, and these are the tokens that are *about*
+                // playing rather than a thing to play.
+                //
+                // Ahead of the slot templates in source, though `Specificity.ORDER` already
+                // sorts closed before open and is what actually decides it (§8).
+                pattern("(spiele|spiel|starte|start) spotify"),
+                // No `weiterspielen` here: "spotify weiterspielen" is `spotify.resume`, which
+                // already claims it, and a wording two commands both admit is a coin toss the
+                // registry's filler check refuses to let through.
+                pattern("spotify (abspielen|starten)"),
+                pattern("(mach|schalt|schalte|leg) spotify (an|auf)"),
+                pattern("(spiele|spiel) (die)? musik"),
+                pattern("(mach|schalt|schalte|leg) (die)? musik (an|auf)"),
+                pattern("musik (abspielen|starten)"),
+                pattern("(spiele|spiel) (etwas|was|irgendwas)"),
+                pattern("(spiele|spiel) (etwas|was|irgendwas) musik"),
                 pattern("(mach|leg|spiel) {query} (an|auf)"),
                 pattern("(spiele|spiel) {query}( ab)?"),
                 // Last, so it cannot swallow "spiele musik von ...".
                 pattern("(musik|spotify) (an|einschalten)"),
             ),
-            description = "Spielt Musik auf Spotify ab, optional nach Titel, Künstler oder Playlist.",
+            description = "Spielt Musik auf Spotify ab, optional nach Titel, Künstler oder " +
+                "Playlist. Ohne Angabe läuft das Pausierte weiter, sonst zuletzt Gehörtes.",
             help = CommandHelp(
                 title = "Musik abspielen",
                 detail = "Sucht auf Spotify und spielt ab. Du kannst einen Titel, einen Künstler " +
@@ -133,8 +155,11 @@ class SpotifySock(
                 hints = listOf(
                     "„Spiele etwas von …“ sucht nur nach dem Künstler.",
                     "Sag die Art dazu — „den Song“, „die Playlist“ —, wenn ich sonst das Falsche finde.",
+                    "„Spiele Spotify“ macht da weiter, wo die App stehengeblieben ist.",
                 ),
-                aliases = listOf("musik", "musik abspielen", "musik anmachen", "spotify"),
+                aliases = listOf(
+                    "musik", "musik abspielen", "musik anmachen", "spotify", "spotify starten",
+                ),
             ),
             examples = listOf(
                 Example(
@@ -150,6 +175,14 @@ class SpotifySock(
                 Example("schbiele bleinding leitz", mapOf("query" to "bleinding leitz")),
                 Example("musik an", mapOf("query" to "")),
                 Example("spotify einschalten", mapOf("query" to "")),
+                // The empty query by name: every one of these searched for its own last word
+                // before the closed templates above existed.
+                Example("spiele spotify", mapOf("query" to "")),
+                Example("spotify starten", mapOf("query" to "")),
+                Example("mach spotify an", mapOf("query" to "")),
+                Example("spiele musik", mapOf("query" to "")),
+                Example("mach die musik an", mapOf("query" to "")),
+                Example("spiele was", mapOf("query" to "")),
                 // Paraphrases Tier 1 is meant to miss — few-shots for the LLM tier (M6).
                 Example(
                     "ich hätte gern etwas musik von den beatles",
@@ -168,6 +201,11 @@ class SpotifySock(
                     heldOut = true,
                 ),
                 Example("ich will jetzt musik hören", mapOf("query" to ""), heldOut = true),
+                Example(
+                    "mach da weiter wo spotify aufgehört hat",
+                    mapOf("query" to ""),
+                    matchedByTemplates = false,
+                ),
             ),
         ),
         ExclusiveCommandSpec(
@@ -201,6 +239,9 @@ class SpotifySock(
             templates = patterns(
                 "(die musik|die wiedergabe|spotify) (weiter|fortsetzen|weiterspielen)",
                 "(spiel|spiele|mach) (die musik|spotify) weiter",
+                // Not bare "weiter" — that is `shared.resume`, and the chain decides it. This
+                // one names its target, so it bypasses the chain like every other template here.
+                "weiter (mit|auf) (spotify|der musik|die musik)",
             ),
             description = "Setzt Spotify fort — explizit adressiert.",
             help = CommandHelp(
@@ -211,6 +252,7 @@ class SpotifySock(
             ),
             examples = listOf(
                 Example("spiel die musik weiter"),
+                Example("weiter mit spotify"),
                 Example("spotify fortsetzen"),
                 Example("die wiedergabe weiterspielen"),
                 Example("lass die musik wieder laufen", matchedByTemplates = false),
@@ -507,12 +549,22 @@ class SpotifySock(
      * the App Remote's own home feed is recently-played, their playlists and made-for-you,
      * running inside their session with none of an app token's limits. This is the one place
      * where the auth decision made the behaviour better rather than merely cheaper.
+     *
+     * The snapshot is read *after* [open], which waits for the subscription's first event —
+     * so "spiele Spotify" said to a panel that has never connected still sees the track the
+     * app was paused on and resumes it, rather than starting something else over the top.
+     * Past that wait the cache is empty and the home feed is the honest answer, which in
+     * practice is the same track: recently-played is what it leads with.
      */
     private suspend fun playSomething(): SockResult {
         val snapshot = player.state.value
         if (snapshot != null && snapshot.isPaused) {
             return if (claimAnd { player.resume() }) ended() else SockResult.Failed(UNREACHABLE)
         }
+        // Already playing. Falling through to the home feed here would *change the track* —
+        // "mach mal Musik an" said into a room that already has music is a remark, not an
+        // instruction to play something else. Same sentence `resume` says for the same state.
+        if (snapshot != null) return SockResult.Spoken(RUNNING)
         val name = claimAndReturn { player.resumeHome() } ?: return SockResult.Failed(NOT_FOUND)
         return ended("spotify: playing $name")
     }
