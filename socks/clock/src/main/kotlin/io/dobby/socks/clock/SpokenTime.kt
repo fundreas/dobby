@@ -29,6 +29,17 @@ object SpokenTime {
     /** The dashboard's date line is part of the panel's German UI (`clock.specs.md` §9). */
     private val DATE = DateTimeFormatter.ofPattern("EEEE, d. MMMM", Locale.GERMAN)
 
+    /**
+     * The spoken date, which is the dashboard's line with an article in it (`clock.specs.md` §8a).
+     *
+     * "der" is quoted rather than assembled around the formatter so the whole German form is one
+     * pattern and reads as the sentence it becomes.
+     */
+    private val SPOKEN_DATE_DE = DateTimeFormatter.ofPattern("EEEE, 'der' d. MMMM", Locale.GERMAN)
+
+    /** The month and weekday names only; the day number is spelled with its ordinal below. */
+    private val SPOKEN_DATE_EN = DateTimeFormatter.ofPattern("EEEE, MMMM", Locale.ENGLISH)
+
     fun speak(time: LocalTime, lang: Lang): String {
         if (lang != Lang.EN) return "Es ist ${german(time)}."
         // The English forms end in "a.m."/"p.m.", which is already the full stop — a second
@@ -81,6 +92,33 @@ object SpokenTime {
 
     /** "Donnerstag, 18. September" — the dashboard's date line (`clock.specs.md` §9). */
     fun date(date: LocalDate): String = DATE.format(date)
+
+    /**
+     * "Heute ist Samstag, der 14. Juli." — the answer to "welcher Tag ist heute" (§8a).
+     *
+     * No year, in either language: somebody asking across a kitchen wants the weekday and the
+     * date, and "2026" at the end of every answer is the part nobody was asking about.
+     *
+     * The English day is an ordinal ("July 14th") rather than a bare number, because a TTS
+     * engine handed "July 14" may read it as "July fourteen", which is not a date anybody says.
+     */
+    fun speakDate(date: LocalDate, lang: Lang): String = if (lang == Lang.EN) {
+        "Today is ${SPOKEN_DATE_EN.format(date)} ${ordinal(date.dayOfMonth)}."
+    } else {
+        "Heute ist ${SPOKEN_DATE_DE.format(date)}."
+    }
+
+    /** 1 → "1st", 14 → "14th". Days only, so the teens are the whole of the special case. */
+    private fun ordinal(day: Int): String {
+        val suffix = when {
+            day in TEENS -> "th"
+            day % DECIMAL == 1 -> "st"
+            day % DECIMAL == 2 -> "nd"
+            day % DECIMAL == 3 -> "rd"
+            else -> "th"
+        }
+        return "$day$suffix"
+    }
 
     /** "09:59", or "1:02:03" past the hour — the dashboard's timer countdown. */
     fun countdown(remainingMs: Long): String {
@@ -135,6 +173,10 @@ object SpokenTime {
         return if (wrapped == 0) HOURS_PER_HALF_DAY else wrapped
     }
 
+    /** 11th, 12th, 13th — the days whose ordinal does not follow from their last digit. */
+    private val TEENS = 11..13
+
+    private const val DECIMAL = 10
     private const val QUARTER = 15
     private const val HALF = 30
     private const val THREE_QUARTERS = 45

@@ -219,7 +219,7 @@ One markdown file per Sock in [`socks.specs/`](socks.specs/), authored against [
 |---|---|---|---|
 | Spotify | [`spotify.specs.md`](socks.specs/spotify.specs.md) | `play_music`, `pause`, `resume`, `skip_next`, `skip_previous`, `restart_song` | `shared.stop`, `shared.resume` |
 | Radio | [`radio.specs.md`](socks.specs/radio.specs.md) | `play_radio`, `stop_radio` | `shared.stop`, `shared.resume` |
-| Clock | [`clock.specs.md`](socks.specs/clock.specs.md) | `set_timer`, `cancel_timer`, `cancel_all_timers`, `timer_remaining`, `whats_the_time` | `shared.stop` |
+| Clock | [`clock.specs.md`](socks.specs/clock.specs.md) | `set_timer`, `cancel_timer`, `cancel_all_timers`, `timer_remaining`, `whats_the_time`, `whats_the_date` | `shared.stop` |
 | System | [`system.specs.md`](socks.specs/system.specs.md) | `volume`, `mute`, `turn_on_screen`, `turn_off_screen` | — |
 | Departures | [`departures.specs.md`](socks.specs/departures.specs.md) | `departures` | — |
 | *(catalog)* | [`shared-commands.specs.md`](socks.specs/shared-commands.specs.md) | — | `shared.stop`, `shared.resume` |

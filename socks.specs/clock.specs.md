@@ -1,7 +1,7 @@
 # Sock: Clock
 
 > **Implementation status.** Built in full: `set_timer`, `cancel_timer`, `cancel_all_timers`,
-> `timer_remaining`, `whats_the_time` and the `shared.stop` subscription all ship in
+> `timer_remaining`, `whats_the_time`, `whats_the_date` and the `shared.stop` subscription all ship in
 > `:socks:clock`, with `AlarmManager` behind
 > [`TimerAlarm`](../socks/clock/src/main/kotlin/io/dobby/socks/clock/TimerAlarm.kt) and
 > `SoundPool` behind [`ChimePlayer`](../socks/clock/src/main/kotlin/io/dobby/socks/clock/Chime.kt),
@@ -11,7 +11,10 @@
 > and `cancel_timer` is the second — it asks *which* timer when several are running.
 >
 > **Several timers at once, named or numbered**, since M7. v1 held one timer and said so; the
-> data model always allowed a list and the commands now expose it. Still open: everything in §14.
+> data model always allowed a list and the commands now expose it.
+>
+> **`whats_the_date` (§8a)** is the one command §14 called trivial and left out, now that the
+> panel is asked it often enough to be worth the templates. Still open: everything else in §14.
 
 ## 1. Identity
 
@@ -36,6 +39,7 @@
 | `clock.cancel_all_timers` | — | Bricht alle laufenden Timer ab. |
 | `clock.timer_remaining` | `name: text` *(optional)* | Sagt, wie lange ein Timer oder alle Timer noch laufen. |
 | `clock.whats_the_time` | — | Sagt die aktuelle Uhrzeit. |
+| `clock.whats_the_date` | — | Sagt, welcher Tag heute ist. |
 
 ### Shared subscriptions
 
@@ -567,6 +571,101 @@ Rule: exact hour, quarter past, half (German "halb X" = X−0:30 — get this ri
 
 ---
 
+## 8a. `clock.whats_the_date`
+
+The other half of "what is it right now", and the sibling of §8 in every respect: no params, no
+state, one read of the injected `Clock`. Numbered `8a` rather than `9` because everything from
+§9 down is referenced by number from `ClockSock`, the panel and the other specs, and renumbering
+six sections to insert one is how cross-references rot.
+
+### Tier 1 templates
+
+```
+welcher (tag|wochentag) (haben wir)? (heute)?
+(wievielte|wie vielte) heute
+(wievielte|wie vielte) haben wir (heute)?
+welches datum (haben wir)? (heute)?
+(sag|was ist) (das)? datum
+was (haben wir)? heute für (ein)? (tag|datum)
+was für (ein)? (tag|datum) heute
+what day is it (today|now)?
+(whats|what's|what is) the date (today|now)?
+(whats|what's|what is) (todays|today's) date
+```
+
+**Content words only**, exactly as in §8: "welcher Tag **ist** heute" is the first template plus
+one filler, and the matcher skips filler on the second pass ([README §6](README.md#6-template-dsl-tier-1)).
+Two consequences worth spelling out, because both look like omissions:
+
+- **One `welcher` covers the whole declension.** At seven characters it tolerates one edit, so
+  `welchen`, `welches` and `welche` are the same keyword. Writing them out would be the
+  cross-product the filler pass exists to avoid.
+- **`(haben wir)?` is not filler tolerance.** Neither word is on the filler list — "welchen Tag
+  **haben wir** heute" is the phrasing half of Austria uses, and it has to be in the template or
+  it does not match at all.
+
+`wievielte` is spelled both ways because the recogniser writes it both ways. At nine characters
+it tolerates two edits, which takes `wievielten` and `wievielter` with it.
+
+**`heute` is required wherever `was für ein …` is**, and that is the guard rather than a detail:
+without it, "was für ein Tag" is one fuzzy step from Spotify's "was für ein Lied ist das" (§10),
+and a panel that answers the date when somebody asked about the song is worse than one that
+answers neither.
+
+A **bare `datum`** is deliberately absent, for the reason §8 gives for a bare `zeit`: five
+characters, tolerance 1, and nothing is skipped in front of a one-word template. It is written
+`(sag|was ist) (das)? datum`, the shape `(sag|was ist) (die)? (uhrzeit|zeit)` already has.
+
+English is admitted by the same rule as §8 — no `{x:int}` and no `{x:enum}` slot, so the
+German-only normalizer cannot silently drop a value. `now` is spelled out in the English
+templates: it is on `Fillers.EN`, which nothing reads, and the matcher runs with `Fillers.DE`.
+
+### Utterances → invocation
+
+| Utterance | Invocation |
+|---|---|
+| welcher tag ist heute | `whats_the_date()` — filler pass, "ist" skipped |
+| welchen tag haben wir heute | `whats_the_date()` — strict |
+| welcher wochentag ist heute | `whats_the_date()` — filler pass |
+| der wievielte ist heute | `whats_the_date()` — filler pass, "der ist" skipped |
+| der wie vielte ist heute | `whats_the_date()` — the two-token spelling |
+| den wievielten haben wir heute | `whats_the_date()` — strict, fuzzy on `wievielte` |
+| welches datum haben wir heute | `whats_the_date()` |
+| welches datum ist heute | `whats_the_date()` — filler pass |
+| sag mir das datum | `whats_the_date()` — filler pass, "mir" skipped |
+| was ist heute für ein tag | `whats_the_date()` — filler pass |
+| was für ein tag ist heute | `whats_the_date()` — the other word order, filler pass |
+| what day is it today | `whats_the_date()` |
+| what's the date | `whats_the_date()` |
+| what is todays date | `whats_the_date()` |
+
+### Behavior
+
+Read the system clock in the device's zone, inside the phrase rather than before it — a question
+asked at 23:59:59 is answered with the day it is *spoken* on. Wake the screen for 30 s: the
+dashboard's date line (§9) is the visual half of this answer, exactly as the clock face is for
+§8.
+
+### Result
+
+`Spoken`, weekday and date and nothing else:
+
+| Date | German | English |
+|---|---|---|
+| 2026-07-14 | "Heute ist Samstag, der 14. Juli." | "Today is Saturday, July 14th." |
+| 2026-09-24 | "Heute ist Donnerstag, der 24. September." | "Today is Thursday, September 24th." |
+| 2026-03-01 | "Heute ist Sonntag, der 1. März." | "Today is Sunday, March 1st." |
+
+**No year**, in either language: somebody asking across a kitchen wants the weekday and the
+date, and "2026" on the end of every answer is the part nobody asked about. The day the panel is
+asked *which year* it is, that is a different sentence and it can have its own.
+
+The English day is an **ordinal** — "July 14th", not "July 14" — because a TTS engine handed the
+bare number may read it "July fourteen", which is not a date anybody says. German needs no such
+care: "der 14." is already read as "der vierzehnte".
+
+---
+
 ## 9. State & dashboard
 
 Always-present `DashboardCard` (this Sock owns the panel's clock):
@@ -595,9 +694,9 @@ one going off next — for every caller that means "the timer", which most of th
 
 ## 10. Utterance collision surface
 
-Exclusively claimed: `timer …`, `wecker …`, `wie spät …`, `wie viel uhr …`, `uhrzeit`, `was ist die zeit`, `sag (mir) (die) zeit`, `erinner(e) mich in …`, `stopp/beende/brich … <timer|alarm|wecker|klingeln>`, `alle/sämtliche timer …`, `wie lange … timer … noch`, `wie lange noch` and `wie viel zeit bleibt/ist noch`.
+Exclusively claimed: `timer …`, `wecker …`, `wie spät …`, `wie viel uhr …`, `uhrzeit`, `was ist die zeit`, `sag (mir) (die) zeit`, `welcher (tag|wochentag) …`, `welches datum …`, `(der) wievielte …`, `sag (mir) (das) datum`, `was (für ein) tag/datum … heute`, `erinner(e) mich in …`, `stopp/beende/brich … <timer|alarm|wecker|klingeln>`, `alle/sämtliche timer …`, `wie lange … timer … noch`, `wie lange noch` and `wie viel zeit bleibt/ist noch`.
 
-English, claimed on `whats_the_time` alone (§8): `whats the time`, `what's the time`, `what is the time`, `whats the time now`, `what time is it` — so the keywords `whats`, `what's`, `what`, `is`, `it`, `the`, `time` and `now` are in play, but only in those sequences. **Not** claimed: a bare `zeit` or a bare `time`, for the reason in §8.
+English, claimed on `whats_the_time` (§8) and `whats_the_date` (§8a): `whats the time`, `what's the time`, `what is the time`, `whats the time now`, `what time is it`, `what day is it (today|now)`, `whats/what's/what is the date (today|now)` and `what is todays date` — so the keywords `whats`, `what's`, `what`, `is`, `it`, `the`, `time`, `day`, `date`, `today`, `todays`, `today's` and `now` are in play, but only in those sequences. **Not** claimed: a bare `zeit`, a bare `time`, a bare `datum` or a bare `date`, for the reason in §8.
 
 Contributed to `shared.stop`, not owned: `ich hab's gehört`, `ja ja`, `ist gut` (plus the catalog's bare `stopp` / `pause` / `aus`).
 
@@ -607,6 +706,7 @@ Contributed to `shared.stop`, not owned: `ich hab's gehört`, `ja ja`, `ist gut`
   without, so an unnamed phrasing is always tried first. What they *do* claim is the token
   between those keywords, whatever it is — which is why every name is cleaned before use (§3,
   *Names*) rather than trusted.
+- **`was für ein …` is shared with Spotify, and `heute` is what separates them.** "Was für ein Lied ist das" is `spotify.whats_the_song`; "was für ein Tag ist heute" is `whats_the_date` (§8a). The nouns differ and the date forms require `heute`, so neither reaches the other — and "was für ein schöner Tag", which is somebody talking about the weather, reaches neither.
 - ⚠️ `stell einen wecker auf 7 uhr` (an alarm at a wall-clock time) currently matches **nothing** — `7 uhr` is not `{amount}{unit}`, and `uhr` is not a unit the follow-up offers either. It falls through to Tier 2 and then to `none`. See §14.
 
 ## 11. Config
@@ -654,6 +754,7 @@ not parse is dropped rather than fatal.
 - **Process death with several timers**, named and unnamed: both resumed with their names, ordinals and remaining time; one that came due while dead rings at once; one from hours ago dropped.
 - **The backstop with several timers**: one alarm armed for the earliest deadline, re-armed when that changes, and every timer that came due during a doze ringing when it fires.
 - Time phrasing: a table covering every branch, with 14:30 → "halb 3" explicitly asserted.
+- Date phrasing: both languages against a fixed clock, including the English ordinal at 1st, 2nd, 3rd, 11th–13th and 14th — the branch a bare `%d` would get wrong.
 - Remaining phrasing: a table, incl. 5400 s → "1 Stunde und 30 Minuten", 570 s → "9 Minuten und 30 Sekunden", 45 s → "45 Sekunden", 60 s → "1 Minute".
 - Pure-JVM only; `AlarmManager` sits behind a small interface with a fake.
 
@@ -665,4 +766,4 @@ not parse is dropped rather than fatal.
 - **A long name can outrun the fill decode budget.** `Tier2.MAX_FILL_TOKENS` is 25 and `clock.set_timer`'s worst-case reply — a 40-character name — is about 44, so a paraphrase with a very long name would be truncated mid-JSON. Reported, not enforced, exactly as it already is for `calculator.calculate`; the levers are a per-param length cap in `GrammarGenerator` or a measured `MAX_FILL_TOKENS`. Tier 1 handles named timers without the model at all, so the exposure is paraphrases only.
 - Timers surviving a reboot. A timer does now survive a *process* death (§12), because it must; a reboot clears the alarm and stops the service, and nothing re-arms it.
 - Stopwatch, countdown to a date, world clocks.
-- Date questions ("Welcher Tag ist heute?") — trivial to add, deliberately not in v1's command list.
+- **Dates other than today.** "Welcher Tag ist morgen", "der wievielte ist nächsten Montag" and "wie lange noch bis Weihnachten" are all a different command with a date slot in it, and a date slot is a parser — `whats_the_date` (§8a) reads one clock and says what it read.

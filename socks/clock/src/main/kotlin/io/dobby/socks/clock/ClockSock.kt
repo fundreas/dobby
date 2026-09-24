@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.time.Clock
+import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.util.concurrent.ConcurrentHashMap
@@ -402,6 +403,72 @@ class ClockSock(
                 Example("ich wollte nur wissen wie spät es ist", heldOut = true),
             ),
         ),
+        ExclusiveCommandSpec(
+            id = WHATS_THE_DATE,
+            templates = patterns(
+                // Content words only, as everywhere in this Sock: "welcher tag ist heute" and
+                // "welcher tag ist denn heute" are this template plus filler, and the matcher
+                // skips filler on the second pass (`socks.specs/README.md` §6).
+                //
+                // One "welcher" covers the whole declension. At 7 characters it tolerates one
+                // edit, so "welchen", "welches" and "welche" are the same keyword — writing
+                // them out would be the cross-product the filler pass exists to avoid.
+                //
+                // "(haben wir)?" is not filler tolerance: neither word is on the list, and
+                // "welchen tag haben wir heute" is the phrasing half of Austria uses.
+                "welcher (tag|wochentag) (haben wir)? (heute)?",
+                // "der wievielte ist heute". The recogniser writes the word either way, so
+                // both spellings are keywords; "wievielte" at 9 characters tolerates two
+                // edits and covers "wievielten" and "wievielter" with it.
+                "(wievielte|wie vielte) heute",
+                "(wievielte|wie vielte) haben wir (heute)?",
+                "welches datum (haben wir)? (heute)?",
+                // Mirrors the time's "(sag|was ist) (die)? (uhrzeit|zeit)", down to spelling
+                // out the article: "datum" is 5 characters and would be fuzzed at tolerance 1
+                // as a bare template, and nothing is skipped in front of a one-word template
+                // anyway (`socks.specs/README.md` §6).
+                "(sag|was ist) (das)? datum",
+                // "was ist heute für ein tag", "was haben wir heute für ein datum". "heute"
+                // is required here and that is the point: without it this is "was für ein
+                // lied ist das" territory, which belongs to Spotify.
+                "was (haben wir)? heute für (ein)? (tag|datum)",
+                // The other word order, which needs "heute" at the end rather than in the
+                // middle: "was für ein tag ist heute".
+                "was für (ein)? (tag|datum) heute",
+                // English, by the same rule that admits it on `whats_the_time` (§8): no int
+                // and no enum slot, so the German-only normalizer cannot silently drop a
+                // value on the floor. The answer is still the voice's language, not the
+                // question's.
+                "what day is it (today|now)?",
+                "(whats|what's|what is) the date (today|now)?",
+                "(whats|what's|what is) (todays|today's) date",
+            ),
+            description = "Sagt, welcher Tag heute ist.",
+            help = CommandHelp(
+                title = "Datum",
+                detail = "Sagt, welcher Wochentag heute ist und der wievielte.",
+                hints = listOf("Ohne Jahr — Wochentag und Datum sind, wonach gefragt wird."),
+                aliases = listOf("datum", "tag", "welcher tag ist heute", "wochentag"),
+            ),
+            examples = listOf(
+                Example("welcher tag ist heute"),
+                Example("welchen tag haben wir heute"),
+                Example("welcher wochentag ist heute"),
+                Example("der wievielte ist heute"),
+                Example("den wievielten haben wir heute"),
+                Example("welches datum haben wir heute"),
+                Example("sag mir das datum"),
+                Example("was ist heute für ein tag"),
+                Example("was für ein tag ist heute"),
+                Example("what day is it today"),
+                Example("what's the date"),
+                // Paraphrases Tier 1 is meant to miss — few-shots for the LLM tier (M6).
+                Example("kannst du mir sagen was heute für ein datum ist", matchedByTemplates = false),
+                Example("weißt du welcher tag gerade ist", matchedByTemplates = false),
+                Example("ich hab total den überblick verloren welcher tag ist", heldOut = true),
+                Example("sag mal was steht heute im kalender für ein datum", heldOut = true),
+            ),
+        ),
     )
 
     /**
@@ -466,6 +533,15 @@ class ClockSock(
                 // Read at the moment it is spoken, not at the moment it is dispatched — which
                 // is also why the clock is read inside the phrase and not outside it.
                 SockResult.Spoken { lang -> SpokenTime.speak(LocalTime.now(clock), lang) }
+            }
+
+            WHATS_THE_DATE -> {
+                // The dashboard's date line is the visual half of this one, exactly as the
+                // clock face is for the time.
+                context?.screen?.wakeFor(screenWakeSeconds)
+                // Read inside the phrase for the same reason as above — and here it also means
+                // a question asked at 23:59:59 is answered with the day it is spoken on.
+                SockResult.Spoken { lang -> SpokenTime.speakDate(LocalDate.now(clock), lang) }
             }
 
             SET_TIMER -> setTimer(invocation)
@@ -769,6 +845,7 @@ class ClockSock(
         const val CANCEL_ALL_TIMERS: String = "clock.cancel_all_timers"
         const val TIMER_REMAINING: String = "clock.timer_remaining"
         const val WHATS_THE_TIME: String = "clock.whats_the_time"
+        const val WHATS_THE_DATE: String = "clock.whats_the_date"
 
         const val DEFAULT_SCREEN_WAKE_SECONDS: Int = 30
 
