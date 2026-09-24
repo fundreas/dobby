@@ -14,7 +14,15 @@
 > data model always allowed a list and the commands now expose it.
 >
 > **`whats_the_date` (§8a)** is the one command §14 called trivial and left out, now that the
-> panel is asked it often enough to be worth the templates. Still open: everything else in §14.
+> panel is asked it often enough to be worth the templates.
+>
+> **The calendar, §8b–§8e**: `weekday_of_date`, `date_of_weekday`, `date_in` and `time_until`
+> ship too, which closes §14's "dates other than today" and turns this Sock into the one that
+> owns the calendar as well as the clock. They are four reads of the injected `Clock` and no
+> state at all, which is why they live here rather than in a Sock of their own — a second Sock
+> speaking about dates would have to fight this one for "welcher Tag …". `GermanNumbers` learned
+> to read ordinals out of an `{n:int}` slot for them, and that is the only change outside
+> `:socks:clock`. Still open: everything else in §14.
 
 ## 1. Identity
 
@@ -40,6 +48,10 @@
 | `clock.timer_remaining` | `name: text` *(optional)* | Sagt, wie lange ein Timer oder alle Timer noch laufen. |
 | `clock.whats_the_time` | — | Sagt die aktuelle Uhrzeit. |
 | `clock.whats_the_date` | — | Sagt, welcher Tag heute ist. |
+| `clock.weekday_of_date` | `day: int`, `month: enum` *(optional)* | Sagt, auf welchen Wochentag ein bestimmtes Datum fällt. |
+| `clock.date_of_weekday` | `weekday: enum` | Sagt das Datum des nächsten genannten Wochentags. |
+| `clock.date_in` | `amount: int`, `unit: enum` | Sagt das Datum, das eine bestimmte Zahl von Tagen, Wochen, Monaten oder Jahren in der Zukunft liegt. |
+| `clock.time_until` | `unit: enum` *(optional, `tage`)*, `day: int` *(optional)*, `month: enum` *(optional)*, `weekday: enum` *(optional)* | Zählt, wie viele Tage, Wochen oder Monate es noch bis zu einem Datum oder Wochentag sind. |
 
 ### Shared subscriptions
 
@@ -666,6 +678,359 @@ care: "der 14." is already read as "der vierzehnte".
 
 ---
 
+## 8b. `clock.weekday_of_date`
+
+"Welcher Tag ist der 26.?" — the first of four commands that treat the calendar as something to
+*ask about* rather than merely to read off. Numbered `8b`…`8e` for the reason §8a gives: §9 and
+everything below it are referenced by number from `ClockSock`, the panel and the other specs.
+
+### Params
+
+| Name | Type | Required | Default | Constraints |
+|---|---|---|---|---|
+| `day` | int | yes | — | 1 … 31 |
+| `month` | enum | **no** | — | `januar` \| `jänner` \| `februar` \| `feber` \| `märz` \| … \| `dezember` |
+
+### Which year, and why there is no year slot
+
+**Everything in §8b–§8e resolves forwards, today included.** "Der 14." is the next 14th there
+is; "der 14. Juli" is the next 14 July there is; "Samstag" is the next Saturday, and if that is
+today then the answer is *today*.
+
+No year is ever spoken (§8a) and none is ever asked for, so the only thing a partial date leaves
+open is the direction — and the asymmetry decides it the way it decides everything else in this
+file. Somebody standing in a kitchen asking which day the 14th is has the coming one in mind. A
+panel that answers "today" on the day itself has told them something true and useful; one that
+answers a date eleven months out has answered a question nobody asked.
+
+Two consequences worth spelling out:
+
+- **A month without a 31st is skipped, not clamped.** "Der 31." asked on 1 April is 31 May.
+  Answering "30. April" would be answering a different question.
+- **29 February is searched for, not computed.** The next one can be eight years out
+  (2096 → 2104), so `CalendarDates` scans years rather than assuming four. A formula that
+  assumed four would be wrong about once a century, which is the kind of bug nobody finds.
+
+### Tier 1 templates
+
+```
+welcher (tag|wochentag) (ist|haben wir)? (der|den|dem|am|vom|zum) {day:int} {month:enum}
+(auf)? welcher (tag|wochentag) fällt (der|den|dem|am|vom|zum) {day:int} {month:enum}
+was für (ein)? (tag|wochentag) (ist)? (der|den|dem|am|vom|zum) {day:int} {month:enum}
+was ist (der|den|dem|am|vom|zum) {day:int} {month:enum} für (ein)? (tag|wochentag)
+```
+
+…and the same four again without the `{month:enum}` slot.
+
+**The article is spelled out and that is load-bearing**, not scaffolding left in by accident.
+`der`, `den` and `dem` are on `Fillers.DE`, so the filler pass would happily drop them — but
+filler is skipped in front of a *keyword* and never in front of a slot ([README §6](README.md#6-template-dsl-tier-1)),
+because a slot takes whatever token is sitting there. Without `der` written out, "welcher Tag ist
+der 14." would have to reach `{day:int}` with "der" still in the way.
+
+**One `welcher` covers the declension**, exactly as in §8a: at seven characters it tolerates one
+edit, so `welchen`, `welches` and `welche` are the same keyword. That is what makes "auf
+**welchen** Tag fällt der 24. Dezember" — the phrasing a calendar question is really asked in —
+one template rather than four.
+
+**Ordinals spoken as words are read by the int slot.** "Welcher Tag ist der **vierzehnte**"
+arrives with `vierzehnte` intact, because `Normalizer` only rewrites cardinals. `GermanNumbers.parseOrdinal`
+is reached from `parseSlotValue` and from nowhere else, which is the whole safety argument: "der
+Vierzehnte" is a number wherever an `{n:int}` slot is waiting for one, and is a word everywhere
+else. The declension is trimmed rather than enumerated — `vierzehnte`, `vierzehnten`,
+`vierzehnter` and `vierzehntes` are one stem and four endings.
+
+**`jänner` and `feber` are enum values.** The panel is in an Austrian kitchen and "Jänner" is
+what is said there; at three edits from `januar` the fuzzy tier would never find it. Same for
+`maerz` beside `märz`, for the transcript that arrives without the umlaut.
+
+### No English, here or in §8c–§8e
+
+§8 and §8a carry English templates. These four do not, and the rule is the one in
+[README §6](README.md#6-template-dsl-tier-1): **English is allowed only on commands with no
+`{x:int}` and no `{x:enum}` slot.** The normalizer is German-only, so "fourteenth" would never
+become 14, and the `month`, `weekday` and `unit` candidate sets hold German words, so
+"saturday" reaches nothing. An English template here would match and then silently fail to
+coerce, which is worse than not matching. Recorded so the gap is not read as an oversight.
+
+### Utterances → invocation
+
+| Utterance | Invocation |
+|---|---|
+| welcher tag ist der 26. | `weekday_of_date(day=26)` |
+| welcher wochentag ist der 24. dezember | `weekday_of_date(day=24, month=dezember)` |
+| auf welchen tag fällt der 1. mai | `weekday_of_date(day=1, month=mai)` |
+| was für ein tag ist der 31. oktober | `weekday_of_date(day=31, month=oktober)` |
+| welchen tag haben wir am 14. | `weekday_of_date(day=14)` |
+| was ist der 24. dezember für ein tag | `weekday_of_date(day=24, month=dezember)` |
+| welcher tag ist der vierzehnte | `weekday_of_date(day=14)` — the ordinal, via the int slot |
+| auf welchen wochentag fällt der dritte oktober | `weekday_of_date(day=3, month=oktober)` |
+
+### Behavior
+
+Read the system clock **once**, before the phrase rather than inside it — the one place this
+Sock departs from §8 and §8a. Those two answer with a single instant and can read it at the
+moment they speak; this one has to resolve a date first, and an answer assembled from two
+different "today"s would be worse than one that is a tenth of a second stale. The sentence is
+still built late ([README §2a](README.md#2a-what-a-sock-says-and-in-which-language)). Wake the
+screen for 30 s.
+
+### Result
+
+`Spoken`. Today and tomorrow are said as today and tomorrow, with the date in apposition:
+somebody asking which day the 26th is on the 25th wants to hear "morgen" first and the weekday
+second, because that is the part they can act on.
+
+| Case | German | English |
+|---|---|---|
+| any other day | "Der 26. September ist ein Samstag." | "September 26th is a Saturday." |
+| it is today | "Heute, der 24. September, ist ein Donnerstag." | "Today, September 24th, is a Thursday." |
+| it is tomorrow | "Morgen, der 25. September, ist ein Freitag." | "Tomorrow, September 25th, is a Friday." |
+
+A day no month has — "der 32.", "der 30. Februar" — is `Failed("Dieses Datum kenne ich nicht.")`.
+One sentence for every way a calendar question can fail to name a real day, and deliberately not
+four: from the room's point of view they are the same thing, and a person who said "der 30.
+Februar" does not need to be told which half of it was wrong.
+
+---
+
+## 8c. `clock.date_of_weekday`
+
+The other direction: "wann ist der nächste Samstag?" → the date.
+
+### Params
+
+| Name | Type | Required | Default | Constraints |
+|---|---|---|---|---|
+| `weekday` | enum | yes | — | `montag` … `sonntag`, plus `sonnabend` |
+
+`sonnabend` is a second value rather than a fuzzy neighbour of `samstag`: seven characters
+against nine with four of them different, so the tolerance-1 pass would never find it. One line
+is the only way in.
+
+### Tier 1 templates
+
+```
+wann (ist|haben wir)? (der|den|dem|am|vom|zum)? (nächste|kommende|diese)? {weekday:enum}
+welches datum (ist|hat|haben wir)? (der|…|zum)? (nächste|kommende|diese)? {weekday:enum}
+welcher (tag|wochentag) (ist|haben wir)? (der|…|zum)? (nächste|kommende|diese)? {weekday:enum}
+(der|…|zum)? (wievielte|wie vielte) (ist|haben wir)? (der|…|zum)? (nächste|kommende|diese)? {weekday:enum}
+(auf)? welches datum fällt (der|…|zum)? (nächste|kommende|diese)? {weekday:enum}
+```
+
+**`nächste`, `kommende` and `diese` are not a param.** All three mean the next one there is,
+which is the only thing this command resolves, so there is nothing for a direction slot to say.
+`nächste` at seven characters covers `nächsten` and `nächster` at tolerance 1; `kommende` at
+eight covers its own declension at tolerance 2.
+
+**"Welcher Tag ist der nächste Samstag" belongs here and not in §8b**, although it opens with
+§8b's words. The slot is what tells them apart — a weekday is not an integer — and the enum
+candidate set is closed, so there is no utterance that could satisfy both.
+
+### Utterances → invocation
+
+| Utterance | Invocation |
+|---|---|
+| wann ist der nächste samstag | `date_of_weekday(weekday=samstag)` |
+| wann ist samstag | `date_of_weekday(weekday=samstag)` |
+| wann ist kommenden mittwoch | `date_of_weekday(weekday=mittwoch)` |
+| welches datum ist am freitag | `date_of_weekday(weekday=freitag)` |
+| welches datum haben wir am donnerstag | `date_of_weekday(weekday=donnerstag)` |
+| welcher tag ist der nächste samstag | `date_of_weekday(weekday=samstag)` |
+| der wievielte ist am sonntag | `date_of_weekday(weekday=sonntag)` |
+| auf welches datum fällt der nächste dienstag | `date_of_weekday(weekday=dienstag)` |
+| wann ist sonnabend | `date_of_weekday(weekday=sonnabend)` → spoken as Samstag |
+
+### Result
+
+`Spoken`, the mirror of §8b down to the today/tomorrow forms — the weekday is what was asked, so
+it leads the sentence whatever the date turns out to be.
+
+| Case | German | English |
+|---|---|---|
+| any other day | "Der nächste Samstag ist der 26. September." | "The next Saturday is September 26th." |
+| it is today | "Samstag ist heute, der 24. September." | "Saturday is today, September 24th." |
+| it is tomorrow | "Samstag ist morgen, der 25. September." | "Saturday is tomorrow, September 25th." |
+
+**"Der nächste Samstag" asked on a Saturday is answered "heute", and that is a decision.** German
+famously cannot agree whether "nächsten Samstag" means today's week or the one after, so this
+command does not try to: it resolves forwards with today included, which is never the misleading
+answer. Somebody told "heute" has learnt that today is Saturday; somebody told "in 7 Tagen" when
+they meant today has been sent to the wrong week.
+
+---
+
+## 8d. `clock.date_in`
+
+"Der Wievielte ist heute in 3 Wochen?" — the calendar counted forwards.
+
+### Params
+
+| Name | Type | Required | Default | Constraints |
+|---|---|---|---|---|
+| `amount` | int | yes | — | 1 … 500 |
+| `unit` | enum | yes | — | `tage` \| `wochen` \| `monate` \| `jahre` |
+
+`SpanUnit` is deliberately **not** `TimerUnit`: a timer runs in seconds, minutes and hours and
+never in months, and a calendar question is never about seconds. One shared list would mean
+"erinner mich in 3 Monaten" matching `set_timer` and then failing to coerce, which is the silent
+kind of wrong. As it is, the enum slot rejects it and the palette moves on.
+
+The cap is a guard against a misheard sentence rather than a limit of the arithmetic, exactly as
+`set_timer`'s twelve hours is: "in 3000 Jahren" is a transcript, not a question.
+
+### Tier 1 templates
+
+Static-param forms first — "morgen" and "übermorgen" are this command with the amount spoken as
+a word rather than a number, which is what [README §6](README.md#6-template-dsl-tier-1)'s static
+params are for:
+
+```
+welcher (tag|wochentag) (ist|haben wir)? morgen                → amount=1, unit=tage
+welcher (tag|wochentag) (ist|haben wir)? übermorgen            → amount=2, unit=tage
+(der|…|zum)? (wievielte|wie vielte) (ist|haben wir)? morgen     → amount=1, unit=tage
+(der|…|zum)? (wievielte|wie vielte) (ist|haben wir)? übermorgen → amount=2, unit=tage
+welches datum (ist|hat|haben wir)? morgen                       → amount=1, unit=tage
+welches datum (ist|hat|haben wir)? übermorgen                   → amount=2, unit=tage
+was für (ein)? (tag|datum) (ist)? morgen                        → amount=1, unit=tage
+was (ist|haben wir)? morgen für (ein)? (tag|datum)              → amount=1, unit=tage
+```
+
+and the counted forms:
+
+```
+(der|…|zum)? (wievielte|wie vielte) (ist|haben wir)? (heute)? in {amount:int} {unit:enum}
+welches datum (ist|hat|haben wir)? (heute)? in {amount:int} {unit:enum}
+welcher (tag|wochentag) (ist|haben wir)? (heute)? in {amount:int} {unit:enum}
+was (ist|haben wir)? (heute)? in {amount:int} {unit:enum} für (ein)? (tag|datum)
+was für (ein)? (tag|datum) (ist)? (heute)? in {amount:int} {unit:enum}
+```
+
+**`in` is spelled out and the number sits right behind it.** Same rule as §8b's article: nothing
+is skipped in front of a slot, so the preposition has to be a keyword or the slot would have to
+swallow it.
+
+**"in einer Woche" works without a number word.** `parseSlotValue` accepts the article forms of
+"one" ("ein", "eine", "einer", "einem"), which is the same lenience that makes "timer eine
+minute" resolve to 1 (§3). The unit follows in the singular and the enum matcher folds it —
+"woche" reaches `wochen`, "monaten" reaches `monate`, both at tolerance 1.
+
+### Utterances → invocation
+
+| Utterance | Invocation |
+|---|---|
+| der wievielte ist heute in 3 wochen | `date_in(amount=3, unit=wochen)` |
+| der wievielte ist in einer woche | `date_in(amount=1, unit=wochen)` |
+| welches datum haben wir in 2 monaten | `date_in(amount=2, unit=monate)` |
+| welcher tag ist in 10 tagen | `date_in(amount=10, unit=tage)` |
+| was ist in 10 tagen für ein datum | `date_in(amount=10, unit=tage)` |
+| welches datum ist in einem jahr | `date_in(amount=1, unit=jahre)` |
+| welcher tag ist morgen | `date_in(amount=1, unit=tage)` |
+| welcher tag ist übermorgen | `date_in(amount=2, unit=tage)` |
+| welches datum haben wir morgen | `date_in(amount=1, unit=tage)` |
+| der wievielte ist morgen | `date_in(amount=1, unit=tage)` |
+
+### Result
+
+`Spoken`, weekday and date — the answer to "which day" and "the how-manieth" is the same
+sentence, so there is one.
+
+| Case | German | English |
+|---|---|---|
+| counted | "In 3 Wochen ist Donnerstag, der 15. Oktober." | "In 3 weeks it's Thursday, October 15th." |
+| one day out | "Morgen ist Freitag, der 25. September." | "Tomorrow is Friday, September 25th." |
+| two days out | "Übermorgen ist Samstag, der 26. September." | "The day after tomorrow is Saturday, September 26th." |
+
+One and two days out are spoken as "morgen" and "übermorgen" whichever way they were asked for,
+because those are the words — and "welcher Tag ist morgen" reaches this command through a
+template that fixes the amount, so the answer has to sound like the question.
+
+**"In 3 Tagen", not "in 3 Tage".** German "in" takes the dative and the dative plural takes an
+`-n`, which `Wochen` already has and `Tage`, `Monate` and `Jahre` do not. `SpanUnit.nounDative`
+is the whole of it; `TimerUnit` never needed one because a timer is announced as "Timer läuft:
+10 Minuten", with no preposition in front of the number.
+
+---
+
+## 8e. `clock.time_until`
+
+"Wie viele Tage sind es noch bis zum 24. Dezember?" — the same arithmetic read backwards.
+
+### Params
+
+| Name | Type | Required | Default | Constraints |
+|---|---|---|---|---|
+| `unit` | enum | **no** | `tage` | `tage` \| `wochen` \| `monate` \| `jahre` |
+| `day` | int | **no** | — | 1 … 31 |
+| `month` | enum | **no** | — | as §8b |
+| `weekday` | enum | **no** | — | as §8c |
+
+**One command for both kinds of target.** "Bis Samstag" and "bis zum 24. Dezember" are the same
+question with a different way of naming the day, and splitting them would mean two commands whose
+answers are word for word identical. Which slot was filled decides the German case around the
+answer, and that is the only thing the two branches disagree about. Every template fills one or
+the other, so the all-optional param list is never empty in practice.
+
+`unit` is defaulted rather than required because "wie lange noch bis Samstag" names no unit and
+means days — which is the only unit a two-word answer could be in.
+
+### Tier 1 templates
+
+```
+wie (viele|viel) {unit:enum} (sind|ist)? (es)? (noch)? bis (zum|zur|auf)? (der|…|zum)? {day:int} {month:enum}
+wie (viele|viel) {unit:enum} (sind|ist)? (es)? (noch)? bis (zum|zur|auf)? (der|…|zum)? {day:int}
+wie (viele|viel) {unit:enum} (sind|ist)? (es)? (noch)? bis (zum|zur|auf)? (nächste|kommende|diese)? {weekday:enum}
+wie lange (ist|dauert|geht)? (es)? (noch)? bis (zum|zur|auf)? (der|…|zum)? {day:int} {month:enum}
+wie lange (ist|dauert|geht)? (es)? (noch)? bis (zum|zur|auf)? (der|…|zum)? {day:int}
+wie lange (ist|dauert|geht)? (es)? (noch)? bis (zum|zur|auf)? (nächste|kommende|diese)? {weekday:enum}
+```
+
+**`bis` is what keeps this off `timer_remaining`.** §6 claims the bare "wie lange noch", and it
+is anchored at both ends: an utterance that stops there has nothing left over, and one that goes
+on to "bis Samstag" has two tokens the end anchor will not accept as filler. The templates here
+are also strictly more specific, so the palette reaches them first anyway — but the anchor is the
+argument, and the ordering is the belt to its braces.
+
+`(sind|ist)? (es)?` is spelled out although both words are filler, for the reason
+[README §6](README.md#6-template-dsl-tier-1) gives: "wie viele Tage sind es noch bis …" is the
+commonest phrasing of all, and the commonest phrasing belongs on the strict first pass rather
+than on the rescue.
+
+### Utterances → invocation
+
+| Utterance | Invocation |
+|---|---|
+| wie viele tage sind es noch bis zum 24. dezember | `time_until(unit=tage, day=24, month=dezember)` |
+| wie viele wochen bis zum 1. mai | `time_until(unit=wochen, day=1, month=mai)` |
+| wie viele tage sind es bis samstag | `time_until(unit=tage, weekday=samstag)` |
+| wie viele tage noch bis zum 31. | `time_until(unit=tage, day=31)` |
+| wie viele monate sind es bis zum 1. januar | `time_until(unit=monate, day=1, month=januar)` |
+| wie lange ist es noch bis zum 24. dezember | `time_until(unit=tage, day=24, month=dezember)` — the default unit |
+| wie lange noch bis freitag | `time_until(unit=tage, weekday=freitag)` |
+| wie lange dauert es bis zum 1. mai | `time_until(unit=tage, day=1, month=mai)` |
+
+### Result
+
+`Spoken`. **Two parts at most and the smaller one only when it is not zero** — the rule §6's
+`remaining` already follows for a running timer, and for the same reason: somebody counting the
+days to Christmas wants the number they can act on and one below it, not a stopwatch reading. A
+whole part of zero is dropped entirely, because "0 Monate und 5 Tage" is not an answer anybody
+gives.
+
+| Case | German | English |
+|---|---|---|
+| days | "Noch 91 Tage bis zum 24. Dezember." | "91 days until December 24th." |
+| weeks, with a remainder | "Noch 31 Wochen und 2 Tage bis zum 1. Mai." | "31 weeks and 2 days until May 1st." |
+| months | "Noch 3 Monate und 8 Tage bis zum 1. Jänner." | "3 months and 8 days until January 1st." |
+| a weekday | "Noch 2 Tage bis Samstag." | "2 days until Saturday." |
+| the target is today | "Der 24. September ist heute." / "Samstag ist heute." | "September 24th is today." / "Saturday is today." |
+
+The German sentence is built as "Noch … bis …" and not as "Es sind noch …" on purpose: the
+verbless form needs no agreement, so "Noch 1 Tag bis Freitag" and "Noch 91 Tage bis zum 24.
+Dezember" are one template rather than two.
+
+---
+
 ## 9. State & dashboard
 
 Always-present `DashboardCard` (this Sock owns the panel's clock):
@@ -695,6 +1060,26 @@ one going off next — for every caller that means "the timer", which most of th
 ## 10. Utterance collision surface
 
 Exclusively claimed: `timer …`, `wecker …`, `wie spät …`, `wie viel uhr …`, `uhrzeit`, `was ist die zeit`, `sag (mir) (die) zeit`, `welcher (tag|wochentag) …`, `welches datum …`, `(der) wievielte …`, `sag (mir) (das) datum`, `was (für ein) tag/datum … heute`, `erinner(e) mich in …`, `stopp/beende/brich … <timer|alarm|wecker|klingeln>`, `alle/sämtliche timer …`, `wie lange … timer … noch`, `wie lange noch` and `wie viel zeit bleibt/ist noch`.
+
+Claimed by the calendar commands (§8b–§8e), all of them behind a slot rather than as a bare
+phrase: `welcher (tag|wochentag) … <tag>`, `auf welchen tag fällt …`, `was (ist|für ein) tag …
+<tag>`, `wann ist (der nächste) <wochentag>`, `welches datum … <wochentag>`, `auf welches datum
+fällt …`, `(der) wievielte … <wochentag>`, `… in <n> <tage|wochen|monate|jahre>`, `… morgen`,
+`… übermorgen`, `wie viele <einheit> … bis …` and `wie lange … bis …`.
+
+**The three overlaps inside this Sock, and what separates them.** All three are decided by the
+slot, never by a word, which is why none of them can drift:
+
+| Utterance shape | Goes to | Because |
+|---|---|---|
+| `welcher tag ist heute` | §8a `whats_the_date` | nothing after "ist" but `heute` |
+| `welcher tag ist der 26.` | §8b `weekday_of_date` | an `{int}` where §8a wants nothing |
+| `welcher tag ist der nächste samstag` | §8c `date_of_weekday` | a weekday `{enum}`, which is not an integer |
+| `welcher tag ist morgen` | §8d `date_in` | `morgen` is a keyword, and it fixes `amount=1` |
+
+**`wie lange noch` still belongs to §6**, and `wie lange noch bis …` to §8e. The `bis` anchor is
+the whole of it: §6's template is anchored at both ends, so an utterance that continues past
+"noch" leaves tokens the end anchor will not take as filler.
 
 English, claimed on `whats_the_time` (§8) and `whats_the_date` (§8a): `whats the time`, `what's the time`, `what is the time`, `whats the time now`, `what time is it`, `what day is it (today|now)`, `whats/what's/what is the date (today|now)` and `what is todays date` — so the keywords `whats`, `what's`, `what`, `is`, `it`, `the`, `time`, `day`, `date`, `today`, `todays`, `today's` and `now` are in play, but only in those sequences. **Not** claimed: a bare `zeit`, a bare `time`, a bare `datum` or a bare `date`, for the reason in §8.
 
@@ -755,6 +1140,15 @@ not parse is dropped rather than fatal.
 - **The backstop with several timers**: one alarm armed for the earliest deadline, re-armed when that changes, and every timer that came due during a doze ringing when it fires.
 - Time phrasing: a table covering every branch, with 14:30 → "halb 3" explicitly asserted.
 - Date phrasing: both languages against a fixed clock, including the English ordinal at 1st, 2nd, 3rd, 11th–13th and 14th — the branch a bare `%d` would get wrong.
+- **The calendar (§8b–§8e) against a fixed clock**, which is the only way any of it is testable:
+  the resolution rules (a day the current month has already passed, "der 31." skipping a 30-day
+  month, the next 29 February, a weekday that is today), the German ordinal in an `{n:int}` slot
+  across the irregular stems (`erste`, `dritte`, `siebte`, `achte`) and the `-te`/`-ste` boundary
+  at 19/20, the two-part span with and without a remainder, the dative plural behind "in", and
+  the today/tomorrow branch of every one of the four result tables.
+- **The §10 separation table as routing tests**: the four `welcher tag ist …` utterances, each
+  asserted against the command that owns it, plus `wie lange noch` versus `wie lange noch bis
+  freitag`.
 - Remaining phrasing: a table, incl. 5400 s → "1 Stunde und 30 Minuten", 570 s → "9 Minuten und 30 Sekunden", 45 s → "45 Sekunden", 60 s → "1 Minute".
 - Pure-JVM only; `AlarmManager` sits behind a small interface with a fake.
 
@@ -766,4 +1160,16 @@ not parse is dropped rather than fatal.
 - **A long name can outrun the fill decode budget.** `Tier2.MAX_FILL_TOKENS` is 25 and `clock.set_timer`'s worst-case reply — a 40-character name — is about 44, so a paraphrase with a very long name would be truncated mid-JSON. Reported, not enforced, exactly as it already is for `calculator.calculate`; the levers are a per-param length cap in `GrammarGenerator` or a measured `MAX_FILL_TOKENS`. Tier 1 handles named timers without the model at all, so the exposure is paraphrases only.
 - Timers surviving a reboot. A timer does now survive a *process* death (§12), because it must; a reboot clears the alarm and stops the service, and nothing re-arms it.
 - Stopwatch, countdown to a date, world clocks.
-- **Dates other than today.** "Welcher Tag ist morgen", "der wievielte ist nächsten Montag" and "wie lange noch bis Weihnachten" are all a different command with a date slot in it, and a date slot is a parser — `whats_the_date` (§8a) reads one clock and says what it read.
+- **Backwards dates.** "Welcher Tag **war** der 1. September", "wie lange ist es **her** seit
+  …". §8b–§8e all resolve forwards, today included, and the direction is not a slot. A past date
+  with no year is ambiguous in a way a future one is not — "der 1. September" looking backwards
+  could be three weeks or eleven months ago — so this needs a decision before it needs code.
+- **Compound spans.** "In 2 Wochen und 3 Tagen" is one question and two `{amount} {unit}` pairs;
+  Tier 1 takes one. It is a Tier 2 few-shot on `date_in` today, which is the right place for it
+  until the fallthrough log says otherwise.
+- **Named days.** "Wie lange noch bis Weihnachten", "wann ist Ostern". A fixed-date holiday is a
+  lookup table and a moving one is an algorithm, and both want a `holiday: enum` that nothing
+  else in this Sock has a use for.
+- **A numeric month.** "Der 14.7." normalizes to two integers, and a second `{int}` slot beside
+  the first is one template away — but it is also one misheard sentence away from reading "der
+  14. 7 Uhr" as a date. Deferred until somebody says it.

@@ -16,6 +16,7 @@ import io.dobby.core.sock.SockActivity
 import io.dobby.core.sock.SockContext
 import io.dobby.core.sock.SockResult
 import io.dobby.core.sock.SockStatus
+import io.dobby.core.sock.pattern
 import io.dobby.core.sock.patterns
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -469,6 +470,254 @@ class ClockSock(
                 Example("sag mal was steht heute im kalender für ein datum", heldOut = true),
             ),
         ),
+        ExclusiveCommandSpec(
+            id = WEEKDAY_OF_DATE,
+            params = listOf(
+                ParamSpec("day", ParamType.Integer),
+                // Optional, and the difference between "der 14." and "der 14. Juli" is a year,
+                // not a month: without one the answer is the next 14th there is (§8b).
+                ParamSpec("month", ParamType.Enumeration(MonthName.SPOKEN), required = false),
+            ),
+            templates = patterns(
+                // The month-bearing forms first. Ordering is belt and braces here — a
+                // month-less template cannot match "welcher tag ist der 14 juli" anyway,
+                // because "juli" would be left over at the end anchor and is not filler — but
+                // written this way the list reads in the order somebody would guess it.
+                "welcher (tag|wochentag) (ist|haben wir)? ($ON_THE) {day:int} {month:enum}",
+                // "auf welchen Tag fällt der 24. Dezember" — the phrasing a calendar question
+                // is really asked in. "welcher" covers "welchen" at tolerance 1, so the
+                // declension is not written out (`socks.specs/README.md` §6).
+                "(auf)? welcher (tag|wochentag) fällt ($ON_THE) {day:int} {month:enum}",
+                "was für (ein)? (tag|wochentag) (ist)? ($ON_THE) {day:int} {month:enum}",
+                "was ist ($ON_THE) {day:int} {month:enum} für (ein)? (tag|wochentag)",
+                "welcher (tag|wochentag) (ist|haben wir)? ($ON_THE) {day:int}",
+                "(auf)? welcher (tag|wochentag) fällt ($ON_THE) {day:int}",
+                "was für (ein)? (tag|wochentag) (ist)? ($ON_THE) {day:int}",
+                "was ist ($ON_THE) {day:int} für (ein)? (tag|wochentag)",
+                // No English, and this is the rule rather than an omission: every template
+                // here feeds an `{x:int}` and an `{x:enum}` slot, the normalizer is German-only
+                // and would never turn "fourteenth" into 14, and `MonthName` holds the German
+                // month names. "what day is the 14th" would match nothing, or worse, match and
+                // then fail to coerce (`socks.specs/README.md` §6). §8 and §8a can have English
+                // because they have no slots at all.
+            ),
+            description = "Sagt, auf welchen Wochentag ein bestimmtes Datum fällt.",
+            help = CommandHelp(
+                title = "Wochentag eines Datums",
+                detail = "Sagt, welcher Wochentag ein Datum ist — mit Monat oder ohne.",
+                hints = listOf(
+                    "Ohne Monat meine ich den nächsten, der dieses Datum hat.",
+                    "„Auf welchen Tag fällt der 24. Dezember“ geht auch.",
+                ),
+                aliases = listOf("wochentag", "welcher tag ist der", "datum wochentag"),
+            ),
+            examples = listOf(
+                Example("welcher tag ist der 26.", mapOf("day" to 26)),
+                Example("welcher wochentag ist der 24. dezember", mapOf("day" to 24, "month" to "dezember")),
+                Example("auf welchen tag fällt der 1. mai", mapOf("day" to 1, "month" to "mai")),
+                Example("was für ein tag ist der 31. oktober", mapOf("day" to 31, "month" to "oktober")),
+                Example("welchen tag haben wir am 14.", mapOf("day" to 14)),
+                Example("was ist der 24. dezember für ein tag", mapOf("day" to 24, "month" to "dezember")),
+                // The ordinal spelled out, which is how somebody says it and how Parakeet
+                // writes it back. `GermanNumbers.parseOrdinal` is reached from the int slot and
+                // from nowhere else, so "der Vierzehnte" is a number here and a word elsewhere.
+                Example("welcher tag ist der vierzehnte", mapOf("day" to 14)),
+                Example("auf welchen wochentag fällt der dritte oktober", mapOf("day" to 3, "month" to "oktober")),
+                // Paraphrases Tier 1 is meant to miss — few-shots for the LLM tier (M6).
+                Example(
+                    "sag mal ist heiligabend heuer ein wochentag",
+                    mapOf("day" to 24, "month" to "dezember"),
+                    matchedByTemplates = false,
+                ),
+                Example(
+                    "mein geburtstag ist am 8. märz auf welchen tag fällt der",
+                    mapOf("day" to 8, "month" to "märz"),
+                    matchedByTemplates = false,
+                ),
+                Example("ich will wissen ob der 26. ein wochenende ist", mapOf("day" to 26), heldOut = true),
+                Example("weißt du zufällig auf welchen tag der 20. fällt", mapOf("day" to 20), heldOut = true),
+            ),
+        ),
+        ExclusiveCommandSpec(
+            id = DATE_OF_WEEKDAY,
+            params = listOf(ParamSpec("weekday", ParamType.Enumeration(Weekday.SPOKEN))),
+            templates = patterns(
+                // "nächste" at 7 characters tolerates one edit and therefore covers
+                // "nächsten", "nächster" and "nächstes"; "kommende" at 8 tolerates two. All
+                // three alternatives mean the same thing to this command — the next one there
+                // is — so none of them is a param, and §8c says why that is not a shortcut.
+                "wann (ist|haben wir)? ($ON_THE)? ($UPCOMING)? {weekday:enum}",
+                "welches datum (ist|hat|haben wir)? ($ON_THE)? ($UPCOMING)? {weekday:enum}",
+                // The user's own phrasing: "welcher Tag ist der nächste Samstag" asks for a
+                // date, not for a weekday, and the enum slot is what tells it apart from §8b.
+                "welcher (tag|wochentag) (ist|haben wir)? ($ON_THE)? ($UPCOMING)? {weekday:enum}",
+                "($ON_THE)? ($HOW_MANYETH) (ist|haben wir)? ($ON_THE)? ($UPCOMING)? {weekday:enum}",
+                "(auf)? welches datum fällt ($ON_THE)? ($UPCOMING)? {weekday:enum}",
+                // No English, for the reason spelled out on `weekday_of_date`: `Weekday` holds
+                // the German names, so "saturday" would reach no candidate.
+            ),
+            description = "Sagt das Datum des nächsten genannten Wochentags.",
+            help = CommandHelp(
+                title = "Datum eines Wochentags",
+                detail = "Sagt, den wievielten der nächste Montag, Samstag oder Sonntag hat.",
+                hints = listOf("Ist der genannte Wochentag heute, sage ich „heute“ dazu."),
+                aliases = listOf("wann ist samstag", "datum wochentag", "nächster samstag"),
+            ),
+            examples = listOf(
+                Example("wann ist der nächste samstag", mapOf("weekday" to "samstag")),
+                Example("wann ist samstag", mapOf("weekday" to "samstag")),
+                Example("wann ist kommenden mittwoch", mapOf("weekday" to "mittwoch")),
+                Example("welches datum ist am freitag", mapOf("weekday" to "freitag")),
+                Example("welches datum haben wir am donnerstag", mapOf("weekday" to "donnerstag")),
+                Example("welcher tag ist der nächste samstag", mapOf("weekday" to "samstag")),
+                Example("der wievielte ist am sonntag", mapOf("weekday" to "sonntag")),
+                Example("auf welches datum fällt der nächste dienstag", mapOf("weekday" to "dienstag")),
+                // Paraphrases Tier 1 is meant to miss — few-shots for the LLM tier (M6).
+                Example(
+                    "sag mir bitte den termin vom kommenden samstag",
+                    mapOf("weekday" to "samstag"),
+                    matchedByTemplates = false,
+                ),
+                Example(
+                    "ich brauch das datum für den montag drauf",
+                    mapOf("weekday" to "montag"),
+                    matchedByTemplates = false,
+                ),
+                Example(
+                    "ich hab vergessen welches datum der samstag hat",
+                    mapOf("weekday" to "samstag"),
+                    heldOut = true,
+                ),
+                Example("wann genau fällt der nächste freitag", mapOf("weekday" to "freitag"), heldOut = true),
+            ),
+        ),
+        ExclusiveCommandSpec(
+            id = DATE_IN,
+            params = listOf(
+                ParamSpec("amount", ParamType.Integer),
+                ParamSpec("unit", ParamType.Enumeration(SpanUnit.SPOKEN)),
+            ),
+            templates = listOf(
+                // "morgen" and "übermorgen" are the same question with the amount spoken as a
+                // word rather than a number, so they are static params rather than a second
+                // command (`socks.specs/README.md` §6). They sit first because they are the
+                // shorter sentences and the ones somebody actually says.
+                pattern("welcher (tag|wochentag) (ist|haben wir)? morgen", "amount" to 1, "unit" to "tage"),
+                pattern("welcher (tag|wochentag) (ist|haben wir)? übermorgen", "amount" to 2, "unit" to "tage"),
+                pattern("($ON_THE)? ($HOW_MANYETH) (ist|haben wir)? morgen", "amount" to 1, "unit" to "tage"),
+                pattern("($ON_THE)? ($HOW_MANYETH) (ist|haben wir)? übermorgen", "amount" to 2, "unit" to "tage"),
+                pattern("welches datum (ist|hat|haben wir)? morgen", "amount" to 1, "unit" to "tage"),
+                pattern("welches datum (ist|hat|haben wir)? übermorgen", "amount" to 2, "unit" to "tage"),
+                pattern("was für (ein)? (tag|datum) (ist)? morgen", "amount" to 1, "unit" to "tage"),
+                pattern("was (ist|haben wir)? morgen für (ein)? (tag|datum)", "amount" to 1, "unit" to "tage"),
+            ) + patterns(
+                // "in" is a keyword and the number sits right behind it, which is the one
+                // ordering constraint here: filler is skipped in front of a keyword and never
+                // in front of a slot, so the preposition has to be spelled out.
+                "($ON_THE)? ($HOW_MANYETH) (ist|haben wir)? (heute)? in {amount:int} {unit:enum}",
+                "welches datum (ist|hat|haben wir)? (heute)? in {amount:int} {unit:enum}",
+                "welcher (tag|wochentag) (ist|haben wir)? (heute)? in {amount:int} {unit:enum}",
+                "was (ist|haben wir)? (heute)? in {amount:int} {unit:enum} für (ein)? (tag|datum)",
+                "was für (ein)? (tag|datum) (ist)? (heute)? in {amount:int} {unit:enum}",
+            ),
+            description = "Sagt das Datum, das eine bestimmte Zahl von Tagen, Wochen, Monaten oder Jahren in der Zukunft liegt.",
+            help = CommandHelp(
+                title = "Datum in der Zukunft",
+                detail = "Rechnet vom heutigen Tag aus vorwärts und sagt Wochentag und Datum.",
+                hints = listOf(
+                    "Tage, Wochen, Monate und Jahre — „in 3 Wochen“, „in einem Monat“.",
+                    "„Welcher Tag ist morgen“ und „übermorgen“ gehen auch.",
+                ),
+                aliases = listOf("datum in", "welcher tag ist morgen", "in drei wochen"),
+            ),
+            examples = listOf(
+                Example("der wievielte ist heute in 3 wochen", mapOf("amount" to 3, "unit" to "wochen")),
+                Example("der wievielte ist in einer woche", mapOf("amount" to 1, "unit" to "wochen")),
+                Example("welches datum haben wir in 2 monaten", mapOf("amount" to 2, "unit" to "monate")),
+                Example("welcher tag ist in 10 tagen", mapOf("amount" to 10, "unit" to "tage")),
+                Example("was ist in 10 tagen für ein datum", mapOf("amount" to 10, "unit" to "tage")),
+                Example("welches datum ist in einem jahr", mapOf("amount" to 1, "unit" to "jahre")),
+                Example("welcher tag ist morgen", mapOf("amount" to 1, "unit" to "tage")),
+                Example("welcher tag ist übermorgen", mapOf("amount" to 2, "unit" to "tage")),
+                Example("welches datum haben wir morgen", mapOf("amount" to 1, "unit" to "tage")),
+                Example("der wievielte ist morgen", mapOf("amount" to 1, "unit" to "tage")),
+                // Paraphrases Tier 1 is meant to miss — few-shots for the LLM tier (M6).
+                Example(
+                    "was ist das datum heute in 2 wochen und 3 tagen",
+                    mapOf("amount" to 17, "unit" to "tage"),
+                    matchedByTemplates = false,
+                ),
+                Example(
+                    "der urlaub geht in 6 wochen los welches datum ist das",
+                    mapOf("amount" to 6, "unit" to "wochen"),
+                    matchedByTemplates = false,
+                ),
+                Example("sag mal was für ein datum ist in 100 tagen", mapOf("amount" to 100, "unit" to "tage"), heldOut = true),
+                Example("wenn ich in einem halben jahr wieder frage welcher tag ist dann", mapOf("amount" to 6, "unit" to "monate"), heldOut = true),
+            ),
+        ),
+        ExclusiveCommandSpec(
+            id = TIME_UNTIL,
+            params = listOf(
+                // Defaulted rather than required: "wie lange noch bis Samstag" names no unit
+                // and means days, which is the only unit a two-word answer could be in.
+                ParamSpec("unit", ParamType.Enumeration(SpanUnit.SPOKEN), required = false, default = "tage"),
+                ParamSpec("day", ParamType.Integer, required = false),
+                ParamSpec("month", ParamType.Enumeration(MonthName.SPOKEN), required = false),
+                ParamSpec("weekday", ParamType.Enumeration(Weekday.SPOKEN), required = false),
+            ),
+            templates = patterns(
+                "$HOW_MANY {unit:enum} (sind|ist)? (es)? (noch)? $UNTIL ($ON_THE)? {day:int} {month:enum}",
+                "$HOW_MANY {unit:enum} (sind|ist)? (es)? (noch)? $UNTIL ($ON_THE)? {day:int}",
+                "$HOW_MANY {unit:enum} (sind|ist)? (es)? (noch)? $UNTIL ($UPCOMING)? {weekday:enum}",
+                // "wie lange" with no unit. The `bis` anchor is what keeps this off
+                // `timer_remaining`'s "wie lange noch": an utterance that ends there has
+                // nothing left over, and one that goes on to "bis Samstag" has two tokens the
+                // end anchor will not accept as filler.
+                "wie lange (ist|dauert|geht)? (es)? (noch)? $UNTIL ($ON_THE)? {day:int} {month:enum}",
+                "wie lange (ist|dauert|geht)? (es)? (noch)? $UNTIL ($ON_THE)? {day:int}",
+                "wie lange (ist|dauert|geht)? (es)? (noch)? $UNTIL ($UPCOMING)? {weekday:enum}",
+            ),
+            description = "Zählt, wie viele Tage, Wochen oder Monate es noch bis zu einem Datum oder Wochentag sind.",
+            help = CommandHelp(
+                title = "Countdown bis zu einem Datum",
+                detail = "Zählt von heute bis zu einem Datum oder dem nächsten genannten Wochentag.",
+                hints = listOf(
+                    "Ohne Einheit zähle ich in Tagen.",
+                    "Wochen, Monate und Jahre bekommen den Rest dazu: „13 Wochen und 2 Tage“.",
+                ),
+                aliases = listOf("countdown", "wie viele tage bis", "wie lange bis"),
+            ),
+            examples = listOf(
+                Example(
+                    "wie viele tage sind es noch bis zum 24. dezember",
+                    mapOf("unit" to "tage", "day" to 24, "month" to "dezember"),
+                ),
+                Example("wie viele wochen bis zum 1. mai", mapOf("unit" to "wochen", "day" to 1, "month" to "mai")),
+                Example("wie viele tage sind es bis samstag", mapOf("unit" to "tage", "weekday" to "samstag")),
+                Example("wie viele tage noch bis zum 31.", mapOf("unit" to "tage", "day" to 31)),
+                Example("wie viele monate sind es bis zum 1. januar", mapOf("unit" to "monate", "day" to 1, "month" to "januar")),
+                Example(
+                    "wie lange ist es noch bis zum 24. dezember",
+                    mapOf("unit" to "tage", "day" to 24, "month" to "dezember"),
+                ),
+                Example("wie lange noch bis freitag", mapOf("unit" to "tage", "weekday" to "freitag")),
+                Example("wie lange dauert es bis zum 1. mai", mapOf("unit" to "tage", "day" to 1, "month" to "mai")),
+                // Paraphrases Tier 1 is meant to miss — few-shots for the LLM tier (M6).
+                Example(
+                    "wie viel zeit bleibt mir noch bis weihnachten",
+                    mapOf("unit" to "tage", "day" to 24, "month" to "dezember"),
+                    matchedByTemplates = false,
+                ),
+                Example(
+                    "sind es noch viele tage bis zum ersten mai",
+                    mapOf("unit" to "tage", "day" to 1, "month" to "mai"),
+                    matchedByTemplates = false,
+                ),
+                Example("ich zähle die tage bis zum 15. august wie viele sind es", mapOf("unit" to "tage", "day" to 15, "month" to "august"), heldOut = true),
+                Example("in wie vielen wochen ist eigentlich der 3. oktober", mapOf("unit" to "wochen", "day" to 3, "month" to "oktober"), heldOut = true),
+            ),
+        ),
     )
 
     /**
@@ -544,6 +793,14 @@ class ClockSock(
                 SockResult.Spoken { lang -> SpokenTime.speakDate(LocalDate.now(clock), lang) }
             }
 
+            WEEKDAY_OF_DATE -> weekdayOfDate(invocation)
+
+            DATE_OF_WEEKDAY -> dateOfWeekday(invocation)
+
+            DATE_IN -> dateIn(invocation)
+
+            TIME_UNTIL -> timeUntil(invocation)
+
             SET_TIMER -> setTimer(invocation)
 
             CANCEL_TIMER -> cancelTimer(invocation)
@@ -558,6 +815,103 @@ class ClockSock(
             // Reported as a bug rather than silently swallowed.
             else -> SockResult.NotForMe
         }
+
+    /**
+     * `clock.weekday_of_date` (§8b) — "welcher Tag ist der 26.?"
+     *
+     * The clock is read **once**, before the phrase rather than inside it, and that is the one
+     * place this Sock departs from §8 and §8a. Those two answer with a single instant and can
+     * read it at the moment they speak; this one has to resolve a date first, and an answer
+     * assembled from two different "today"s would be worse than one that is a tenth of a second
+     * stale. The date is resolved here, the sentence is still built late (`README` §2a).
+     */
+    private fun weekdayOfDate(invocation: CommandInvocation): SockResult {
+        val today = LocalDate.now(clock)
+        val day = invocation.intOrNull("day") ?: return SockResult.Failed(BAD_DATE)
+        val date = resolveDate(today, day, monthOf(invocation)) ?: return SockResult.Failed(BAD_DATE)
+        context?.screen?.wakeFor(screenWakeSeconds)
+        return SockResult.Spoken { lang -> SpokenTime.speakWeekdayOf(date, today, lang) }
+    }
+
+    /** `clock.date_of_weekday` (§8c) — "wann ist der nächste Samstag?" */
+    private fun dateOfWeekday(invocation: CommandInvocation): SockResult {
+        val today = LocalDate.now(clock)
+        val weekday = weekdayOf(invocation) ?: return SockResult.Failed(BAD_DATE)
+        val date = CalendarDates.nextWeekday(today, weekday.day)
+        context?.screen?.wakeFor(screenWakeSeconds)
+        return SockResult.Spoken { lang -> SpokenTime.speakDateOfWeekday(date, today, lang) }
+    }
+
+    /** `clock.date_in` (§8d) — "der Wievielte ist heute in 3 Wochen?", and "morgen". */
+    private fun dateIn(invocation: CommandInvocation): SockResult {
+        val today = LocalDate.now(clock)
+        val amount = invocation.intOrNull("amount") ?: return SockResult.Failed(BAD_DATE)
+        val unit = invocation.textOrNull("unit")?.let(SpanUnit::of) ?: return SockResult.Failed(BAD_DATE)
+        val date = CalendarDates.plus(today, amount, unit) ?: return SockResult.Failed(BAD_DATE)
+        context?.screen?.wakeFor(screenWakeSeconds)
+        return SockResult.Spoken { lang -> SpokenTime.speakDateIn(date, today, amount, unit, lang) }
+    }
+
+    /**
+     * `clock.time_until` (§8e) — "wie viele Tage sind es noch bis zum 24. Dezember?"
+     *
+     * One command for both kinds of target, because "bis Samstag" and "bis zum 24. Dezember"
+     * are the same question with a different way of naming the day. Which slot was filled is
+     * what decides the German case around the answer, and that is the only thing the two
+     * branches below disagree about.
+     */
+    private fun timeUntil(invocation: CommandInvocation): SockResult {
+        val today = LocalDate.now(clock)
+        val unit = invocation.textOrNull("unit")?.let(SpanUnit::of) ?: SpanUnit.TAGE
+        val weekday = weekdayOf(invocation)
+        val target = when {
+            weekday != null -> CalendarDates.nextWeekday(today, weekday.day)
+            else -> invocation.intOrNull("day")?.let { resolveDate(today, it, monthOf(invocation)) }
+        } ?: return SockResult.Failed(BAD_DATE)
+        context?.screen?.wakeFor(screenWakeSeconds)
+        return SockResult.Spoken { lang ->
+            val english = lang == Lang.EN
+            val date = SpokenTime.dayAndMonth(target, lang)
+            // Nominative for "… ist heute", dative behind "bis". English needs neither, which
+            // is why the two are built here and not in `SpokenTime`.
+            val subject = when {
+                weekday != null -> SpokenTime.weekday(target, lang)
+                english -> date
+                else -> "Der $date"
+            }
+            when {
+                target == today && english -> "$subject is today."
+                target == today -> "$subject ist heute."
+                else -> {
+                    val until = when {
+                        weekday != null -> SpokenTime.weekday(target, lang)
+                        english -> date
+                        else -> "zum $date"
+                    }
+                    val span = SpokenTime.span(today, target, unit, lang)
+                    if (english) "$span until $until." else "Noch $span bis $until."
+                }
+            }
+        }
+    }
+
+    /**
+     * The date somebody meant by a day number and maybe a month (§8b).
+     *
+     * Forwards, today included, in both shapes — the reasoning is on [CalendarDates].
+     */
+    private fun resolveDate(today: LocalDate, day: Int, month: MonthName?): LocalDate? =
+        if (month == null) {
+            CalendarDates.nextWithDay(today, day)
+        } else {
+            CalendarDates.nextWithMonthDay(today, month.month, day)
+        }
+
+    private fun monthOf(invocation: CommandInvocation): MonthName? =
+        invocation.textOrNull("month")?.let(MonthName::of)
+
+    private fun weekdayOf(invocation: CommandInvocation): Weekday? =
+        invocation.textOrNull("weekday")?.let(Weekday::of)
 
     /**
      * `clock.set_timer`, in one or in two utterances.
@@ -846,6 +1200,10 @@ class ClockSock(
         const val TIMER_REMAINING: String = "clock.timer_remaining"
         const val WHATS_THE_TIME: String = "clock.whats_the_time"
         const val WHATS_THE_DATE: String = "clock.whats_the_date"
+        const val WEEKDAY_OF_DATE: String = "clock.weekday_of_date"
+        const val DATE_OF_WEEKDAY: String = "clock.date_of_weekday"
+        const val DATE_IN: String = "clock.date_in"
+        const val TIME_UNTIL: String = "clock.time_until"
 
         const val DEFAULT_SCREEN_WAKE_SECONDS: Int = 30
 
@@ -865,6 +1223,17 @@ class ClockSock(
             "I can't run more than ${TimerEngine.MAX_TIMERS} timers at once.",
         )
 
+        /**
+         * §8b–§8e. One phrase for every way a calendar question can fail to name a real day.
+         *
+         * "Der 32." and "der 30. Februar" are the whole of it, plus a span past the horizon.
+         * Deliberately one sentence and not four: they are all the same thing from the room's
+         * point of view — the panel did not understand the date — and a person who said "der
+         * 30. Februar" does not need to be told which half of it was wrong.
+         */
+        val BAD_DATE: Phrase =
+            Phrase.of("Dieses Datum kenne ich nicht.", "I don't know that date.")
+
         /** §4 and §6. [name] arrives lowercase from the matcher and is spoken the way it is written. */
         fun noSuchTimer(name: String): Phrase = Phrase { lang ->
             val display = TimerNames.display(name)
@@ -880,6 +1249,35 @@ class ClockSock(
          * unnamed shape of the same command and drifting apart would be a silent hole.
          */
         private const val SET_VERBS = "stell|stelle|setz|setze|mach|neuer|neuen|neue|erstell|erstelle|starte|start"
+
+        /**
+         * The articles and prepositions that stand in front of a spoken day number.
+         *
+         * Most of them are on [io.dobby.core.nlu.Fillers.DE], and they are written out anyway:
+         * skipping happens in front of a *keyword* and never in front of a slot, so without
+         * "der" spelled out here "welcher Tag ist der 14." would have to reach the `{day:int}`
+         * slot with "der" still sitting in it (`socks.specs/README.md` §6).
+         */
+        private const val ON_THE = "der|den|dem|am|vom|zum"
+
+        /**
+         * "der nächste Samstag", "kommenden Samstag", "diesen Samstag".
+         *
+         * All three mean the next one there is, which is why none of them is a param: §8c
+         * resolves forwards and today counts, so there is nothing for a direction slot to say.
+         * "nächste" at 7 characters covers "nächsten" and "nächster" at tolerance 1, and
+         * "kommende" at 8 covers its own declension at tolerance 2.
+         */
+        private const val UPCOMING = "nächste|kommende|diese"
+
+        /** "der wievielte", written both ways because the recogniser writes it both ways (§8a). */
+        private const val HOW_MANYETH = "wievielte|wie vielte"
+
+        /** "wie viele Tage" — and "wie viel Tage", which is what half the country says. */
+        private const val HOW_MANY = "wie (viele|viel)"
+
+        /** The anchor that keeps §8e off `timer_remaining`'s "wie lange noch". */
+        private const val UNTIL = "bis (zum|zur|auf)?"
         private const val CANCEL_VERBS = "stoppen|abbrechen|löschen|beenden|abschalten"
         private const val CANCEL_PREFIX = "stopp|stoppe|brich|breche|lösch|lösche|beende"
         private const val RUNS_SINGULAR = "geht|läuft|dauert"

@@ -3,7 +3,10 @@ package io.dobby.socks.clock
 import io.dobby.core.sock.Lang
 import java.time.LocalDate
 import java.time.LocalTime
+import java.time.Period
 import java.time.format.DateTimeFormatter
+import java.time.format.TextStyle
+import java.time.temporal.ChronoUnit
 import java.util.Locale
 import kotlin.math.max
 
@@ -39,6 +42,11 @@ object SpokenTime {
 
     /** The month and weekday names only; the day number is spelled with its ordinal below. */
     private val SPOKEN_DATE_EN = DateTimeFormatter.ofPattern("EEEE, MMMM", Locale.ENGLISH)
+
+    /** A date with no weekday and no article — the calendar commands decline it themselves. */
+    private val DAY_MONTH_DE = DateTimeFormatter.ofPattern("d. MMMM", Locale.GERMAN)
+
+    private val MONTH_EN = DateTimeFormatter.ofPattern("MMMM", Locale.ENGLISH)
 
     fun speak(time: LocalTime, lang: Lang): String {
         if (lang != Lang.EN) return "Es ist ${german(time)}."
@@ -106,6 +114,119 @@ object SpokenTime {
         "Today is ${SPOKEN_DATE_EN.format(date)} ${ordinal(date.dayOfMonth)}."
     } else {
         "Heute ist ${SPOKEN_DATE_DE.format(date)}."
+    }
+
+    /**
+     * "26. September" / "September 26th" — a date the way it sits *inside* a sentence.
+     *
+     * No article and no weekday, because the four calendar commands (§8b–§8e) each need it in a
+     * different case: "der 26. September ist ein Samstag", "bis zum 24. Dezember", "Samstag ist
+     * heute, der 24. September". German declension is the caller's business; the date is not.
+     */
+    fun dayAndMonth(date: LocalDate, lang: Lang): String = if (lang == Lang.EN) {
+        "${MONTH_EN.format(date)} ${ordinal(date.dayOfMonth)}"
+    } else {
+        DAY_MONTH_DE.format(date)
+    }
+
+    /** "Samstag" / "Saturday" — the weekday on its own. */
+    fun weekday(date: LocalDate, lang: Lang): String =
+        date.dayOfWeek.getDisplayName(TextStyle.FULL, if (lang == Lang.EN) Locale.ENGLISH else Locale.GERMAN)
+
+    /**
+     * "Der 26. September ist ein Samstag." — the answer to "welcher Tag ist der 26.?" (§8b).
+     *
+     * Today and tomorrow are said as today and tomorrow, with the date in apposition. Somebody
+     * who asks which day the 26th is on the 25th is told "morgen" first and the weekday second,
+     * because that is the part of the answer they can act on.
+     */
+    fun speakWeekdayOf(date: LocalDate, today: LocalDate, lang: Lang): String {
+        val day = dayAndMonth(date, lang)
+        val name = weekday(date, lang)
+        val english = lang == Lang.EN
+        return when (CalendarDates.daysBetween(today, date)) {
+            0L -> if (english) "Today, $day, is a $name." else "Heute, der $day, ist ein $name."
+            1L -> if (english) "Tomorrow, $day, is a $name." else "Morgen, der $day, ist ein $name."
+            else -> if (english) "$day is a $name." else "Der $day ist ein $name."
+        }
+    }
+
+    /**
+     * "Der nächste Samstag ist der 26. September." — the answer to "wann ist Samstag?" (§8c).
+     *
+     * The mirror of [speakWeekdayOf], down to the today/tomorrow forms: the weekday is what was
+     * asked, so it leads the sentence whatever the date turns out to be.
+     */
+    fun speakDateOfWeekday(date: LocalDate, today: LocalDate, lang: Lang): String {
+        val day = dayAndMonth(date, lang)
+        val name = weekday(date, lang)
+        val english = lang == Lang.EN
+        return when (CalendarDates.daysBetween(today, date)) {
+            0L -> if (english) "$name is today, $day." else "$name ist heute, der $day."
+            1L -> if (english) "$name is tomorrow, $day." else "$name ist morgen, der $day."
+            else -> if (english) "The next $name is $day." else "Der nächste $name ist der $day."
+        }
+    }
+
+    /**
+     * "In 3 Wochen ist Donnerstag, der 15. Oktober." — the answer to a date counted forward (§8d).
+     *
+     * One and two days out are spoken as "morgen" and "übermorgen" rather than as "in 1 Tag":
+     * those are the words, and "welcher Tag ist morgen" reaches this command through a template
+     * that fixes the amount, so the answer has to sound like the question.
+     */
+    fun speakDateIn(date: LocalDate, today: LocalDate, amount: Int, unit: SpanUnit, lang: Lang): String {
+        val english = lang == Lang.EN
+        val rest = "${weekday(date, lang)}, ${if (english) "" else "der "}${dayAndMonth(date, lang)}"
+        val lead = when (CalendarDates.daysBetween(today, date)) {
+            1L -> if (english) "Tomorrow is" else "Morgen ist"
+            2L -> if (english) "The day after tomorrow is" else "Übermorgen ist"
+            // Dative behind "in", which is the one place a German plural needs its -n.
+            else -> if (english) {
+                "In ${count(amount, unit, lang)} it's"
+            } else {
+                "In $amount ${unit.nounDative(amount, lang)} ist"
+            }
+        }
+        return "$lead $rest."
+    }
+
+    /**
+     * "13 Wochen und 2 Tage", "91 Tage", "1 Jahr und 3 Monate" — the distance to a date (§8e).
+     *
+     * Two parts at most and the smaller one only when it is not zero, which is the rule
+     * [remaining] already follows for a running timer and for the same reason: a person asking
+     * how long until Christmas wants the number they can act on and one below it, not a
+     * stopwatch reading. A whole part of zero is dropped entirely — "0 Monate und 5 Tage" is
+     * not an answer anybody gives.
+     */
+    fun span(from: LocalDate, to: LocalDate, unit: SpanUnit, lang: Lang): String {
+        val days = ChronoUnit.DAYS.between(from, to)
+        return when (unit) {
+            SpanUnit.TAGE -> count(days.toInt(), SpanUnit.TAGE, lang)
+            SpanUnit.WOCHEN -> twoPart(
+                (days / DAYS_PER_WEEK).toInt(), SpanUnit.WOCHEN,
+                (days % DAYS_PER_WEEK).toInt(), SpanUnit.TAGE, lang,
+            )
+
+            SpanUnit.MONATE -> Period.between(from, to).let {
+                twoPart(it.years * MONTHS_PER_YEAR + it.months, SpanUnit.MONATE, it.days, SpanUnit.TAGE, lang)
+            }
+
+            SpanUnit.JAHRE -> Period.between(from, to).let {
+                twoPart(it.years, SpanUnit.JAHRE, it.months, SpanUnit.MONATE, lang)
+            }
+        }
+    }
+
+    /** "3 Wochen", "1 Tag", "3 weeks" — a count and its unit, [duration] for the calendar. */
+    fun count(amount: Int, unit: SpanUnit, lang: Lang): String = "$amount ${unit.noun(amount, lang)}"
+
+    private fun twoPart(whole: Int, unit: SpanUnit, rest: Int, restUnit: SpanUnit, lang: Lang): String = when {
+        whole == 0 -> count(rest, restUnit, lang)
+        rest == 0 -> count(whole, unit, lang)
+        lang == Lang.EN -> "${count(whole, unit, lang)} and ${count(rest, restUnit, lang)}"
+        else -> "${count(whole, unit, lang)} und ${count(rest, restUnit, lang)}"
     }
 
     /** 1 → "1st", 14 → "14th". Days only, so the teens are the whole of the special case. */
@@ -186,4 +307,6 @@ object SpokenTime {
     private const val SECONDS_PER_MINUTE = 60L
     private const val MINUTES_PER_HOUR = 60L
     private const val SECONDS_PER_HOUR = 3600L
+    private const val DAYS_PER_WEEK = 7L
+    private const val MONTHS_PER_YEAR = 12
 }

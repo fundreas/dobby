@@ -79,12 +79,46 @@ object GermanNumbers {
         return parseCompound(w)
     }
 
-    /** Lenient parse for an `{n:int}` slot: digits, number words, and the article forms of one. */
+    /**
+     * Ordinal stems that are not their cardinal plus a suffix.
+     *
+     * Everything else is regular — "vierzehn" + "te", "zwanzig" + "ste" — and is derived below
+     * rather than listed, which is what keeps 1…31 from becoming a table of thirty-one words.
+     */
+    private val irregularOrdinals: Map<String, Int> =
+        mapOf("erste" to 1, "dritte" to 3, "siebte" to 7, "siebente" to 7, "achte" to 8)
+
+    /**
+     * German ordinals → integers: "vierzehnte" → 14, "einundzwanzigsten" → 21.
+     *
+     * Only ever reached from [parseSlotValue], and that restriction is the safety argument:
+     * "der Vierzehnte" is a number wherever an `{n:int}` slot is waiting for one, and is a word
+     * everywhere else. [parse] — what the [Normalizer] runs over every token of every utterance
+     * — is deliberately left alone, so no transcript changes shape because this exists.
+     *
+     * The declension is trimmed rather than enumerated: "vierzehnte", "vierzehnten",
+     * "vierzehnter" and "vierzehntes" are one stem and four endings, and listing the
+     * cross-product is what [Fillers] exists to avoid everywhere else in this package.
+     */
+    fun parseOrdinal(word: String): Int? {
+        val stem = word.lowercase().trimEnd('n', 'r', 's', 'm')
+        irregularOrdinals[stem]?.let { return it }
+        // "-ste" from 20 up ("zwanzigste"), "-te" below it ("vierzehnte"). Both are tried
+        // because "sechste" ends in "ste" and is nonetheless "sechs" + "te".
+        val fromSte = if (stem.endsWith("ste")) parse(stem.dropLast(3)) else null
+        val fromTe = if (stem.endsWith("te")) parse(stem.dropLast(2)) else null
+        return fromSte ?: fromTe
+    }
+
+    /**
+     * Lenient parse for an `{n:int}` slot: digits, number words, ordinals, and the article
+     * forms of one.
+     */
     fun parseSlotValue(word: String): Int? {
         val w = word.lowercase()
         if (w in oneArticles) return 1
         w.toIntOrNull()?.let { return it }
-        return parse(w)
+        return parse(w) ?: parseOrdinal(w)
     }
 
     /** `<unit>und<tens>`, e.g. "einundzwanzig" → 21. Also accepts a bare direct word. */
