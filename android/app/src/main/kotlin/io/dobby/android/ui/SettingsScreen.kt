@@ -299,12 +299,18 @@ private val TurnDuck.title: String
     get() = when (this) {
         TurnDuck.DUCK -> "Leiser"
         TurnDuck.PAUSE -> "Pausieren"
+        TurnDuck.DUCK_UNLESS_BLUETOOTH -> "Nichts über Bluetooth"
     }
 
 private val TurnDuck.subtitle: String
     get() = when (this) {
         TurnDuck.DUCK -> "Läuft leise weiter, solange Dobby zuhört."
         TurnDuck.PAUSE -> "Hält an und läuft nach der Antwort weiter. Sicherer, aber gröber."
+        // Says both halves, because a setting called "nichts" that sometimes makes the music
+        // quieter looks broken unless you are told when it does.
+        TurnDuck.DUCK_UNLESS_BLUETOOTH ->
+            "Läuft unverändert weiter, solange die Musik auf einem Bluetooth-Lautsprecher " +
+                "spielt — der steht woanders, das Mikrofon hört ihn nicht. Sonst leiser."
     }
 
 private val MicProfile.title: String

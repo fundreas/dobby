@@ -48,6 +48,10 @@ interface TurnAudio {
  *
  * Which of the two is right is a measurement, not an argument: the default stands at [DUCK]
  * until the 2×2 on the device (`m2b-plan.md` B3) says otherwise.
+ *
+ * [DUCK_UNLESS_BLUETOOTH] is the third answer, and the only one that is about the room rather
+ * than about the recogniser: a duck is only worth its cost while the microphone can hear the
+ * music, and a speaker in another room it cannot.
  */
 enum class TurnDuck {
     /** The music keeps playing, quietly, under the person talking. */
@@ -55,6 +59,24 @@ enum class TurnDuck {
 
     /** The music stops for the turn and resumes after it. */
     PAUSE,
+
+    /**
+     * [DUCK], except while the music is going out over Bluetooth, when nothing happens at all.
+     *
+     * The reason to duck is that the microphone hears the panel's own speaker. Send the music
+     * to a Bluetooth speaker in another room and that stops being true: the panel is quiet, the
+     * turn endpoints fine, and ducking only costs the people in the *other* room their music
+     * every time somebody in this one says the wake phrase.
+     *
+     * Deliberately conditional rather than a plain "never": the speaker is a thing that comes
+     * and goes, and the turn that happens after it disconnects is one where the phone is
+     * playing out of its own speaker at the microphone again. So this falls back to [DUCK], and
+     * what it really means is "duck when it would help".
+     *
+     * Whether the music is on Bluetooth is a platform question, so the platform half answers
+     * it; core only carries the choice.
+     */
+    DUCK_UNLESS_BLUETOOTH,
 
     ;
 

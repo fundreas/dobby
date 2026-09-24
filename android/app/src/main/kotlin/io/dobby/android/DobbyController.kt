@@ -523,10 +523,12 @@ class DobbyController(
     }
 
     /**
-     * Chooses whether the music ducks or stops for a turn. Takes effect on the next turn.
+     * Chooses what a turn does to the music: quieter, stopped, or nothing while it is playing
+     * on a Bluetooth speaker. Takes effect on the next turn.
      *
-     * Which of the two is right is a measurement and not a preference — but it is the person
-     * standing in the room who takes it, so the switch has to be reachable from the room.
+     * Which of the first two is right is a measurement and not a preference — but it is the
+     * person standing in the room who takes it, so the switch has to be reachable from the
+     * room. The third is a preference, and about which room the speaker is in.
      */
     fun setTurnDuck(mode: TurnDuck) {
         settings?.turnDuck = mode

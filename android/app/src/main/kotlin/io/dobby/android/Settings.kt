@@ -58,7 +58,8 @@ class Settings(context: Context) {
         set(value) = preferences.edit { putString(KEY_LISTEN_CUE, value.name) }
 
     /**
-     * What happens to the music while somebody is talking to the panel: quieter, or stopped.
+     * What happens to the music while somebody is talking to the panel: quieter, stopped, or —
+     * while it is playing on a Bluetooth speaker in some other room — nothing.
      *
      * Stored by name for the same reason [listenCue] is. The default is `DUCK` and stays there
      * until the measurement in `m2b-plan.md` B3 says otherwise — if the platform echo canceller

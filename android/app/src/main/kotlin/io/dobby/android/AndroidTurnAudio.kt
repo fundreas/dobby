@@ -2,6 +2,7 @@ package io.dobby.android
 
 import android.content.Context
 import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.util.Log
@@ -25,6 +26,11 @@ import io.dobby.core.audio.TurnDuck
  * In process — Radio's ExoPlayer, from M4 — is attenuated directly through [players]. Audio
  * focus is the wrong tool for ducking yourself, and its in-app listener semantics are not worth
  * relying on when setting a volume is both simpler and certain.
+ *
+ * **And a third answer: nothing.** Under [TurnDuck.DUCK_UNLESS_BLUETOOTH] a turn whose music is
+ * routed to a Bluetooth speaker touches neither channel. The duck exists because the microphone
+ * hears the panel's own speaker; a speaker in another room it does not, and the duck is then
+ * pure cost to whoever is listening over there.
  *
  * What this does **not** fix is the wake word, which has to be heard before there is a turn to
  * duck at all. That is Part B's problem and the microphone source's (`m2b-plan.md`).
@@ -51,11 +57,15 @@ class AndroidTurnAudio(
         // because it happens exactly while the person is waiting to speak again.
         if (request != null) return
 
-        val duckMode = mode()
+        // Nothing at all, on either channel: no focus request, so nobody out of process is asked
+        // to give way, and no in-process attenuation either — the radio is coming out of the
+        // same distant speaker Spotify is.
+        val duckMode = effectiveMode() ?: return
+
         val next = AudioFocusRequest.Builder(
             when (duckMode) {
-                TurnDuck.DUCK -> AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
                 TurnDuck.PAUSE -> AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
+                else -> AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
             },
         )
             .setAudioAttributes(
@@ -78,8 +88,9 @@ class AndroidTurnAudio(
 
         players.duck(
             when (duckMode) {
-                TurnDuck.DUCK -> InProcessPlayers.DUCK_VOLUME
                 TurnDuck.PAUSE -> InProcessPlayers.MUTE_VOLUME
+                // DUCK, and DUCK_UNLESS_BLUETOOTH once it has resolved to one.
+                else -> InProcessPlayers.DUCK_VOLUME
             },
         ) { Log.w(TAG, "turn duck: in-process player refused to duck", it) }
     }
@@ -94,7 +105,56 @@ class AndroidTurnAudio(
         players.restore { Log.w(TAG, "turn duck: in-process player refused to restore", it) }
     }
 
+    /**
+     * What this turn actually does, or null for "leave the room alone".
+     *
+     * [TurnDuck.DUCK_UNLESS_BLUETOOTH] is resolved here, per turn, rather than remembered:
+     * a speaker is connected and disconnected between turns, and the answer that matters is
+     * where the music is going *now*.
+     */
+    private fun effectiveMode(): TurnDuck? = when (val chosen = mode()) {
+        TurnDuck.DUCK, TurnDuck.PAUSE -> chosen
+        TurnDuck.DUCK_UNLESS_BLUETOOTH -> if (onBluetooth()) null else TurnDuck.DUCK
+    }
+
+    /**
+     * Whether media is currently *routed* to a Bluetooth speaker — not merely whether one is
+     * paired, or even connected.
+     *
+     * `getAudioDevicesForAttributes` asks the question the setting is actually about: if the
+     * music started now, where would it come out? A phone can hold a connected speaker while
+     * still playing out of its own, and in that case the microphone hears the music and the
+     * duck is worth taking.
+     */
+    private fun onBluetooth(): Boolean {
+        val music = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+            .build()
+        // A device list is a platform answer and this runs on every turn: a refusal costs the
+        // turn its duck, which is louder than it is broken, so it falls back to ducking.
+        return try {
+            audio.getAudioDevicesForAttributes(music).any { it.type in BLUETOOTH_OUTPUTS }
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "turn duck: could not read the media route, ducking anyway", e)
+            false
+        }
+    }
+
     private companion object {
         const val TAG = "Dobby"
+
+        /**
+         * The Bluetooth output types a speaker in another room can arrive as.
+         *
+         * SCO is deliberately absent: it is the telephony route, it is not where media goes,
+         * and a headset on somebody's head is not the "speaker over there" this is about.
+         */
+        val BLUETOOTH_OUTPUTS = setOf(
+            AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+            AudioDeviceInfo.TYPE_BLE_HEADSET,
+            AudioDeviceInfo.TYPE_BLE_SPEAKER,
+            AudioDeviceInfo.TYPE_BLE_BROADCAST,
+        )
     }
 }
