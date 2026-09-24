@@ -249,8 +249,11 @@ fun SettingsScreen(
                 SectionLabel("Radio")
             }
 
-            // The one place the UI enumerates stations, and the reason `Stations.ALL` is a list
-            // with a stable order rather than a map.
+            // One of the two places the UI enumerates stations — the radio card's picker is
+            // the other — and the reason `Stations.ALL` is a list with a stable order rather
+            // than a map. This one picks what "Radio an" means; that one retunes what is on.
+            // No logos here on purpose: this is a settings list of `ChoiceRow`s and the rows
+            // around it are markets and wake words, which have none.
             items(Stations.ALL, key = { it.id }) { station ->
                 ChoiceRow(
                     title = station.displayName,

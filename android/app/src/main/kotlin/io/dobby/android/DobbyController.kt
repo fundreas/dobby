@@ -35,6 +35,7 @@ import io.dobby.socks.memo.MemoState
 import io.dobby.socks.spotify.PlayerSnapshot
 import io.dobby.socks.radio.RadioConfig
 import io.dobby.socks.radio.RadioState
+import io.dobby.socks.radio.Station
 import io.dobby.socks.spotify.SpotifyConfig
 import io.dobby.pipeline.VoiceIo
 import io.dobby.pipeline.VoiceState
@@ -226,6 +227,15 @@ class DobbyController(
      * of the system that can misunderstand it.
      */
     fun stopRadio(): Job = scope.launch { wiring.radio.stopFromPanel() }
+
+    /**
+     * The radio card's station picker, run from a finger.
+     *
+     * Same seam as [stopRadio], and the same argument: this is the Sock's own `tuneTo`, so the
+     * tap does exactly what "spiele radio ö1" does — buffering spinner, reconnect ladder,
+     * `Error` card and all.
+     */
+    fun playRadio(station: Station): Job = scope.launch { wiring.radio.playFromPanel(station) }
 
     /**
      * The card's transport controls (`spotify.specs.md` §7), run from a finger.

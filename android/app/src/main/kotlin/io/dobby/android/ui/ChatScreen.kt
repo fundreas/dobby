@@ -52,6 +52,7 @@ import io.dobby.android.chat.Voice
 import io.dobby.socks.clock.ClockState
 import io.dobby.socks.memo.MemoState
 import io.dobby.socks.radio.RadioState
+import io.dobby.socks.radio.Station
 import io.dobby.socks.spotify.PlayerSnapshot
 
 /**
@@ -72,6 +73,7 @@ fun ChatScreen(
     memos: MemoState,
     muted: Boolean,
     onStopRadio: () -> Unit,
+    onPickStation: (Station) -> Unit,
     onSpotifyPrevious: () -> Unit,
     onSpotifyPlayPause: () -> Unit,
     onSpotifyNext: () -> Unit,
@@ -103,7 +105,7 @@ fun ChatScreen(
         )
         // Same rule, and the coordinator guarantees these two are never both drawn: only one
         // Sock can hold the channel (`radio.specs.md` §7).
-        RadioCard(radio, onStop = onStopRadio)
+        RadioCard(radio, onStop = onStopRadio, onPickStation = onPickStation)
         // Not "only while something is running", unlike the three above: an open memo is open
         // until somebody closes it, and a list that is only visible while you are asking about
         // it would be a list nobody is reminded by (`memo.specs.md` §8).

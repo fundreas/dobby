@@ -337,6 +337,25 @@ class RadioSock(private val player: RadioPlayer = RadioPlayer.NONE) : Sock {
     }
 
     /**
+     * The card's station picker (`radio.specs.md` §7): the same tune, from a finger.
+     *
+     * Deliberately the *same* [tuneTo] `radio.play_radio` makes, so a tap and "spiele radio ö1"
+     * are one event — it claims the channel, buffers, and leaves the state where the card can
+     * draw it, including the spinner while it connects and the `Error` card if it never does.
+     * Straight at the Sock rather than through the engine, for the reason `SpotifySock`'s
+     * transport buttons give: there is no utterance here, and inventing one to put a station
+     * name back through the matcher would route a tap through the one part of the system that
+     * can misunderstand it.
+     *
+     * Re-tuning to the station already playing is allowed and is not a no-op: it is the
+     * cheapest way to restart a stream that has gone strange, and the picker shows every row
+     * for that reason.
+     */
+    suspend fun playFromPanel(station: Station) {
+        tuneTo(station, RadioConfig(started().config))
+    }
+
+    /**
      * `shared.stop` — a bare "stopp" that turned out to mean the radio.
      *
      * The state check repeats [activityFor] rather than trusting it, because a Sock that

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Radio Wien, from the "W" the station's own site draws its title with
+  (oekastatic.orf.at/…/oeka/common/images/icon.wie.svg, fetched 2026-09-24).
+
+  A vector where the other four are PNGs, and not out of taste: ORF Wien is the one station of
+  the five that publishes its mark as an SVG and no square raster at all — the apple-touch-icon
+  on wien.orf.at is the generic ORF eye, which is the regional network's logo and not this
+  station's. Two paths is small enough that converting it by hand beats bundling a rasteriser.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="120dp"
+    android:height="120dp"
+    android:viewportWidth="80"
+    android:viewportHeight="80">
+    <path
+        android:fillColor="#EF670C"
+        android:pathData="M0,0h80v80h-80z" />
+    <path
+        android:fillColor="#4B2075"
+        android:pathData="M61.6784,17.5959L53.3757,43.9076L42.6317,17.5959H37.6655L27.0454,44.1472L18.7939,17.7579L18.7436,17.5959H7.69836L23.0135,62.2282L23.0667,62.3834H28.7253L39.994,34.4571L51.3248,62.3834H56.9825L72.4137,17.5959H61.6784Z" />
+</vector>

@@ -141,6 +141,7 @@ class MainActivity : ComponentActivity() {
                                     memos = memos,
                                     muted = muted,
                                     onStopRadio = { connected.controller.stopRadio() },
+                                    onPickStation = { connected.controller.playRadio(it) },
                                     onSpotifyPrevious = { connected.controller.spotifyPrevious() },
                                     onSpotifyPlayPause = {
                                         connected.controller.spotifyPlayPause()
