@@ -381,8 +381,25 @@ class DobbyController(
         // timer set before the voice was switched is announced in the voice that will read it.
         val text = phrase(lang)
         transcript.said(text)
-        pipeline.say(text)
+        say(text)
     }
+
+    /**
+     * Every sentence Dobby speaks, and the one place the music is turned down to make room for
+     * it.
+     *
+     * Wrapped here rather than inside the pipeline because the duck lives on this side of the
+     * boundary: `:android:pipeline` owns the voice and knows nothing about what else is
+     * playing. And wrapped around *every* call rather than only the ones inside a turn, because
+     * the sentence most likely to be spoken over loud music is a timer going off, which happens
+     * with no turn in sight (`announce()` above).
+     *
+     * Inside a turn this costs nothing — the turn duck already has the music down, and
+     * [TurnAudio.speaking] nests. What it buys is the two cases the turn duck does not cover:
+     * an announcement outside a turn, and `TurnDuck.DUCK_UNLESS_BLUETOOTH`, where the whole
+     * point is that the microphone did not need the music turned down. The ear still does.
+     */
+    private suspend fun say(text: String) = turnAudio.speaking { pipeline.say(text) }
 
     /**
      * The language Dobby answers in, which is the voice's language and nothing else.
@@ -658,7 +675,9 @@ class DobbyController(
      * re-arms the wake word. Without it the microphone hears the panel's own speaker: the VAD
      * never finds its trailing silence, every turn runs to the ten-second cap, and Parakeet is
      * handed a haystack. The duck is what puts the endpoint back within reach — it does nothing
-     * for the wake word, which had to be heard before this method was ever called.
+     * for the wake word, which had to be heard before this method was ever called. What the
+     * setting can switch off (`TurnDuck.DUCK_UNLESS_BLUETOOTH`) is this duck and not [say]'s:
+     * the answer is turned down for either way.
      *
      * [VoiceIo.endTurn] closes the turn in a `finally`, because the wake word stays off the
      * microphone until it is called and a turn that throws must not leave it off forever.
@@ -824,7 +843,7 @@ class DobbyController(
             is SockResult.Spoken -> {
                 val text = result.phrase(lang)
                 transcript.said(text, outcome.detailLine())
-                pipeline.say(text)
+                say(text)
             }
 
             // say() suspends until the sentence has finished playing, so the microphone is
@@ -833,7 +852,7 @@ class DobbyController(
             is SockResult.Asked -> {
                 val text = result.phrase(lang)
                 transcript.said(text, outcome.detailLine())
-                pipeline.say(text)
+                say(text)
                 return TurnOutcome.AWAITING_ANSWER
             }
 
@@ -841,7 +860,7 @@ class DobbyController(
                 Log.w(TAG, "${outcome.invocation?.commandId} failed", result.cause)
                 val text = result.phrase(lang)
                 transcript.said(text, outcome.detailLine(), failed = true)
-                pipeline.say(text)
+                say(text)
             }
 
             // The side effect is its own feedback, but the chat would otherwise look like
@@ -859,7 +878,7 @@ class DobbyController(
                     outcome.detailLine()?.let { transcript.note(it) }
                 } else {
                     transcript.said(text, outcome.detailLine())
-                    pipeline.say(text)
+                    say(text)
                 }
                 return TurnOutcome.CLOSED
             }

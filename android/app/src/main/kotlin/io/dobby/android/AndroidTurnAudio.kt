@@ -9,6 +9,8 @@ import android.util.Log
 import io.dobby.core.audio.InProcessPlayers
 import io.dobby.core.audio.TurnAudio
 import io.dobby.core.audio.TurnDuck
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * The platform half of [TurnAudio]: quieten the room while somebody is talking to the panel.
@@ -32,6 +34,12 @@ import io.dobby.core.audio.TurnDuck
  * hears the panel's own speaker; a speaker in another room it does not, and the duck is then
  * pure cost to whoever is listening over there.
  *
+ * **Except while Dobby is talking.** [speaking] takes a duck of its own on both channels for the
+ * length of every spoken sentence, no matter the setting and no matter whether there is a turn
+ * at all — the answer comes out of the same speaker the music does, and one nobody can make out
+ * over a chorus was not worth speaking. It nests: inside a turn that already ducked it does
+ * nothing, because the music is down already.
+ *
  * What this does **not** fix is the wake word, which has to be heard before there is a turn to
  * duck at all. That is Part B's problem and the microphone source's (`m2b-plan.md`).
  */
@@ -48,43 +56,41 @@ class AndroidTurnAudio(
 
     private val audio = context.applicationContext.getSystemService(AudioManager::class.java)
 
-    /** Non-null exactly while a turn holds the duck. Guarded by the caller's turn mutex. */
+    /**
+     * Guards both requests and [speakers].
+     *
+     * The turn duck alone was covered by the caller's turn mutex; a speech duck is not. A timer
+     * announcing itself speaks from the Sock's own scope, which is not a turn and does not hold
+     * that lock, and it can land exactly as a turn is taking or releasing its duck.
+     */
+    private val state = Mutex()
+
+    /** Non-null exactly while a turn holds the duck. */
     private var request: AudioFocusRequest? = null
 
-    override suspend fun duck() {
+    /** Non-null exactly while a spoken sentence holds a duck the turn had not already taken. */
+    private var speech: AudioFocusRequest? = null
+
+    /** How many spoken sentences are in flight. Counted, because `speaking` nests. */
+    private var speakers = 0
+
+    override suspend fun duck() = state.withLock {
         // A turn takes one duck however many utterances it holds. Un-ducking between them would
         // let the music swell back up in the gaps — which is worse than not ducking at all,
         // because it happens exactly while the person is waiting to speak again.
-        if (request != null) return
+        if (request != null) return@withLock
 
         // Nothing at all, on either channel: no focus request, so nobody out of process is asked
         // to give way, and no in-process attenuation either — the radio is coming out of the
         // same distant speaker Spotify is.
-        val duckMode = effectiveMode() ?: return
+        val duckMode = effectiveMode() ?: return@withLock
 
-        val next = AudioFocusRequest.Builder(
+        request = take(
             when (duckMode) {
                 TurnDuck.PAUSE -> AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
                 else -> AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
             },
         )
-            .setAudioAttributes(
-                // What this request actually is: an assistant taking a turn, not the panel
-                // playing media. The usage is what other apps' focus listeners see, and
-                // describing a turn as music would be a lie that costs somebody a pause.
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ASSISTANT)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build(),
-            )
-            .build()
-
-        request = next
-        // A refusal is worth a line and nothing else: the panel still listens, it just listens
-        // over the top of whatever would not give way.
-        if (audio.requestAudioFocus(next) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
-            Log.i(TAG, "turn duck: focus refused, listening over the top")
-        }
 
         players.duck(
             when (duckMode) {
@@ -95,14 +101,73 @@ class AndroidTurnAudio(
         ) { Log.w(TAG, "turn duck: in-process player refused to duck", it) }
     }
 
-    override suspend fun release() {
+    override suspend fun release() = state.withLock {
         val held = request
         request = null
-        // Both halves unconditionally, and the in-process one even if there was no focus: a
-        // duck that outlived its turn is a panel that permanently quietened the music, which is
-        // a more annoying failure than the one being fixed.
         held?.let { audio.abandonAudioFocusRequest(it) }
-        players.restore { Log.w(TAG, "turn duck: in-process player refused to restore", it) }
+        // Unconditionally, and even if there was no focus: a duck that outlived its turn is a
+        // panel that permanently quietened the music, which is a more annoying failure than the
+        // one being fixed. Unless a sentence is still playing — a turn that is cut short while
+        // Dobby is talking must not take the answer's duck with it.
+        if (speakers == 0) {
+            players.restore { Log.w(TAG, "turn duck: in-process player refused to restore", it) }
+        }
+    }
+
+    /**
+     * The music goes down for a spoken sentence even when the turn left it alone.
+     *
+     * Only the first sentence in flight does anything, and only when the turn is not already
+     * holding the music down: a second attenuation on top of a turn duck would make the answer
+     * quieter than the panel meant it to be, which is the opposite of the point.
+     */
+    override suspend fun beginSpeech() = state.withLock {
+        val first = speakers++ == 0
+        if (!first || request != null) return@withLock
+
+        speech = take(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+        players.duck(InProcessPlayers.DUCK_VOLUME) {
+            Log.w(TAG, "speech duck: in-process player refused to duck", it)
+        }
+    }
+
+    override suspend fun endSpeech() = state.withLock {
+        // The sentence inside a sentence gives nothing back: the outer one is still playing.
+        if (--speakers > 0) return@withLock
+
+        val held = speech
+        speech = null
+        held?.let { audio.abandonAudioFocusRequest(it) }
+        // Not while a turn is still holding its own duck: the music is meant to stay down until
+        // the turn ends, and restoring here would let it swell up between two sentences.
+        if (request == null) {
+            players.restore { Log.w(TAG, "speech duck: in-process player refused to restore", it) }
+        }
+    }
+
+    /**
+     * Asks for [gain] and returns the request, granted or not.
+     *
+     * A refusal is worth a line and nothing else: the panel still speaks and still listens, it
+     * just does it over the top of whatever would not give way. The request is returned either
+     * way, because it is the handle the matching abandon needs.
+     */
+    private fun take(gain: Int): AudioFocusRequest {
+        val next = AudioFocusRequest.Builder(gain)
+            .setAudioAttributes(
+                // What this request actually is: an assistant taking a turn, not the panel
+                // playing media. The usage is what other apps' focus listeners see, and
+                // describing a turn as music would be a lie that costs somebody a pause.
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build(),
+            )
+            .build()
+        if (audio.requestAudioFocus(next) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+            Log.i(TAG, "turn duck: focus refused, carrying on over the top")
+        }
+        return next
     }
 
     /**

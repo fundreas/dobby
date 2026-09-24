@@ -1,5 +1,7 @@
 package io.dobby.core.audio
 
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -17,13 +19,51 @@ import java.util.concurrent.CopyOnWriteArrayList
  * sentence somewhere inside. Ducking is what makes the endpoint reachable again — it does not
  * help the wake word, which has to be heard *before* there is a turn to duck (`m2b-plan.md`).
  *
- * Both methods are idempotent: a turn takes one duck however many utterances it holds, and
- * releases it once however it ended.
+ * [duck] and [release] are idempotent: a turn takes one duck however many utterances it holds,
+ * and releases it once however it ended.
+ *
+ * **[speaking] is the second, smaller duck, and it is about the ear rather than the
+ * microphone.** The turn duck exists so the recogniser can find the end of a sentence, and
+ * [TurnDuck] can switch it off — but a spoken answer nobody can hear over the music is not an
+ * answer, whatever the setting says. So every sentence Dobby speaks is wrapped in one, and it
+ * applies even where the turn duck did not: under [TurnDuck.DUCK_UNLESS_BLUETOOTH], and
+ * outside a turn altogether, which is where a timer announces itself.
  */
 interface TurnAudio {
     suspend fun duck()
 
     suspend fun release()
+
+    /**
+     * Turns the music down for one spoken sentence, whatever the turn did.
+     *
+     * Nests inside a turn duck and costs nothing there — the music is already down, and a
+     * second attenuation on top of the first would only make the answer quieter than the
+     * panel intended. Outside one it is the whole duck.
+     */
+    suspend fun <T> speaking(block: suspend () -> T): T {
+        beginSpeech()
+        try {
+            return block()
+        } finally {
+            // NonCancellable, for the reason the turn's own release is: a turn aborted while
+            // Dobby is mid-sentence would otherwise skip this and leave the music quiet for
+            // good — and unlike the turn duck, nothing further up is holding a second
+            // reference that would put it back.
+            withContext(NonCancellable) { endSpeech() }
+        }
+    }
+
+    /**
+     * Counted, not flagged, by implementations: [speaking] can nest, and the inner sentence
+     * finishing must not restore the music under the outer one.
+     *
+     * Defaulted to nothing so that [NONE] and every test double stays what it is — an object
+     * with no audio to duck has no speech to duck either.
+     */
+    suspend fun beginSpeech() = Unit
+
+    suspend fun endSpeech() = Unit
 
     companion object {
         /**
@@ -72,6 +112,9 @@ enum class TurnDuck {
      * and goes, and the turn that happens after it disconnects is one where the phone is
      * playing out of its own speaker at the microphone again. So this falls back to [DUCK], and
      * what it really means is "duck when it would help".
+     *
+     * Dobby's own answers duck regardless — see [TurnAudio.speaking]. This setting is about
+     * the microphone's problem, and being unable to hear the answer is the ear's.
      *
      * Whether the music is on Bluetooth is a platform question, so the platform half answers
      * it; core only carries the choice.
