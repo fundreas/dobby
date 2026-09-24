@@ -21,6 +21,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.util.concurrent.Executors
+import kotlin.math.abs
+import kotlin.math.tanh
 
 /**
  * A Piper voice, synthesised sentence by sentence and played as it arrives.
@@ -209,12 +211,15 @@ class PiperSpeaker(
      *
      * `WRITE_BLOCKING`, which is what makes the track the pacing device: the thread sits in the
      * write until there is room, so synthesis of sentence *n+1* happens while sentence *n*
-     * plays. Clipping is deliberate and cheap — a gain above 1 on a loud sentence is the only
-     * way to get there, and a clipped sample beats a wrapped one.
+     * plays.
+     *
+     * The gain is [limit]ed rather than clipped. It used to be `coerceIn(-1f, 1f)`, which was
+     * honest at a gain of 1 and unusable at the gains the catalogue now carries: a hard clip
+     * squares off every peak it touches, and a voice at 2× hits peaks on most sentences.
      */
     private fun write(output: AudioTrack, samples: FloatArray): Int {
         if (gain != 1f) {
-            for (i in samples.indices) samples[i] = (samples[i] * gain).coerceIn(-1f, 1f)
+            for (i in samples.indices) samples[i] = limit(samples[i] * gain)
         }
         var offset = 0
         while (offset < samples.size && !stopped) {
@@ -224,6 +229,25 @@ class PiperSpeaker(
             offset += written
         }
         return offset
+    }
+
+    /**
+     * One sample into −1..1, bending the top instead of cutting it off.
+     *
+     * Below [KNEE] nothing happens at all, which is most of a sentence: speech spends its time
+     * well under its peaks, and that part is what carries the loudness a gain is being asked
+     * for. Above it the curve compresses smoothly onto 1.0 — continuous in value *and* in
+     * slope at the knee, which is the difference between a peak that sounds loud and one that
+     * sounds broken. A hard clip is a discontinuity, and a discontinuity is a buzz.
+     *
+     * Cheap enough not to think about: one compare per sample, and a `tanh` only on the samples
+     * that are actually over.
+     */
+    private fun limit(sample: Float): Float {
+        val magnitude = abs(sample)
+        if (magnitude <= KNEE) return sample
+        val limited = KNEE + (1f - KNEE) * tanh((magnitude - KNEE) / (1f - KNEE))
+        return if (sample < 0f) -limited else limited
     }
 
     /**
@@ -360,5 +384,15 @@ class PiperSpeaker(
 
         /** How long a lost marker is waited for past the end of the audio. */
         private const val MARKER_GRACE_MS = 1000L
+
+        /**
+         * Where [limit] starts bending, as a fraction of full scale.
+         *
+         * 0.7 is about −3 dB, and it is chosen so the limiter is inaudible on the part of a
+         * sentence that is not a peak. Lower and ordinary speech gets compressed, which is how
+         * a voice ends up loud and flat; higher and there is not enough of a curve left to
+         * absorb a peak smoothly, which is a clip with extra steps.
+         */
+        private const val KNEE = 0.7f
     }
 }

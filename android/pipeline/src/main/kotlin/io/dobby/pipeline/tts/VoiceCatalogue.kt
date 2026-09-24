@@ -23,9 +23,13 @@ import io.dobby.pipeline.stt.RemoteFile
  * @param description one line under the name, in the settings screen.
  * @param directory where the files live under `files/voices/`. Empty for the system voice.
  * @param files model and token table. Empty for the system voice, which downloads nothing.
- * @param gain linear, applied to the samples before they are written. Piper voices are
- *   normalised per dataset and not against each other: Cori measures about 5 dB below
- *   Thorsten on the same sentences.
+ * @param gain linear, applied to the samples before they are written and soft-limited there
+ *   (`PiperSpeaker.limit`), so a gain above 1 bends its peaks rather than squaring them off.
+ *   Two separate corrections live in this one number. Piper voices are quiet in absolute terms
+ *   — trained to leave headroom, and a panel is heard across a room over music, not through
+ *   headphones — which is worth about 2×. And they are normalised per dataset rather than
+ *   against each other: Cori measures about 5 dB below Thorsten on the same sentences, which
+ *   is another 1.8× on top of hers.
  * @param greeting the one sentence Dobby says when this voice is chosen, in the voice itself.
  *   A voice is chosen by ear, and a radio button that changes nothing you can hear until the
  *   next timer fires is a setting nobody trusts. Blank falls back to "Ich bin <name>."
@@ -79,12 +83,38 @@ object VoiceCatalogue {
     private const val CORI_REVISION = "37f6efb503f5dc22de01bad04c9a118a99111096"
 
     /**
+     * +6 dB on every Piper voice: twice the amplitude the model hands back.
+     *
+     * Both of them ship quiet. A Piper voice is normalised for headphones and leaves headroom
+     * on purpose, and a wall panel is the other case entirely — a sentence heard from across a
+     * room, over music that is itself only ducked to a fifth rather than stopped. The peaks
+     * this reaches are bent by `PiperSpeaker.limit` rather than clipped, so the audible result
+     * is the body of the sentence coming up rather than the loud parts breaking up.
+     *
+     * The two voices keep one number between them so that "the panel is too quiet" stays a
+     * one-line change, rather than a decision to be re-made per voice.
+     */
+    private const val LOUDER = 2f
+
+    /**
+     * The 5 dB Cori sits below Thorsten, undone: 10^(5/20) ≈ 1.78.
+     *
+     * Hers alone, and multiplied by [LOUDER] rather than replacing it. Without it, switching
+     * voices is also switching volume — and the setting that is supposed to change who is
+     * speaking changes how loud the panel is.
+     */
+    private const val CORI_PARITY = 1.78f
+
+    /**
      * German, male, 22.05 kHz — and the default.
      *
      * Trained on [Thorsten-Voice](https://github.com/thorstenMueller/Thorsten-Voice), released
      * CC0, fine-tuned from the US-English `lessac` high voice. `high` rather than `medium`
      * because the device has the headroom for it; see *Measured* in `m2c-plan.md` for the
      * real-time factor that decided it.
+     *
+     * At [LOUDER] because the model's own level is a studio level: correct on headphones and
+     * too quiet for a kitchen with music in it.
      */
     val THORSTEN: VoiceOption = VoiceOption(
         id = "thorsten",
@@ -98,6 +128,7 @@ object VoiceCatalogue {
             voice(THORSTEN_DIRECTORY, THORSTEN_REVISION, TOKENS,
                 "87c8ef66eae5473ed0cc0366b3964c736ca6c5f676c979522ea31234e47430b9", 921),
         ),
+        gain = LOUDER,
         greeting = "Ich bin Thorsten.",
     )
 
@@ -112,7 +143,9 @@ object VoiceCatalogue {
      * does **not** change is understanding: commands are still spoken to the panel in German.
      *
      * The gain is not cosmetic: on the same sentences she peaks about 5 dB below Thorsten, so
-     * switching voices would otherwise also be switching volume.
+     * switching voices would otherwise also be switching volume. That correction was documented
+     * here and never actually set — the field defaulted to 1 — which is why she was the quieter
+     * of two voices that were both too quiet. [LOUDER] times [CORI_PARITY] is both halves.
      */
     val CORI: VoiceOption = VoiceOption(
         id = "cori",
@@ -127,6 +160,7 @@ object VoiceCatalogue {
             voice(CORI_DIRECTORY, CORI_REVISION, TOKENS,
                 "ef3a7e4a8d1af0c9d4dc45aaae1a6242ebe24a7ed6f3d025a49eb29682784c6d", 940),
         ),
+        gain = LOUDER * CORI_PARITY,
         // English, which is now the whole of what picking her does — and hearing it said is
         // the fastest honest answer to "what does picking Cori do?".
         greeting = "Hello, I'm Cori.",
