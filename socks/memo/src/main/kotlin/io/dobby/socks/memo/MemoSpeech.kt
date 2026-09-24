@@ -22,7 +22,7 @@ import java.util.Locale
  * (`socks.specs/README.md` §2a): a memo noted in German and read back after the voice was
  * switched is read in English, because nothing was rendered until it was said.
  */
-internal object MemoSpeech {
+object MemoSpeech {
 
     /** "Samstag" — the weekday a memo from earlier this week is dated by. */
     private val WEEKDAY_DE = DateTimeFormatter.ofPattern("EEEE", Locale.GERMAN)
@@ -40,7 +40,7 @@ internal object MemoSpeech {
      *   would be a lie and in front of the second one is noise.
      * @param others how many memos are open besides this one.
      */
-    fun read(memo: Memo, lead: Direction?, others: Int, zone: ZoneId, now: Instant): Phrase =
+    internal fun read(memo: Memo, lead: Direction?, others: Int, zone: ZoneId, now: Instant): Phrase =
         Phrase { lang ->
             buildString {
                 append(leadIn(lead, lang))
@@ -53,12 +53,12 @@ internal object MemoSpeech {
         }
 
     /** "Memo gespeichert: Milch kaufen." */
-    fun saved(memo: Memo): Phrase = Phrase { lang ->
+    internal fun saved(memo: Memo): Phrase = Phrase { lang ->
         if (lang == Lang.EN) "Memo saved: ${memo.display}." else "Memo gespeichert: ${memo.display}."
     }
 
     /** "Erledigt: Milch kaufen. Es sind noch 2 Memos offen." */
-    fun closed(memo: Memo, open: Int): Phrase = Phrase { lang ->
+    internal fun closed(memo: Memo, open: Int): Phrase = Phrase { lang ->
         val english = lang == Lang.EN
         val head = if (english) "Done: ${memo.display}." else "Erledigt: ${memo.display}."
         val rest = when {
@@ -73,7 +73,7 @@ internal object MemoSpeech {
     }
 
     /** "Ich habe schon 50 Memos offen. Erledige erst ein paar." */
-    fun tooMany(max: Int): Phrase = Phrase { lang ->
+    internal fun tooMany(max: Int): Phrase = Phrase { lang ->
         if (lang == Lang.EN) {
             "I'm already holding $max memos. Close a few first."
         } else {
@@ -90,6 +90,18 @@ internal object MemoSpeech {
     }
 
     /**
+     * "Heute um 14:30 Uhr" — the same stamp the voice speaks, for the panel to draw.
+     *
+     * Public, and the only thing in here that is: the panel's own UI is German whatever the
+     * voice speaks (`socks.specs/README.md` §2a), so it renders at [Lang.DE] rather than taking
+     * a [Phrase] it would have to resolve itself. Sharing the renderer is the point — a card
+     * reading "24.09. 12:52" beside an answer saying "heute um 12:52 Uhr" would be two clocks
+     * in one room.
+     */
+    fun panel(createdAt: Instant, now: Instant, zone: ZoneId): String =
+        stamp(createdAt, zone, now, Lang.DE).replaceFirstChar { it.titlecase() }
+
+    /**
      * "Notiert heute um 14:30." — the half of a memo that says whether it is still current.
      *
      * Four resolutions, coarsening with age, because that is how somebody refers to their own
@@ -98,12 +110,24 @@ internal object MemoSpeech {
      * is a log line, and nobody asks at what time last month they thought of the recycling.
      */
     private fun noted(createdAt: Instant, zone: ZoneId, now: Instant, lang: Lang): String {
+        val stamp = stamp(createdAt, zone, now, lang)
+        // "p.m." is already the full stop. A second one is a stutter in the audio rather than a
+        // typo nobody hears, which is the same care `SpokenTime.speak` takes with the same tail.
+        return if (lang == Lang.EN) {
+            "Noted $stamp".let { if (it.endsWith('.')) it else "$it." }
+        } else {
+            "Notiert $stamp."
+        }
+    }
+
+    /** "heute um 14:30 Uhr", "am Montag um 9:15 Uhr", "am 12. September" — without a sentence. */
+    private fun stamp(createdAt: Instant, zone: ZoneId, now: Instant, lang: Lang): String {
         val moment = LocalDateTime.ofInstant(createdAt, zone)
         val today = LocalDateTime.ofInstant(now, zone).toLocalDate()
         val days = ChronoUnit.DAYS.between(moment.toLocalDate(), today)
         val english = lang == Lang.EN
         val clock = if (english) englishTime(moment) else "%d:%02d Uhr".format(moment.hour, moment.minute)
-        val stamp = when {
+        return when {
             // A memo from the future is a clock that was wrong, not a memo — read it as today's
             // rather than as "in 2 Tagen", which is a promise this Sock does not make.
             days <= 0L && english -> "today at $clock"
@@ -115,9 +139,6 @@ internal object MemoSpeech {
             english -> "on ${DATE_EN.format(moment)} ${ordinal(moment.dayOfMonth)}"
             else -> "am ${DATE_DE.format(moment)}"
         }
-        // "p.m." is already the full stop. A second one is a stutter in the audio rather than a
-        // typo nobody hears, which is the same care `SpokenTime.speak` takes with the same tail.
-        return if (english) "Noted $stamp".let { if (it.endsWith('.')) it else "$it." } else "Notiert $stamp."
     }
 
     /** " Es sind noch 2 weitere Memos offen.", and nothing at all when there are none. */

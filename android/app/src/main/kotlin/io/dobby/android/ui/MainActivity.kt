@@ -93,6 +93,7 @@ class MainActivity : ComponentActivity() {
                             val memos by connected.controller.memos.collectAsStateWithLifecycle()
                             val muted by connected.controller.muted.collectAsStateWithLifecycle()
                             var settingsOpen by remember { mutableStateOf(false) }
+                            var memosOpen by remember { mutableStateOf(false) }
                             var helpOpen by remember { mutableStateOf(false) }
 
                             if (helpOpen) {
@@ -122,6 +123,14 @@ class MainActivity : ComponentActivity() {
                                     },
                                     onRadioStation = { connected.controller.setRadioStation(it) },
                                 )
+                            } else if (memosOpen) {
+                                // The card shows one memo; this is where the rest of them are,
+                                // sorted by when they were dictated (`memo.specs.md` §8).
+                                MemoScreen(
+                                    state = memos,
+                                    onBack = { memosOpen = false },
+                                    onClose = { connected.controller.closeMemo(it) },
+                                )
                             } else {
                                 ChatScreen(
                                     state = state,
@@ -140,6 +149,7 @@ class MainActivity : ComponentActivity() {
                                     onCloseSpotify = { connected.controller.dismissSpotify() },
                                     onCancelTimer = { connected.controller.cancelTimer(it) },
                                     onCloseMemo = { connected.controller.closeMemo(it) },
+                                    onOpenMemos = { memosOpen = true },
                                     onToggleMute = { connected.controller.toggleMute() },
                                     onListen = { connected.controller.listen() },
                                     onAbort = { connected.controller.stopListening() },

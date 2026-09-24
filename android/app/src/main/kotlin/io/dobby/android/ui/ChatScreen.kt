@@ -78,6 +78,7 @@ fun ChatScreen(
     onCloseSpotify: () -> Unit,
     onCancelTimer: (Long) -> Unit,
     onCloseMemo: (Long) -> Unit,
+    onOpenMemos: () -> Unit,
     onToggleMute: () -> Unit,
     onListen: () -> Unit,
     onAbort: () -> Unit,
@@ -106,7 +107,7 @@ fun ChatScreen(
         // Not "only while something is running", unlike the three above: an open memo is open
         // until somebody closes it, and a list that is only visible while you are asking about
         // it would be a list nobody is reminded by (`memo.specs.md` §8).
-        MemoCard(memos, onClose = onCloseMemo)
+        MemoCard(memos, onClose = onCloseMemo, onOpen = onOpenMemos)
         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
         Conversation(state.messages, Modifier.weight(1f))
         // The speaker button exists only while there is something to silence — see [playing].

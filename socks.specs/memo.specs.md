@@ -80,9 +80,9 @@ Tier 2 few-shots (`matchedByTemplates = false`): "kannst du dir merken dass ich 
 
 The captured text is cleaned first. A `{text}` slot takes whatever tokens follow its anchor, so "erstelle mal ein Memo bitte" arrives as `text = "bitte"`; `MemoText.clean` drops filler words and a leading run of scaffolding (`memo`, `notiz`, `für`, `über`, `von`, `zum`, …) and refuses what is left if it is empty. Saving that memo would put a note reading "Bitte" on the wall that nobody can act on and everybody has to close. This is `TimerNames.clean`'s argument, unchanged, and for the same reason it is not solved in the templates.
 
-The memo is stored with `Instant.now(clock)` and the list is persisted (§6). The screen is woken for 30 s: the panel showing the memo written out is the half of the acknowledgement that survives being misheard.
+The memo is stored with `Instant.now(clock)` and the list is persisted (§9). The screen is woken for 30 s: the panel showing the memo written out is the half of the acknowledgement that survives being misheard.
 
-A full pile is **refused, never rotated** — see §7 for the cap. Dropping the oldest memo to make room would be the one failure this Sock may not have: forgetting something nobody asked it to forget, silently, at the moment somebody was adding something else.
+A full pile is **refused, never rotated** — see §9 for the cap. Dropping the oldest memo to make room would be the one failure this Sock may not have: forgetting something nobody asked it to forget, silently, at the moment somebody was adding something else.
 
 ### Result
 
@@ -101,7 +101,7 @@ A full pile is **refused, never rotated** — see §7 for the cap. Dropping the 
 
 The four readers are one mechanism. `latest_memo` and `oldest_memo` start a **walk** from one end of the pile; `next_memo` and `previous_memo` move along it. "Next" always means *further in the direction of travel*, so it goes backwards in time after "welche Memos sind offen" and forwards in time after "ältestes Memo" — which is the idea file's rule and also the only one somebody can hold in their head while listening.
 
-The walk is the **memo session**: a cursor (which memo), a direction, and when it was last touched. It lives across turns — the user asks, listens, walks away, comes back and says "nächstes Memo" — so it is deliberately *not* the follow-up mechanism (`README.md` §5), which dies with the turn by design. It times out after five minutes (§7), and being read an edge answer ("das war schon das letzte Memo") counts as touching it: that answer is somebody still working on their memos.
+The walk is the **memo session**: a cursor (which memo), a direction, and when it was last touched. It lives across turns — the user asks, listens, walks away, comes back and says "nächstes Memo" — so it is deliberately *not* the follow-up mechanism (`README.md` §5), which dies with the turn by design. It times out after five minutes (§9), and being read an edge answer ("das war schon das letzte Memo") counts as touching it: that answer is somebody still working on their memos.
 
 **With no live session, `next` and `previous` start a walk at the newest memo** rather than refusing. "Nächstes Memo" said into a room where nothing has been read out is not a mistake; it is somebody asking for a memo in the words they would use for the second one, and the honest thing to do with it is hand them the first. The answer then carries the "Dein neuestes Memo" lead-in, so what happened is audible.
 
@@ -217,7 +217,7 @@ Closes the memo the session is sitting on, and **ends the session with it**. Adv
 
 With no live session there is nothing this can honestly act on, so it says so. "Das Memo" is a word about a conversation; five minutes after the conversation it is a word about nothing, and the idea file is explicit that a close outside a session does not fire.
 
-A closed memo is **gone**, not archived. See §10.
+A closed memo is **gone**, not archived. See §12.
 
 ### Result
 
@@ -263,11 +263,21 @@ Deliberately **not** claimed:
 
 `MemoState` — the open memos newest first, plus `spotlight`, the id the memo session is sitting on. Both are a `StateFlow` on the Sock, read by `DobbyController.memos`.
 
-`MemoCard` draws it (`android/app/.../ui/MemoCard.kt`): up to four memos and a "+N weitere" count, the spotlit one in the primary colour and semibold — it is the one "Memo erledigt" would close, which on a panel is a readout and in the room is the difference between saying one word and saying the memo back.
+Two surfaces, and the split is the whole of the design.
 
-This card is drawn **whenever anything is open**, unlike the clock's timers or the two music cards, which appear only while something is running. An open memo is open until somebody closes it, and a list that is visible only while you are asking about it is a list nobody is reminded by.
+**`MemoCard`** (`android/app/.../ui/MemoCard.kt`) sits above the conversation and shows **one** memo: the one the session is sitting on — which is the one a spoken "Memo erledigt" would close — or the newest when no walk is open. Under it, the same timestamp the voice speaks and a "noch 2 weitere" count. One memo and not a list, because this card shares the top of the screen with a clock and the job here is to say *there is something*, in a line that is readable while walking past.
 
-Each row has a check mark — not an X: closing a memo is finishing something, not cancelling it. It runs the Sock's own `closeFromPanel(id)`, which closes **by id** and therefore needs neither the memo session nor the five minutes it lives for. Pointing at a memo says which one; routing a button press through the one part of the system that can misunderstand it is what `ClockSock.cancelFromPanel` already refuses to do.
+It is drawn **whenever anything is open**, unlike the clock's timers or the two music cards, which appear only while something is running. An open memo is open until somebody closes it, and a list that is visible only while you are asking about it is a list nobody is reminded by.
+
+The card carries an **X**, and it closes the memo on the card and nothing else. The whole row is otherwise a button: a tap opens the list.
+
+**`MemoScreen`** (`android/app/.../ui/MemoScreen.kt`) is that list — every open memo with its stamp, an X per row, and the spotlit one marked, so the screen and the voice never disagree about which memo "das Memo" is. It is reached by tapping the card rather than from a button in the header, because the card is what somebody is already looking at when they want more of it, and the back arrow and the system back gesture both leave it.
+
+**Sorted by creation date, both ways.** Newest first is the order everything else uses — the card, the state flow, and what "welche Memos sind offen" reads out. Oldest first is the other end of the same walk: `memo.oldest_memo` exists precisely for the thing that has been lying around too long, and a list that could not be turned round would leave the voice better at this than the screen. The toggle is a labelled control ("Neueste zuerst" / "Älteste zuerst") rather than a bare arrow, which on its own is a guess about which end of the list it means. There is no sort by text and no filter: fifty memos is the cap (§9), a dozen fit on screen, and a wall panel with a sort menu is a spreadsheet.
+
+Both X buttons run the Sock's own `closeFromPanel(id)`, which closes **by id** and therefore needs neither the memo session nor the five minutes it lives for. Pointing at a memo says which one; routing a button press through the one part of the system that can misunderstand it is what `ClockSock.cancelFromPanel` already refuses to do.
+
+The German the panel draws comes from `MemoSpeech.panel(...)`, the same renderer that builds the spoken stamp, resolved at `Lang.DE` because the panel's own UI is German whatever the voice speaks (`README.md` §2a). A card reading "24.09. 12:52" beside an answer saying "heute um 12:52 Uhr" would be two clocks in one room.
 
 ## 9. Config
 
@@ -278,7 +288,7 @@ Each row has a check mark — not an X: closing a memo is finishing something, n
 
 `memo.entries` is **not** config: it is where the memos themselves are persisted, one line of `id|createdAt|text` per memo in the same store, exactly as `clock.pending_timers` holds the timer deadlines. The text is Normalizer output cleaned by `MemoText`, so it holds letters, digits, apostrophes and spaces and nothing else and neither separator can occur inside one — which is why this is three plain fields and not a JSON dependency in a module that has none.
 
-Defaults are what ship. The settings screen does not expose either key yet (§10).
+Defaults are what ship. The settings screen does not expose either key yet (§12).
 
 ## 10. Failure & degradation
 
