@@ -290,6 +290,86 @@ class SpotifySock(
                 Example("ich hab den anfang verpasst", heldOut = true),
             ),
         ),
+        ExclusiveCommandSpec(
+            id = WHATS_THE_SONG,
+            templates = patterns(
+                // Written with the article in, although `das`, `der` and `die` are fillers:
+                // skipping drops *extra* words from the utterance, it does not make a
+                // template's own literals optional. So "wie heißt das lied" needs its `das`,
+                // and what the filler list buys is "wie heißt denn gerade das lied" for free
+                // (M6c) — the particles, not the articles.
+                //
+                // Both spellings of `heißt`. The phonetic tier folds ß to ss and would reach
+                // `heisst` anyway, but the commonest phrasing in the Sock belongs on the strict
+                // first pass rather than on the fallback (`socks.specs/README.md` §6).
+                "was ist das für ein (lied|song|titel|stück)",
+                "was für ein (lied|song|titel|stück) ist das",
+                "(wie|welches) (heißt|heisst) (das lied|das stück|die nummer)",
+                "wie (heißt|heisst) (der song|der titel)",
+                "welches (lied|stück) ist das",
+                "welcher (song|titel) ist das",
+                "was (läuft|spielt) (da|hier)?",
+                "welche musik (läuft|spielt)",
+                // The loosest wording in this Sock, and it resolves to the song rather than the
+                // artist deliberately: somebody pointing at a speaker with two words is asking
+                // what the thing is called, and the answer names the artist as well anyway.
+                "wie (heißt|heisst) das",
+            ),
+            description = "Sagt, welcher Titel gerade auf Spotify läuft — mit Künstler.",
+            help = CommandHelp(
+                title = "Was läuft gerade?",
+                detail = "Nennt den laufenden Titel und den Künstler dazu.",
+                hints = listOf("„Wer spielt das?“ nennt nur den Künstler."),
+                aliases = listOf("was läuft", "wie heißt das lied", "welcher song ist das"),
+            ),
+            examples = listOf(
+                Example("was ist das für ein lied"),
+                Example("wie heißt der song"),
+                Example("wie heißt das"),
+                Example("welches lied ist das"),
+                Example("was läuft gerade"),
+                Example("welche musik läuft"),
+                // Paraphrases Tier 1 is meant to miss — few-shots for the LLM tier (M6).
+                Example("kannst du mir sagen wie das lied heißt", matchedByTemplates = false),
+                Example("sag mir mal den titel von dem song hier", matchedByTemplates = false),
+                // Held out: never rendered into a prompt, measured against on the device.
+                Example("ich kenne das lied aber komme nicht auf den namen", heldOut = true),
+                Example("was für musik ist das denn", heldOut = true),
+            ),
+        ),
+        ExclusiveCommandSpec(
+            id = WHATS_THE_ARTIST,
+            templates = patterns(
+                "was ist das für ein (künstler|interpret|sänger|artist)",
+                "was ist das für eine (band|sängerin|gruppe)",
+                "wie (heißt|heisst) (der künstler|der interpret|der sänger|der artist)",
+                "wie (heißt|heisst) (die band|die sängerin|die gruppe)",
+                // Bare "wer ist das" is deliberately absent, and it is the one wording in
+                // the user's list that is not here. It is a question about a person at least as
+                // often as about a song — at a door, in a photo, on the radio news — and this
+                // Sock has no way to tell which was meant. "Wer spielt das" and "wer singt das"
+                // name the act of playing and cannot be about anything else.
+                "wer (spielt|singt) (das|den song|das lied|hier)?",
+                "von wem ist (das|der song|das lied|das stück)",
+                "wer ist (der|die) (künstler|interpret|sänger|band|sängerin)",
+            ),
+            description = "Sagt, wer den Titel spielt, der gerade auf Spotify läuft.",
+            help = CommandHelp(
+                title = "Wer spielt das?",
+                detail = "Nennt den Künstler des laufenden Titels.",
+                hints = listOf("„Wie heißt das Lied?“ nennt Titel und Künstler."),
+                aliases = listOf("wer spielt das", "wie heißt der künstler", "von wem ist das"),
+            ),
+            examples = listOf(
+                Example("wer spielt das"),
+                Example("wer singt das"),
+                Example("wie heißt der künstler"),
+                Example("was ist das für eine band"),
+                Example("von wem ist der song"),
+                Example("kannst du mir sagen von wem das ist", matchedByTemplates = false),
+                Example("den künstler kenne ich gar nicht", heldOut = true),
+            ),
+        ),
     )
 
     /**
@@ -356,6 +436,8 @@ class SpotifySock(
             SKIP_NEXT -> transport(SpotifyPlayer::skipNext)
             SKIP_PREVIOUS -> transport(SpotifyPlayer::skipPrevious)
             RESTART_SONG -> transport(SpotifyPlayer::seekToStart)
+            WHATS_THE_SONG -> whatsPlaying(withTitle = true)
+            WHATS_THE_ARTIST -> whatsPlaying(withTitle = false)
             SharedCommands.STOP.id -> stop()
             SharedCommands.RESUME.id -> resumeChain()
             // Unreachable in practice: the dispatcher only routes commands this Sock owns.
@@ -565,6 +647,50 @@ class SpotifySock(
     }
 
     /**
+     * `spotify.whats_the_song` and `spotify.whats_the_artist` (`spotify.specs.md` §5a).
+     *
+     * **A pure read of the cached snapshot. No [open], no Binder round trip, no consent
+     * dialog.** Every other command here connects because it is about to *change* something;
+     * this one is a question about what is already true, and the App Remote's subscription is
+     * where that truth lives — the same cache [activityFor] is required to read and the same
+     * one the wall panel draws. A question that opens a connection is a question that can hang
+     * for two seconds and then put a dialog over the answer.
+     *
+     * The consequence is the one [activityFor] already accepts and writes down: a silently dead
+     * App Remote leaves a stale cache, and the answer is then the last track it knew about. The
+     * subscription's error callback clears the cache, which turns most of that window into an
+     * honest "nothing is playing".
+     *
+     * @param withTitle true for the song — which names the artist too, because "Blinding Lights"
+     *   on its own is half an answer and nobody asks the follow-up out loud. False for the
+     *   artist alone, which is the whole of what "wer spielt das" asked.
+     */
+    private fun whatsPlaying(withTitle: Boolean): SockResult {
+        unavailable()?.let { return SockResult.Failed(it) }
+        val snapshot = player.state.value ?: return SockResult.Spoken(NOTHING_PLAYING)
+        // Both are `orEmpty()` at the edge of the SDK, so both can be blank here. Trimmed
+        // because a title with a trailing space reads as a pause in the middle of a sentence.
+        val title = snapshot.title.trim()
+        val artist = snapshot.artist.trim()
+        if (title.isEmpty() && artist.isEmpty()) return SockResult.Spoken(NOTHING_PLAYING)
+
+        if (!withTitle) {
+            return if (artist.isEmpty()) {
+                SockResult.Spoken(NO_ARTIST)
+            } else {
+                SockResult.Spoken { "$artist." }
+            }
+        }
+        // Paused or playing, the question is the same and so is the answer: the track is
+        // loaded, it is on the card, and "what is this" is asked about it either way.
+        if (artist.isEmpty()) return SockResult.Spoken { "$title." }
+        if (title.isEmpty()) return SockResult.Spoken { "$artist." }
+        return SockResult.Spoken { lang ->
+            if (lang == Lang.EN) "$title by $artist." else "$title von $artist."
+        }
+    }
+
+    /**
      * The card's transport controls (`spotify.specs.md` §7): the same moves, from a finger.
      *
      * `RadioSock.stopFromPanel` is the precedent and the argument. These go straight at the
@@ -745,6 +871,8 @@ class SpotifySock(
         const val SKIP_NEXT: String = "spotify.skip_next"
         const val SKIP_PREVIOUS: String = "spotify.skip_previous"
         const val RESTART_SONG: String = "spotify.restart_song"
+        const val WHATS_THE_SONG: String = "spotify.whats_the_song"
+        const val WHATS_THE_ARTIST: String = "spotify.whats_the_artist"
 
         /** Tied with Radio on `shared.stop`, ahead of it on `shared.resume` (§6). */
         const val CHAIN_PRIORITY: Int = 50
@@ -794,5 +922,9 @@ class SpotifySock(
         val NOTHING_PAUSED: Phrase =
             Phrase.of("Auf Spotify ist nichts pausiert.", "Nothing is paused on Spotify.")
         val RUNNING: Phrase = Phrase.of("Läuft.", "Playing.")
+        val NO_ARTIST: Phrase = Phrase.of(
+            "Spotify nennt dazu keinen Künstler.",
+            "Spotify doesn't name an artist for this.",
+        )
     }
 }

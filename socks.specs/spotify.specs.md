@@ -136,9 +136,13 @@ must contain every command whether or not a device is present.
 | `spotify.skip_next` | — | Springt zum nächsten Titel. |
 | `spotify.skip_previous` | — | Springt zum vorherigen Titel. |
 | `spotify.restart_song` | — | Spielt den laufenden Titel von vorne. |
+| `spotify.whats_the_song` | — | Sagt, welcher Titel gerade auf Spotify läuft — mit Künstler. |
+| `spotify.whats_the_artist` | — | Sagt, wer den Titel spielt, der gerade auf Spotify läuft. |
 
 `skip_previous` and `restart_song` are the two commands that were missing from a music Sock
-somebody actually talks to.
+somebody actually talks to. `whats_the_song` and `whats_the_artist` are the two that were
+missing from one somebody *listens* to: every other command in this Sock changes what is
+playing, and these are the only ones that ask about it.
 
 ### Shared subscriptions
 
@@ -555,6 +559,105 @@ Behavior: `playerApi.seekTo(0)` — a seek, not a re-`play(uri)`, which would re
 
 ---
 
+## 5a. `whats_the_song`, `whats_the_artist`
+
+The two commands that only read. Both take no params and both answer from the cached snapshot.
+
+### Tier 1 templates
+
+`spotify.whats_the_song`:
+
+```
+was ist das für ein (lied|song|titel|stück)
+was für ein (lied|song|titel|stück) ist das
+(wie|welches) (heißt|heisst) (das lied|das stück|die nummer)
+wie (heißt|heisst) (der song|der titel)
+welches (lied|stück) ist das
+welcher (song|titel) ist das
+was (läuft|spielt) (da|hier)?
+welche musik (läuft|spielt)
+wie (heißt|heisst) das
+```
+
+`spotify.whats_the_artist`:
+
+```
+was ist das für ein (künstler|interpret|sänger|artist)
+was ist das für eine (band|sängerin|gruppe)
+wie (heißt|heisst) (der künstler|der interpret|der sänger|der artist)
+wie (heißt|heisst) (die band|die sängerin|die gruppe)
+wer (spielt|singt) (das|den song|das lied|hier)?
+von wem ist (das|der song|das lied|das stück)
+wer ist (der|die) (künstler|interpret|sänger|band|sängerin)
+```
+
+**The articles are written out although `das`, `der` and `die` are fillers.** Skipping drops
+*extra* words from the utterance; it does not make a template's own literals optional. "Wie
+heißt das Lied" needs its `das`, and what the filler list buys is "wie heißt denn gerade das
+Lied" for free — the particles, not the articles.
+
+**Both spellings of `heißt`.** The phonetic tier folds ß to ss and would reach `heisst` anyway,
+but the commonest phrasing in this Sock belongs on the strict first pass rather than on the
+fallback (`README.md` §6).
+
+**`wie heißt das` is the loosest wording here and resolves to the song, not the artist.**
+Somebody pointing at a speaker with three words is asking what the thing is called, and that
+answer names the artist as well.
+
+**Bare `wer ist das` is deliberately not claimed** — the one wording from the original request
+that is absent. It is a question about a person at least as often as about a song (at a door,
+in a photo, on the radio news), and this Sock cannot tell which was meant. `wer spielt das` and
+`wer singt das` name the act of playing and cannot be about anything else.
+
+### Utterances → invocation
+
+| Utterance | Invocation |
+|---|---|
+| was ist das für ein lied | `whats_the_song()` |
+| wie heißt der song | `whats_the_song()` |
+| wie heißt das | `whats_the_song()` |
+| welches lied ist das | `whats_the_song()` |
+| was läuft gerade | `whats_the_song()` |
+| welche musik läuft | `whats_the_song()` |
+| wer spielt das | `whats_the_artist()` |
+| wer singt das | `whats_the_artist()` |
+| wie heißt der künstler | `whats_the_artist()` |
+| was ist das für eine band | `whats_the_artist()` |
+| von wem ist der song | `whats_the_artist()` |
+
+### Behavior
+
+**A pure read of the cached snapshot. No `connect()`, no Binder round trip, no consent
+dialog.** Every other command in this Sock connects because it is about to *change* something;
+these are questions about what is already true, and the App Remote's subscription is where that
+truth lives — the same cache §6 requires `activityFor` to read and the same one the wall panel
+draws. A question that opens a connection is a question that can hang for two seconds and then
+put a dialog over its own answer.
+
+The consequence is the one §6 already accepts and writes down: a silently dead App Remote leaves
+a stale cache, and the answer is then the last track it knew about. The subscription's error
+callback clears the cache, which turns most of that window into an honest "nothing is playing".
+
+Paused or playing makes no difference. The track is loaded, it is on the card, and "what is
+this" is asked about it either way.
+
+### Result
+
+| Case | Result | German TTS |
+|---|---|---|
+| `whats_the_song`, both known | `Spoken` | "Blinding Lights von The Weeknd." |
+| `whats_the_song`, no artist | `Spoken` | "Blinding Lights." |
+| `whats_the_artist` | `Spoken` | "The Weeknd." |
+| `whats_the_artist`, no artist | `Spoken` | "Spotify nennt dazu keinen Künstler." |
+| Nothing loaded | `Spoken` | "Auf Spotify läuft gerade nichts." |
+| Not installed / not configured | `Failed` | the standing reason (§3) |
+
+`whats_the_song` names the artist too, because "Blinding Lights" on its own is half an answer
+and nobody asks the follow-up out loud. `whats_the_artist` does **not** name the title, because
+"wer spielt das" asked one thing and got it.
+
+---
+
 ## 6. Activity
 
 | Shared command | `ACTIVE` | `IDLE` | `INACTIVE` |
@@ -641,7 +744,22 @@ Exclusively claimed by this Sock: `spiele`, `spiel`, `mach … an`, `leg … auf
 `… zurück`, `zurück zum <vorherigen|letzten> …`, `von vorne`, `von anfang`, `nochmal von vorne`,
 `<das lied|den song|den titel> <nochmal|neu> starten`.
 
-Deliberately **not** claimed: bare `zurück` and bare `nochmal` (§5).
+Also claimed, all of them read-only (§5a): `was ist das für ein <lied|song|titel|stück|künstler
+|interpret|sänger|artist>`, `was ist das für eine <band|sängerin|gruppe>`, `wie heißt <das lied|
+der song|der künstler|die band|…>`, `welches <lied|stück> ist das`, `welcher <song|titel> ist
+das`, `was <läuft|spielt>`, `welche musik <läuft|spielt>`, `wie heißt das`, `wer <spielt|singt>
+das`, `von wem ist …`, `wer ist <der|die> <künstler|band|…>`.
+
+Deliberately **not** claimed: bare `zurück` and bare `nochmal` (§5), and bare `wer ist das`
+(§5a).
+
+> ⚠️ **`was läuft gerade` while the radio is playing answers about Spotify.** These commands are
+> exclusive to this Sock, so they route by id and never consult the chain — and the Radio Sock
+> has an ICY now-playing title of its own that they cannot see. The answer is then the honest
+> but unhelpful "Auf Spotify läuft gerade nichts." The shape of the fix is a shared command
+> (`shared.whats_playing`, arbitrated by `activityFor` exactly as `shared.stop` is), not a
+> second copy of these templates in `:socks:radio`. Recorded here rather than built, because it
+> touches core's shared catalog and both Socks.
 
 Contributed to chains, **not** owned: `stopp`, `stop`, `halt`, `pause`, `pausiere`, `aus`,
 `weiter`, `fortsetzen`, `weiterspielen`. A new Sock that wants these does not have to fight for
