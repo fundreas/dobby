@@ -453,8 +453,14 @@ class DobbyController(
      * [TurnAudio.speaking] nests. What it buys is the two cases the turn duck does not cover:
      * an announcement outside a turn, and `TurnDuck.DUCK_UNLESS_BLUETOOTH`, where the whole
      * point is that the microphone did not need the music turned down. The ear still does.
+     *
+     * The `audible` signal is handed straight through to the voice, and that is the timing
+     * fix: the text reaches the chat the moment the answer exists, but Piper spends about a
+     * second synthesising it, and ducking on this line instead would hold the music down for
+     * that second with nothing to fill it.
      */
-    private suspend fun say(text: String) = turnAudio.speaking { pipeline.say(text) }
+    private suspend fun say(text: String) =
+        turnAudio.speaking { audible -> pipeline.say(text, audible) }
 
     /**
      * The language Dobby answers in, which is the voice's language and nothing else.

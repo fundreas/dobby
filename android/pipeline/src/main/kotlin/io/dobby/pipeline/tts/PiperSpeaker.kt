@@ -47,6 +47,10 @@ import kotlin.math.tanh
  * `USAGE_ASSISTANT` / `CONTENT_TYPE_SPEECH`. Outside a turn the only caller is a Sock's
  * `announce()`, and the Clock Sock already holds transient focus while it rings. A third
  * request from the same process over the top of those two is not this class's to make.
+ *
+ * What this class does owe the duck is *when*: `say`'s `onAudible` fires at the first buffer
+ * handed to the track, roughly a second after the sentence arrived here, and that second is
+ * the one the music used to spend quiet with nothing over it.
  */
 class PiperSpeaker(
     private val files: VoiceFiles,
@@ -94,9 +98,9 @@ class PiperSpeaker(
      * as [stop] — the flag the callback and the write loop read — and not as a coroutine
      * cancellation the blocked thread would never notice.
      */
-    override suspend fun say(text: String): Boolean {
+    override suspend fun say(text: String, onAudible: () -> Unit): Boolean {
         if (text.isBlank()) return false
-        val task = worker.async { speak(text) }
+        val task = worker.async { speak(text, onAudible) }
         return try {
             task.await()
         } catch (e: CancellationException) {
@@ -150,7 +154,7 @@ class PiperSpeaker(
     }
 
     /** On the TTS thread. */
-    private suspend fun speak(text: String): Boolean {
+    private suspend fun speak(text: String, onAudible: () -> Unit): Boolean {
         if (freed) {
             freed = false
             // Queued behind this call on the single thread, so it reloads while the system
@@ -160,6 +164,15 @@ class PiperSpeaker(
         }
 
         val engine = load() ?: return false
+        // Once per sentence however many callbacks it takes, and never at all for a sentence
+        // that was stopped or failed before a sample existed.
+        var announced = false
+        val audible = {
+            if (!announced) {
+                announced = true
+                onAudible()
+            }
+        }
         stopped = false
         val rate = engine.sampleRate()
         val output = open(rate) ?: return false
@@ -177,6 +190,12 @@ class PiperSpeaker(
                 if (stopped) {
                     0
                 } else {
+                    // The first sentence's samples are the first thing anybody hears, and this
+                    // is the earliest honest moment to say so: the graph has run, the track is
+                    // playing, and the write below hands the buffer to the hardware. Signalling
+                    // any earlier — at `say`, or at `play()` above — is signalling a second of
+                    // synthesis before the sound, which is the whole complaint.
+                    audible()
                     frames += write(output, samples)
                     1
                 }

@@ -40,6 +40,12 @@ import kotlinx.coroutines.sync.withLock
  * over a chorus was not worth speaking. It nests: inside a turn that already ducked it does
  * nothing, because the music is down already.
  *
+ * **And it is taken at the first sample, not at the first word of the sentence.** Piper spends
+ * about a second synthesising before anything comes out, and the answer is on screen for all of
+ * it; ducking at [beginSpeech] meant a second of quiet music with nothing over it, which sounds
+ * like the panel interrupting the song rather than talking over it. So [beginSpeech] only
+ * counts, [speechAudible] ducks, and the voice says when that is.
+ *
  * What this does **not** fix is the wake word, which has to be heard before there is a turn to
  * duck at all. That is Part B's problem and the microphone source's (`m2b-plan.md`).
  */
@@ -71,8 +77,23 @@ class AndroidTurnAudio(
     /** Non-null exactly while a spoken sentence holds a duck the turn had not already taken. */
     private var speech: AudioFocusRequest? = null
 
-    /** How many spoken sentences are in flight. Counted, because `speaking` nests. */
+    /**
+     * How many spoken sentences are in flight. Counted, because `speaking` nests.
+     *
+     * In flight is not the same as audible: a sentence spends its first second being
+     * synthesised, and during that second it is counted here but has ducked nothing.
+     */
     private var speakers = 0
+
+    /**
+     * Whether any sentence in flight has actually started coming out of the speaker.
+     *
+     * Distinct from `speech != null`, which is only true when the *speech* duck is the one
+     * holding the music down. Inside a turn the turn duck is holding it instead and [speech]
+     * stays null — and a turn that ends mid-sentence still must not hand the music back under
+     * an answer that is halfway through. Cleared when the last sentence ends.
+     */
+    private var heard = false
 
     override suspend fun duck() = state.withLock {
         // A turn takes one duck however many utterances it holds. Un-ducking between them would
@@ -107,23 +128,39 @@ class AndroidTurnAudio(
         held?.let { audio.abandonAudioFocusRequest(it) }
         // Unconditionally, and even if there was no focus: a duck that outlived its turn is a
         // panel that permanently quietened the music, which is a more annoying failure than the
-        // one being fixed. Unless a sentence is still playing — a turn that is cut short while
-        // Dobby is talking must not take the answer's duck with it.
-        if (speakers == 0) {
+        // one being fixed. Unless a sentence is actually being heard — a turn that is cut short
+        // while Dobby is talking must not take the answer's duck with it. A sentence that is
+        // still being synthesised is not being heard, and the music goes back up under it until
+        // its first sample arrives.
+        if (!heard) {
             players.restore { Log.w(TAG, "turn duck: in-process player refused to restore", it) }
         }
     }
 
     /**
-     * The music goes down for a spoken sentence even when the turn left it alone.
+     * A sentence has been handed to the voice. Nothing happens to the music yet.
      *
-     * Only the first sentence in flight does anything, and only when the turn is not already
+     * The count is what [release] and [endSpeech] read; the duck itself waits for
+     * [speechAudible]. Taking it here instead is what made the panel drop the music a second
+     * before it said anything: Piper needs roughly that long to synthesise the first sentence,
+     * and the answer is already on screen while it does.
+     */
+    override suspend fun beginSpeech() = state.withLock {
+        speakers++
+        Unit
+    }
+
+    /**
+     * The first sample is on its way out: the music goes down now, even when the turn left it
+     * alone.
+     *
+     * Only the first audible sentence does anything, and only when the turn is not already
      * holding the music down: a second attenuation on top of a turn duck would make the answer
      * quieter than the panel meant it to be, which is the opposite of the point.
      */
-    override suspend fun beginSpeech() = state.withLock {
-        val first = speakers++ == 0
-        if (!first || request != null) return@withLock
+    override suspend fun speechAudible() = state.withLock {
+        heard = true
+        if (speech != null || request != null) return@withLock
 
         speech = take(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
         players.duck(InProcessPlayers.DUCK_VOLUME) {
@@ -135,6 +172,7 @@ class AndroidTurnAudio(
         // The sentence inside a sentence gives nothing back: the outer one is still playing.
         if (--speakers > 0) return@withLock
 
+        heard = false
         val held = speech
         speech = null
         held?.let { audio.abandonAudioFocusRequest(it) }

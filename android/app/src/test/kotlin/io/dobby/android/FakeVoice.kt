@@ -213,7 +213,10 @@ internal class FakeVoice(vararg utterances: String?) : VoiceIo {
         turnOpen = false
     }
 
-    override suspend fun say(text: String) {
+    override suspend fun say(text: String, onAudible: suspend () -> Unit) {
+        // A fake voice is audible the instant it is asked to speak: there is no synthesis to
+        // wait through, so the duck's late signal and its early one are the same moment here.
+        onAudible()
         spoken += text
     }
 

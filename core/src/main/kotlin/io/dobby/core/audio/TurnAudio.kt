@@ -27,7 +27,9 @@ import java.util.concurrent.CopyOnWriteArrayList
  * [TurnDuck] can switch it off — but a spoken answer nobody can hear over the music is not an
  * answer, whatever the setting says. So every sentence Dobby speaks is wrapped in one, and it
  * applies even where the turn duck did not: under [TurnDuck.DUCK_UNLESS_BLUETOOTH], and
- * outside a turn altogether, which is where a timer announces itself.
+ * outside a turn altogether, which is where a timer announces itself. Unlike the turn duck it
+ * is taken late — when the first sample goes out, not when the sentence is handed to the voice
+ * — because synthesising it takes a second the music would otherwise spend down for nothing.
  */
 interface TurnAudio {
     suspend fun duck()
@@ -40,11 +42,21 @@ interface TurnAudio {
      * Nests inside a turn duck and costs nothing there — the music is already down, and a
      * second attenuation on top of the first would only make the answer quieter than the
      * panel intended. Outside one it is the whole duck.
+     *
+     * **The duck is taken by the sentence, not by the decision to say it.** [block] is handed
+     * an `audible` signal and is expected to call it at the moment the first sample actually
+     * goes out — which on this device is a second or more after the answer appeared in the
+     * chat, because Piper has to synthesise it first. Ducking at the top of the block instead
+     * would spend that whole second with the music down and nothing over it, which reads as
+     * the panel having dropped the music rather than as it making room to speak.
+     *
+     * A block that never signals never ducks, which is the right answer for a sentence that
+     * turned out not to be spoken at all — a voice with no graph, a `say` of blank text.
      */
-    suspend fun <T> speaking(block: suspend () -> T): T {
+    suspend fun <T> speaking(block: suspend (audible: suspend () -> Unit) -> T): T {
         beginSpeech()
         try {
-            return block()
+            return block { speechAudible() }
         } finally {
             // NonCancellable, for the reason the turn's own release is: a turn aborted while
             // Dobby is mid-sentence would otherwise skip this and leave the music quiet for
@@ -55,6 +67,9 @@ interface TurnAudio {
     }
 
     /**
+     * A sentence is in flight but not yet audible. Takes no duck — it only says that one is
+     * coming, so that a turn ending mid-synthesis knows not to treat the music as settled.
+     *
      * Counted, not flagged, by implementations: [speaking] can nest, and the inner sentence
      * finishing must not restore the music under the outer one.
      *
@@ -62,6 +77,14 @@ interface TurnAudio {
      * with no audio to duck has no speech to duck either.
      */
     suspend fun beginSpeech() = Unit
+
+    /**
+     * The first sample of a spoken sentence is on its way to the speaker: duck now.
+     *
+     * Idempotent, and called once per sentence at most. Sentences after the first in one
+     * answer find the music already down and change nothing.
+     */
+    suspend fun speechAudible() = Unit
 
     suspend fun endSpeech() = Unit
 

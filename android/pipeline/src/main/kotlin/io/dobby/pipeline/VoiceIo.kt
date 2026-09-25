@@ -116,8 +116,16 @@ interface VoiceIo {
      */
     fun endTurn()
 
-    /** Speaks [text], returning once it has finished playing. */
-    suspend fun say(text: String)
+    /**
+     * Speaks [text], returning once it has finished playing.
+     *
+     * [onAudible] runs once, when the first sample actually reaches the hardware — which on
+     * this device is about a second after the call, because Piper has to synthesise the
+     * sentence first. It is how the caller turns the music down at the moment Dobby starts
+     * talking rather than at the moment it decided to; a sentence that ends up unspoken never
+     * runs it.
+     */
+    suspend fun say(text: String, onAudible: suspend () -> Unit = {})
 
     /**
      * Two short buzzes: heard you, did not understand you.

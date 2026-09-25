@@ -570,10 +570,15 @@ class VoicePipeline(
     override fun buzz() = haptics.notUnderstood()
 
     /** Speaks [text], returning once it has finished playing. */
-    override suspend fun say(text: String) {
+    override suspend fun say(text: String, onAudible: suspend () -> Unit) {
         if (text.isBlank()) return
         val previous = _state.value
         _state.value = VoiceState.Speaking(text)
+        // The voices signal from whatever thread they are playing on — the TTS thread for
+        // Piper, the engine's callback thread for the platform voice — and neither is a
+        // coroutine. So the signal is bounced into [scope], which is also what keeps a caller
+        // that wants to take a mutex from blocking the thread that is feeding the audio track.
+        val audible = { scope.launch { onAudible() }; Unit }
         try {
             // One sentence is spoken by one voice: the lock is what keeps a swap from landing
             // between two writes of the same answer.
@@ -582,7 +587,10 @@ class VoicePipeline(
                 // False means this voice said nothing — a graph freed under memory pressure,
                 // or a platform engine with no German voice. The phone's own voice is what
                 // stands behind both, and a sentence in the wrong voice beats a silent panel.
-                if (!active.say(text) && active !== platformSpeaker) platformSpeaker.say(text)
+                // The fallback carries the same signal: it is the one that will be heard.
+                if (!active.say(text, audible) && active !== platformSpeaker) {
+                    platformSpeaker.say(text, audible)
+                }
             }
         } finally {
             _state.value = if (previous is VoiceState.Unavailable) previous else idleState()

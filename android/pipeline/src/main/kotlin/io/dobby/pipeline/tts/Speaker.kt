@@ -33,8 +33,14 @@ interface Speaker {
      * no German voice and a Piper graph that was freed under memory pressure are the same
      * situation to the caller: this sentence needs another voice. Returning a boolean rather
      * than throwing keeps that an ordinary answer, because it is one.
+     *
+     * [onAudible] is called once, from whatever thread the voice happens to be on, at the
+     * moment the first sample is handed to the hardware — not when the sentence was accepted.
+     * The gap between the two is a second of Piper synthesis, and it is the second the music
+     * used to spend ducked with nothing over it. It must not block, and an implementation that
+     * says nothing must never call it.
      */
-    suspend fun say(text: String): Boolean
+    suspend fun say(text: String, onAudible: () -> Unit = {}): Boolean
 
     /** Stops whatever is playing now. Safe from any thread. */
     fun stop()
@@ -58,6 +64,14 @@ class PlatformSpeaker(
 ) : Speaker {
     private val initialised = CompletableDeferred<Boolean>()
     private val pending = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
+
+    /**
+     * What to run when an utterance actually starts playing, by id.
+     *
+     * Removed as it fires, so a duck is taken once and an utterance that errored before it
+     * started never takes one at all.
+     */
+    private val starting = ConcurrentHashMap<String, () -> Unit>()
     private val nextId = AtomicLong()
 
     private val tts = TextToSpeech(context.applicationContext) { status ->
@@ -66,9 +80,14 @@ class PlatformSpeaker(
 
     init {
         tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) = Unit
+            // The engine has begun producing audio for this utterance, which is exactly the
+            // question the duck is asking. Queued utterances get theirs when their turn comes.
+            override fun onStart(utteranceId: String?) {
+                starting.remove(utteranceId)?.invoke()
+            }
 
             override fun onDone(utteranceId: String?) {
+                starting.remove(utteranceId)
                 pending.remove(utteranceId)?.complete(Unit)
             }
 
@@ -76,10 +95,12 @@ class PlatformSpeaker(
             // the errorCode overload below, but this one still has to exist.
             @Suppress("OVERRIDE_DEPRECATION")
             override fun onError(utteranceId: String?) {
+                starting.remove(utteranceId)
                 pending.remove(utteranceId)?.complete(Unit)
             }
 
             override fun onError(utteranceId: String?, errorCode: Int) {
+                starting.remove(utteranceId)
                 pending.remove(utteranceId)?.complete(Unit)
             }
         })
@@ -89,22 +110,25 @@ class PlatformSpeaker(
     override suspend fun awaitReady(): Boolean = initialised.await()
 
     /** Speaks [text] and returns once it has finished playing. */
-    override suspend fun say(text: String): Boolean {
+    override suspend fun say(text: String, onAudible: () -> Unit): Boolean {
         if (text.isBlank() || !awaitReady()) return false
 
         val id = "dobby-${nextId.incrementAndGet()}"
         val done = CompletableDeferred<Unit>()
         pending[id] = done
+        starting[id] = onAudible
 
         val queued = tts.speak(text, TextToSpeech.QUEUE_ADD, null, id)
         if (queued != TextToSpeech.SUCCESS) {
             pending.remove(id)
+            starting.remove(id)
             return false
         }
 
         suspendCancellableCoroutine { continuation ->
             continuation.invokeOnCancellation {
                 pending.remove(id)
+                starting.remove(id)
                 tts.stop()
             }
             done.invokeOnCompletion { continuation.resume(Unit) }
@@ -114,6 +138,7 @@ class PlatformSpeaker(
 
     override fun stop() {
         tts.stop()
+        starting.clear()
         pending.keys.forEach { pending.remove(it)?.complete(Unit) }
     }
 
