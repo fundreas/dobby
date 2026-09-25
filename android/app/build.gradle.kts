@@ -107,6 +107,7 @@ dependencies {
     implementation(project(":socks:system"))
     implementation(project(":socks:memo"))
     implementation(project(":socks:weather"))
+    implementation(project(":socks:departures"))
     // The App Remote, behind the interfaces :socks:spotify declares.
     implementation(project(":android:spotify"))
     // Winky is a development Sock and must not reach a release build (dobby-plan.md §8).

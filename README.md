@@ -36,7 +36,7 @@ Phase A was "Dobby in a terminal": everything below the microphone and above the
 | `:android:pipeline` | Microphone in, German text out; German text in, sound out. `AudioRecord` owner + frame router, openWakeWord, Silero VAD + Parakeet STT, Piper voices through sherpa-onnx with Android TTS as the fallback. Knows nothing about Socks. |
 | `:android:app` | The foreground service, the Android `SockContext`, the chat view, and the one place that knows which Socks exist. |
 
-Not yet built: the LLM tier, the remaining Socks (Spotify, Radio, System, Departures), and the rest of the dashboard — Clock brought the first card with it, Calculator the second. See [`dobby-plan.md`](dobby-plan.md) §8.
+Not yet built: the LLM tier, the remaining Socks (Spotify, Radio, System), and the rest of the dashboard — Clock brought the first card with it, Calculator the second. See [`dobby-plan.md`](dobby-plan.md) §8.
 
 ## Run it
 

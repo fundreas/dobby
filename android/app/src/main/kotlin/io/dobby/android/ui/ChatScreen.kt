@@ -54,6 +54,7 @@ import io.dobby.socks.memo.MemoState
 import io.dobby.socks.radio.RadioState
 import io.dobby.socks.radio.Station
 import io.dobby.socks.spotify.PlayerSnapshot
+import io.dobby.socks.departures.DeparturesState
 import io.dobby.socks.weather.WeatherState
 import java.time.Instant
 
@@ -74,9 +75,11 @@ fun ChatScreen(
     radio: RadioState,
     memos: MemoState,
     weather: WeatherState,
+    departures: DeparturesState,
     muted: Boolean,
     onSetUpWeather: () -> Unit,
     onRefreshWeather: () -> Unit,
+    onRefreshDepartures: () -> Unit,
     onStopRadio: () -> Unit,
     onPickStation: (Station) -> Unit,
     onSpotifyPrevious: () -> Unit,
@@ -129,6 +132,17 @@ fun ChatScreen(
             now = Instant.now(),
             onSetUp = onSetUpWeather,
             onRefresh = onRefreshWeather,
+        )
+        // Below the weather, and drawn on the same terms: a departure board is something that
+        // is true rather than something the panel is doing, and one that only appears while
+        // you are asking about it is one you have to ask about (`departures.specs.md` §5).
+        // `Instant.now()` per recomposition for the same reason the weather card takes one —
+        // the freshness line is supposed to be the truth at the moment of drawing.
+        DeparturesCard(
+            departures,
+            now = Instant.now(),
+            onOpenSettings = onSettings,
+            onRefresh = onRefreshDepartures,
         )
         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
         Conversation(state.messages, Modifier.weight(1f))

@@ -5,6 +5,8 @@ import io.dobby.core.sock.Sock
 import io.dobby.socks.calculator.CalculatorSock
 import io.dobby.socks.clock.ClockSock
 import io.dobby.socks.conversation.ConversationSock
+import io.dobby.socks.departures.DepartureSource
+import io.dobby.socks.departures.DeparturesSock
 import io.dobby.socks.help.HelpSock
 import io.dobby.socks.memo.MemoSock
 import io.dobby.socks.radio.RadioPlayer
@@ -55,6 +57,8 @@ object DobbySocks {
         val memo: MemoSock,
         /** And the forecast, and the Setup button that gives it somewhere to be about (§8). */
         val weather: WeatherSock,
+        /** And the departure board, and the stations the settings screen writes (§5). */
+        val departures: DeparturesSock,
         val bindDirectory: (Introspection) -> Unit,
     )
 
@@ -73,6 +77,9 @@ object DobbySocks {
      * @param weather `LocationManager` and the Open-Meteo client. Null off-device, where the
      *   Sock is permanently un-set-up — which is the same code path as a refused location
      *   permission, and therefore a path worth being able to reach without a phone.
+     * @param departures the Wiener Linien client. Null off-device, where the Sock reports every
+     *   question as offline — the station list, the line resolution and the whole command
+     *   surface still work, and only the countdown is missing.
      */
     fun create(
         hardware: ClockHardware? = null,
@@ -80,6 +87,7 @@ object DobbySocks {
         system: SystemHardware? = null,
         radio: RadioHardware? = null,
         weather: WeatherHardware? = null,
+        departures: DeparturesHardware? = null,
     ): Wiring {
         var directory: Introspection? = null
         val clock = if (hardware == null) {
@@ -100,6 +108,7 @@ object DobbySocks {
             source = weather?.source ?: WeatherSource.NONE,
             location = weather?.location ?: DeviceLocation.NONE,
         )
+        val transit = DeparturesSock(source = departures?.source ?: DepartureSource.NONE)
         val socks = buildList {
             add(clock)
             add(music)
@@ -109,9 +118,10 @@ object DobbySocks {
             add(ConversationSock())
             add(notes)
             add(sky)
+            add(transit)
             add(HelpSock { directory })
             addAll(DevSocks.create())
         }
-        return Wiring(socks, clock, music, tuner, device, notes, sky) { directory = it }
+        return Wiring(socks, clock, music, tuner, device, notes, sky, transit) { directory = it }
     }
 }

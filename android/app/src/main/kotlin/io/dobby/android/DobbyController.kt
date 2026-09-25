@@ -39,6 +39,11 @@ import io.dobby.socks.radio.RadioConfig
 import io.dobby.socks.radio.RadioState
 import io.dobby.socks.radio.Station
 import io.dobby.socks.spotify.SpotifyConfig
+import io.dobby.socks.departures.DeparturesConfig
+import io.dobby.socks.departures.DeparturesState
+// Aliased: `Station` is already the Radio Sock's, and a wall panel has both a radio station
+// and a tram stop. Neither name is wrong, so the shorter one keeps the name it had.
+import io.dobby.socks.departures.Station as TransitStation
 import io.dobby.socks.weather.LocateOutcome
 import io.dobby.socks.weather.WeatherState
 import io.dobby.pipeline.VoiceIo
@@ -95,6 +100,11 @@ data class DobbyUiState(
     val spotifyAskWhenUnsure: Boolean = true,
     /** The Radio Sock's default station id (`radio.specs.md` §9), for the settings dropdown. */
     val radioStation: String = "",
+    /**
+     * The Departures Sock's configured stations (`departures.specs.md` §7), for the settings
+     * editor — which is the only place in the panel where they can be added or removed.
+     */
+    val departureStations: List<TransitStation> = emptyList(),
 )
 
 /**
@@ -169,6 +179,11 @@ class DobbyController(
      * a refused location permission.
      */
     weatherHardware: WeatherHardware? = null,
+    /**
+     * The Wiener Linien client. Null in tests and off-device, where the Departures Sock answers
+     * every question as offline and the station list, the card and the templates still work.
+     */
+    departuresHardware: DeparturesHardware? = null,
     /** Remembers the wake phrase and whether it is armed, across restarts. */
     private val settings: Settings? = null,
     /**
@@ -215,8 +230,14 @@ class DobbyController(
 
     private val health = SockHealth()
 
-    private val wiring =
-        DobbySocks.create(hardware, spotifyHardware, systemHardware, radioHardware, weatherHardware)
+    private val wiring = DobbySocks.create(
+        hardware,
+        spotifyHardware,
+        systemHardware,
+        radioHardware,
+        weatherHardware,
+        departuresHardware,
+    )
 
     /** The panel's clock and timer countdown, straight from the Sock that owns them. */
     val clock: StateFlow<ClockState> get() = wiring.clock.state
@@ -310,6 +331,32 @@ class DobbyController(
 
     /** The card's refresh, for a panel somebody is standing in front of right now. */
     fun refreshWeather(): Job = scope.launch { wiring.weather.refreshFromPanel() }
+
+    /** The departure board and the stations it is for, straight from the Sock (§5). */
+    val departures: StateFlow<DeparturesState> get() = wiring.departures.state
+
+    /**
+     * The freshness line on the departure card, tapped.
+     *
+     * It may do nothing, and that is the design: the 30-second floor has no bypass, including
+     * for a finger (`departures.specs.md` §6.2). Inside the window the card is already showing
+     * „gerade eben", which is the honest answer to "is this current".
+     */
+    fun refreshDepartures(): Job = scope.launch { wiring.departures.refreshFromPanel() }
+
+    /**
+     * The settings screen's station list, written to the store the Sock reads.
+     *
+     * Two steps and not one: the config write is what survives a restart, and the call into the
+     * Sock is what makes the card stop showing a board fetched for the previous stops. Skipping
+     * the second would leave a panel drawing Karlsplatz under the heading somebody just renamed
+     * to Josefstädter Straße.
+     */
+    fun setDepartureStations(stations: List<TransitStation>): Job = scope.launch {
+        sockContext.config.put(DeparturesConfig.STATIONS, DeparturesConfig.encode(stations))
+        wiring.departures.stationsChangedFromPanel()
+        refresh.value = refresh.value + 1
+    }
 
     /**
      * Whether the room is silent, and the button that changes it (`system.specs.md` §4).
@@ -520,6 +567,9 @@ class DobbyController(
     /** The Radio Sock's settings, read through the same store the Sock reads (§9). */
     private val radioConfig = RadioConfig(this.sockContext.config)
 
+    /** And the Departures Sock's, for the station editor (`departures.specs.md` §7). */
+    private val departuresConfig = DeparturesConfig(this.sockContext.config)
+
     val state: StateFlow<DobbyUiState> =
         combine(
             pipeline.state,
@@ -552,6 +602,7 @@ class DobbyController(
                 spotifyPreferTrack = spotifyConfig.preferTrackOverArtist,
                 spotifyAskWhenUnsure = spotifyConfig.askWhenUnsure,
                 radioStation = radioConfig.defaultStation.id,
+                departureStations = departuresConfig.stations,
             )
         }.stateIn(
             scope,

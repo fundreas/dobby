@@ -25,6 +25,7 @@ import io.dobby.socks.radio.RadioSock
 import io.dobby.socks.spotify.SpotifySock
 import io.dobby.socks.system.SystemSock
 import io.dobby.socks.system.VolumeControl
+import io.dobby.socks.departures.DeparturesSock
 import io.dobby.socks.weather.WeatherSock
 import io.dobby.socks.winky.WinkySock
 import io.dobby.socks.help.HelpSock
@@ -82,6 +83,11 @@ object DobbySocks {
             // What stays drivable is the part this harness is for: every template, every
             // utterance table, and the German for both failures.
             WeatherSock(),
+            // `DepartureSource.NONE` for the same reason the Weather Sock gets no source: a
+            // terminal session reaches the internet nowhere, and the half of this Sock worth
+            // driving from a keyboard is the half that has no network in it — the templates,
+            // the line resolution („u sechs" → `U6`) and the German for every failure.
+            DeparturesSock(),
             WinkySock(),
             HelpSock { directory },
         )

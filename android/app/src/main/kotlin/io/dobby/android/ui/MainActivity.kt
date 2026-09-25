@@ -112,6 +112,8 @@ class MainActivity : ComponentActivity() {
                             val memos by connected.controller.memos.collectAsStateWithLifecycle()
                             val weather by connected.controller.weather
                                 .collectAsStateWithLifecycle()
+                            val departures by connected.controller.departures
+                                .collectAsStateWithLifecycle()
                             val muted by connected.controller.muted.collectAsStateWithLifecycle()
                             var settingsOpen by remember { mutableStateOf(false) }
                             var memosOpen by remember { mutableStateOf(false) }
@@ -147,6 +149,9 @@ class MainActivity : ComponentActivity() {
                                         connected.controller.setSpotifyAskWhenUnsure(it)
                                     },
                                     onRadioStation = { connected.controller.setRadioStation(it) },
+                                    onDepartureStations = {
+                                        connected.controller.setDepartureStations(it)
+                                    },
                                 )
                             } else if (memosOpen) {
                                 // The card shows one memo; this is where the rest of them are,
@@ -165,9 +170,13 @@ class MainActivity : ComponentActivity() {
                                     radio = radio,
                                     memos = memos,
                                     weather = weather,
+                                    departures = departures,
                                     muted = muted,
                                     onSetUpWeather = { setUpWeather(connected) },
                                     onRefreshWeather = { connected.controller.refreshWeather() },
+                                    onRefreshDepartures = {
+                                        connected.controller.refreshDepartures()
+                                    },
                                     onStopRadio = { connected.controller.stopRadio() },
                                     onPickStation = { connected.controller.playRadio(it) },
                                     onSpotifyPrevious = { connected.controller.spotifyPrevious() },

@@ -69,6 +69,15 @@ class DobbyService : Service() {
      */
     private var weatherHardware: WeatherHardware? = null
 
+    /**
+     * The Wiener Linien client for the Departures Sock.
+     *
+     * Nothing to release, for the same reason [weatherHardware] has nothing: every request is
+     * one-shot and there is no listener left registered when the service goes
+     * (`departures.specs.md` §6).
+     */
+    private var departuresHardware: DeparturesHardware? = null
+
     /** The local model, once it has loaded. Null on every device and every path that cannot. */
     private var tier2: LlamaTier2? = null
 
@@ -134,6 +143,7 @@ class DobbyService : Service() {
         val turnAudio = AndroidTurnAudio(this, mode = { settings.turnDuck })
         radioHardware = RadioHardware(this, turnAudio.players)
         weatherHardware = WeatherHardware(this)
+        departuresHardware = DeparturesHardware()
         val resolver = buildTier2(settings)
         controller = DobbyController(
             scope = scope,
@@ -153,6 +163,7 @@ class DobbyService : Service() {
             systemHardware = systemHardware,
             radioHardware = radioHardware,
             weatherHardware = weatherHardware,
+            departuresHardware = departuresHardware,
             settings = settings,
             tier2Resolver = resolver,
             turnAudio = turnAudio,
@@ -205,6 +216,7 @@ class DobbyService : Service() {
                 systemHardware,
                 radioHardware,
                 weatherHardware,
+                departuresHardware,
             ).socks,
         )
         val registry = build.registry ?: return null
@@ -286,6 +298,7 @@ class DobbyService : Service() {
         radioHardware?.release()
         radioHardware = null
         weatherHardware = null
+        departuresHardware = null
         scope.cancel()
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null

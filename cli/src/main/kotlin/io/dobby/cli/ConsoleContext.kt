@@ -88,6 +88,9 @@ private class ConsolePlayback : PlaybackCoordinator {
 }
 
 private class ConsoleScreen : ScreenController {
+    /** A terminal is being looked at by definition — somebody is typing into it. */
+    override val isOn: Boolean = true
+
     override fun wakeFor(seconds: Int) = Unit
 
     override fun release() = Unit

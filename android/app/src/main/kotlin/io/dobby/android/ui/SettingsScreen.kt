@@ -17,6 +17,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -36,9 +38,11 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import io.dobby.android.DobbyUiState
 import io.dobby.core.audio.TurnDuck
+import io.dobby.socks.departures.Station
 import io.dobby.socks.radio.Stations
 import io.dobby.pipeline.ListenCue
 import io.dobby.pipeline.audio.MicProfile
@@ -75,6 +79,7 @@ fun SettingsScreen(
     onSpotifyPreferTrack: (Boolean) -> Unit,
     onSpotifyAskWhenUnsure: (Boolean) -> Unit,
     onRadioStation: (String) -> Unit,
+    onDepartureStations: (List<Station>) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier.fillMaxSize()) {
@@ -310,9 +315,120 @@ fun SettingsScreen(
                 )
             }
 
+            item {
+                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                SectionLabel("Abfahrten")
+                DepartureStations(state.departureStations, onDepartureStations)
+            }
+
             item { Spacer(Modifier.size(16.dp)) }
         }
     }
+}
+
+/**
+ * The stations the departure card and „wann fährt der nächste U6" are about
+ * (`departures.specs.md` §7).
+ *
+ * **A DIVA number, typed in**, which is v1 on purpose and the one place in the panel that asks
+ * somebody to copy a number out of a CSV. The alternative is a search field over two thousand
+ * station names on a device with no keyboard, to save a lookup that happens once for a panel
+ * that does not move — and the label has to be typed either way, because „Haltestelle" on the
+ * card should read the way the household says it, which no CSV knows.
+ *
+ * One DIVA covers the whole station: every platform, both directions, all lines. That is why
+ * this is one row per *station* rather than the draft spec's two-to-four RBL ids per station,
+ * and why adding the second and third station costs one query parameter each (§6.4).
+ *
+ * Adding and removing write the whole list at once. There is no edit: a station is a number and
+ * a name, and correcting either is retyping both.
+ */
+@Composable
+private fun DepartureStations(stations: List<Station>, onChange: (List<Station>) -> Unit) {
+    val focus = LocalFocusManager.current
+    var diva by remember { mutableStateOf("") }
+    var label by remember { mutableStateOf("") }
+
+    for (station in stations) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 20.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    station.display,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+                Text(
+                    "DIVA ${station.diva}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            IconButton(onClick = { onChange(stations.filterNot { it.diva == station.diva }) }) {
+                Icon(
+                    Icons.Filled.Close,
+                    contentDescription = "Haltestelle entfernen",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        OutlinedTextField(
+            value = diva,
+            // Digits only, filtered on the way in rather than validated on the way out: a DIVA
+            // with a letter in it would be dropped silently by the config (§7), and a field
+            // that accepts something the panel then ignores is the worst of the three options.
+            onValueChange = { diva = it.filter(Char::isDigit) },
+            modifier = Modifier.weight(1f),
+            label = { Text("DIVA") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Number,
+                imeAction = ImeAction.Next,
+            ),
+        )
+        OutlinedTextField(
+            value = label,
+            onValueChange = { label = it },
+            modifier = Modifier.weight(1.4f),
+            label = { Text("Name") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
+        )
+        Button(
+            onClick = {
+                onChange(stations + Station(diva.trim(), label.trim()))
+                diva = ""
+                label = ""
+                focus.clearFocus()
+            },
+            // A station with no number is nothing to ask about; one that is already in the list
+            // would be a second copy of the same request in the same batched URL.
+            enabled = diva.isNotBlank() && stations.none { it.diva == diva.trim() },
+        ) {
+            Text("Hinzufügen")
+        }
+    }
+
+    Text(
+        "Die DIVA-Nummer steht in der Haltestellenliste der Wiener Linien " +
+            "(wienerlinien.at/ogd_realtime/doku/ogd/wienerlinien-ogd-haltestellen.csv). " +
+            "Eine Nummer deckt die ganze Station ab — alle Steige, beide Richtungen.",
+        Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 /**

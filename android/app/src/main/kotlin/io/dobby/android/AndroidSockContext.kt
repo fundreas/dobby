@@ -208,6 +208,17 @@ private class AndroidScreen(context: Context) : ScreenController {
         "dobby:screen",
     )
 
+    /**
+     * Whether the panel's screen is awake — the gate on the Departures Sock's polling
+     * (`departures.specs.md` §6.1).
+     *
+     * `isInteractive` and not `isScreenOn`: the latter is deprecated and answers "is the
+     * display powered", which on a device showing an always-on clock is true all night. What
+     * this has to mean is "could somebody be reading the card right now", and that is exactly
+     * what interactive means.
+     */
+    override val isOn: Boolean get() = power.isInteractive
+
     override fun wakeFor(seconds: Int) {
         if (seconds <= 0) return
         // A referenced lock would need one release per acquire; this one is a timer that any

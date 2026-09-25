@@ -106,6 +106,22 @@ interface PlaybackCoordinator {
 
 /** Owns the screen-on wake locks. Socks ask; they never hold locks themselves. */
 interface ScreenController {
+    /**
+     * Whether the screen is awake right now.
+     *
+     * Added for a rule rather than for a feature: the Departures Sock polls an unauthenticated
+     * public endpoint and is only allowed to do so while somebody could be looking at the
+     * result (`departures.specs.md` §6.1). Until then this interface could turn the screen on
+     * and not say whether it was on, which left a Sock that has to answer that question with
+     * nothing but a `PowerManager` it is not allowed to touch — a core change and not a local
+     * workaround (`socks.specs/README.md` §2).
+     *
+     * A plain read rather than a flow: it is asked once per tick by a loop that is already
+     * running, and a subscription would be a receiver to register and unregister for a boolean
+     * the platform can answer instantly.
+     */
+    val isOn: Boolean
+
     fun wakeFor(seconds: Int)
 
     fun release()

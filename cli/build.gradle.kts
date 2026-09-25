@@ -15,6 +15,7 @@ dependencies {
     implementation(project(":socks:system"))
     implementation(project(":socks:memo"))
     implementation(project(":socks:weather"))
+    implementation(project(":socks:departures"))
 }
 
 application {

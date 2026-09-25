@@ -54,6 +54,9 @@ class FakeSockContext(
 }
 
 class FakeScreenController : ScreenController {
+    /** Settable, because "the screen is off" is a behaviour some Socks have to have. */
+    override var isOn: Boolean = true
+
     val wakeRequests: MutableList<Int> = mutableListOf()
     var releases: Int = 0
         private set
