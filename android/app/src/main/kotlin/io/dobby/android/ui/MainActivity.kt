@@ -65,6 +65,25 @@ class MainActivity : ComponentActivity() {
         if (micGranted) startAndBind()
     }
 
+    /**
+     * The Setup button's permission, asked for separately and only when it is pressed.
+     *
+     * Not bundled with the microphone at launch, deliberately. The microphone is what Dobby
+     * *is* and asking for it on the first screen is honest; location is one Sock's setting, and
+     * a panel that demands to know where it is before it will listen to anything would be a
+     * panel that looks like it is collecting rather than helping. So this dialog appears at the
+     * moment somebody asks for weather and at no other — `ACCESS_COARSE_LOCATION` alone, which
+     * is all a forecast grid cell needs (`weather.specs.md` §1).
+     *
+     * Granted or refused, the same call follows: the Sock treats "no permission" as "no fix",
+     * which is one sentence and one card state rather than two of each.
+     */
+    private val requestLocation = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) service?.controller?.locateWeather()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -91,6 +110,8 @@ class MainActivity : ComponentActivity() {
                                 .collectAsStateWithLifecycle()
                             val radio by connected.controller.radio.collectAsStateWithLifecycle()
                             val memos by connected.controller.memos.collectAsStateWithLifecycle()
+                            val weather by connected.controller.weather
+                                .collectAsStateWithLifecycle()
                             val muted by connected.controller.muted.collectAsStateWithLifecycle()
                             var settingsOpen by remember { mutableStateOf(false) }
                             var memosOpen by remember { mutableStateOf(false) }
@@ -139,7 +160,10 @@ class MainActivity : ComponentActivity() {
                                     artwork = artwork,
                                     radio = radio,
                                     memos = memos,
+                                    weather = weather,
                                     muted = muted,
+                                    onSetUpWeather = { setUpWeather(connected) },
+                                    onRefreshWeather = { connected.controller.refreshWeather() },
                                     onStopRadio = { connected.controller.stopRadio() },
                                     onPickStation = { connected.controller.playRadio(it) },
                                     onSpotifyPrevious = { connected.controller.spotifyPrevious() },
@@ -181,6 +205,26 @@ class MainActivity : ComponentActivity() {
         DobbyService.startFrom(this)
         bindService(Intent(this, DobbyService::class.java), connection, Context.BIND_AUTO_CREATE)
     }
+
+    /**
+     * The Setup button and the card's location chip, from the one place that can show a dialog.
+     *
+     * The service cannot ask for a permission — only an Activity can — which is why this hop
+     * exists at all rather than the card calling the controller directly. With the permission
+     * already granted it skips the dialog, so the chip is a one-tap re-locate and not a prompt
+     * every time.
+     */
+    private fun setUpWeather(service: DobbyService) {
+        if (hasLocationPermission()) {
+            service.controller.locateWeather()
+        } else {
+            requestLocation.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+        }
+    }
+
+    private fun hasLocationPermission() =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
 
     private fun askForPermissions() {
         requestPermissions.launch(

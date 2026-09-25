@@ -22,11 +22,17 @@ object Tier2Negatives {
     /** Normalized, like everything else Tier 2 sees. */
     val all: List<String> = listOf(
         // Ordinary questions a panel of this shape simply cannot answer.
-        "wie wird das wetter morgen",
+        //
+        // "wie wird das wetter morgen" used to head this list and is gone from it: the Weather
+        // Sock answers it, and a negative case that became a command is a test asserting the
+        // panel got worse. The line in the class KDoc above still names it, because it is
+        // still the example of what this list is *for* — a model that turned that sentence
+        // into a timer.
         "erzähl mir einen witz",
         "was kostet ein liter milch",
         "wie alt bist du eigentlich",
         "wer hat gestern gewonnen",
+        "wie war das wetter letzte woche",
 
         // Talking to a person in the room, not to the panel.
         "kannst du mal eben die tür aufmachen",

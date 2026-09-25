@@ -54,6 +54,8 @@ import io.dobby.socks.memo.MemoState
 import io.dobby.socks.radio.RadioState
 import io.dobby.socks.radio.Station
 import io.dobby.socks.spotify.PlayerSnapshot
+import io.dobby.socks.weather.WeatherState
+import java.time.Instant
 
 /**
  * What Dobby heard and what Dobby answered.
@@ -71,7 +73,10 @@ fun ChatScreen(
     artwork: Bitmap?,
     radio: RadioState,
     memos: MemoState,
+    weather: WeatherState,
     muted: Boolean,
+    onSetUpWeather: () -> Unit,
+    onRefreshWeather: () -> Unit,
     onStopRadio: () -> Unit,
     onPickStation: (Station) -> Unit,
     onSpotifyPrevious: () -> Unit,
@@ -110,6 +115,21 @@ fun ChatScreen(
         // until somebody closes it, and a list that is only visible while you are asking about
         // it would be a list nobody is reminded by (`memo.specs.md` §8).
         MemoCard(memos, onClose = onCloseMemo, onOpen = onOpenMemos)
+        // Same rule as the memo card, and for the same reason: the weather is not something
+        // the panel is *doing*, it is something that is true, and a forecast that appears only
+        // while you are asking about it is a forecast you have to ask about
+        // (`weather.specs.md` §8). Below the memo rather than above it — a memo is a thing
+        // somebody has to act on, the weather is a thing they walk past.
+        //
+        // `Instant.now()` on every recomposition is deliberate: what it feeds is the "vor 4
+        // Minuten" line and the boundary between the hours that have happened and the ones
+        // that have not, both of which are supposed to be the truth at the moment of drawing.
+        WeatherCard(
+            weather,
+            now = Instant.now(),
+            onSetUp = onSetUpWeather,
+            onRefresh = onRefreshWeather,
+        )
         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
         Conversation(state.messages, Modifier.weight(1f))
         // The speaker button exists only while there is something to silence — see [playing].

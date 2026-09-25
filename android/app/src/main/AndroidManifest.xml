@@ -13,6 +13,11 @@
     <!-- radio.specs.md §1: internet radio streams. No cleartext exception — every station in
          the table is reachable over HTTPS, including Kronehit (radio-plan.md §B3). -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- weather.specs.md §1: the forecast is for wherever the panel is standing, so it has to
+         be asked once where that is. COARSE and not FINE, deliberately: a forecast grid cell is
+         kilometres across, so a fine fix buys nothing and costs the scariest permission dialog
+         Android has. Asked for at the Setup button and nowhere else. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <!-- clock.specs.md §3: the AlarmManager backstop behind a running timer. A kitchen timer is
          USE_EXACT_ALARM-class use, so it is granted at install; SCHEDULE_EXACT_ALARM is declared
          alongside it for the user-revocable path, and the Clock Sock degrades if it is denied. -->

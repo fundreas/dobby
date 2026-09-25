@@ -37,6 +37,8 @@ import io.dobby.socks.radio.RadioConfig
 import io.dobby.socks.radio.RadioState
 import io.dobby.socks.radio.Station
 import io.dobby.socks.spotify.SpotifyConfig
+import io.dobby.socks.weather.LocateOutcome
+import io.dobby.socks.weather.WeatherState
 import io.dobby.pipeline.VoiceIo
 import io.dobby.pipeline.VoiceState
 import kotlinx.coroutines.CoroutineScope
@@ -155,6 +157,12 @@ class DobbyController(
      * Radio Sock plays nothing and every other part of it still works.
      */
     radioHardware: RadioHardware? = null,
+    /**
+     * `LocationManager` and the Open-Meteo client. Null in tests and off-device, where the
+     * Weather Sock is permanently un-set-up and every command says so — the same code path as
+     * a refused location permission.
+     */
+    weatherHardware: WeatherHardware? = null,
     /** Remembers the wake phrase and whether it is armed, across restarts. */
     private val settings: Settings? = null,
     /**
@@ -201,7 +209,8 @@ class DobbyController(
 
     private val health = SockHealth()
 
-    private val wiring = DobbySocks.create(hardware, spotifyHardware, systemHardware, radioHardware)
+    private val wiring =
+        DobbySocks.create(hardware, spotifyHardware, systemHardware, radioHardware, weatherHardware)
 
     /** The panel's clock and timer countdown, straight from the Sock that owns them. */
     val clock: StateFlow<ClockState> get() = wiring.clock.state
@@ -271,6 +280,30 @@ class DobbyController(
      * needs neither the memo session nor the five minutes it lives for.
      */
     fun closeMemo(id: Long): Job = scope.launch { wiring.memo.closeFromPanel(id) }
+
+    /** The forecast, the saved location and what went wrong, straight from the Sock (§8). */
+    val weather: StateFlow<WeatherState> get() = wiring.weather.state
+
+    /**
+     * The Setup button, and the card's location chip: the Sock's own locate, from a finger.
+     *
+     * One method for both, because they are one operation — "set this up" and "the panel has
+     * moved" differ only in whether there was already an answer. Same seam as [stopRadio] and
+     * [closeMemo]: straight at the Sock, because a button press must not be routed through the
+     * one part of the system that can misunderstand it.
+     *
+     * **The caller grants the permission first.** This runs inside the service, which cannot
+     * show a dialog; `MainActivity` asks for `ACCESS_COARSE_LOCATION` and calls this once it
+     * has it. Called without the permission it is not an error — it is [LocateOutcome.NoFix],
+     * and the card says so.
+     */
+    fun locateWeather(): Job = scope.launch {
+        val outcome = wiring.weather.locateFromPanel()
+        if (outcome is LocateOutcome.NoFix) Log.w(TAG, "weather: no location fix from the panel")
+    }
+
+    /** The card's refresh, for a panel somebody is standing in front of right now. */
+    fun refreshWeather(): Job = scope.launch { wiring.weather.refreshFromPanel() }
 
     /**
      * Whether the room is silent, and the button that changes it (`system.specs.md` §4).

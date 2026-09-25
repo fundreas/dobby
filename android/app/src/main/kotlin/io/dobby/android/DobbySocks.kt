@@ -16,6 +16,9 @@ import io.dobby.socks.spotify.SpotifySock
 import io.dobby.socks.spotify.IntentFallback
 import io.dobby.socks.system.SystemSock
 import io.dobby.socks.system.VolumeControl
+import io.dobby.socks.weather.DeviceLocation
+import io.dobby.socks.weather.WeatherSock
+import io.dobby.socks.weather.WeatherSource
 
 /**
  * The one place that knows which Socks exist.
@@ -50,6 +53,8 @@ object DobbySocks {
         val system: SystemSock,
         /** And the open memos, and which one was last read out (`memo.specs.md` §8). */
         val memo: MemoSock,
+        /** And the forecast, and the Setup button that gives it somewhere to be about (§8). */
+        val weather: WeatherSock,
         val bindDirectory: (Introspection) -> Unit,
     )
 
@@ -65,12 +70,16 @@ object DobbySocks {
      * @param radio the Media3 player and its turn-duck registration. Null off-device, where the
      *   Sock falls back to [RadioPlayer.NONE] — the station table, the resolver and the whole
      *   command surface still work, and only the sound is missing.
+     * @param weather `LocationManager` and the Open-Meteo client. Null off-device, where the
+     *   Sock is permanently un-set-up — which is the same code path as a refused location
+     *   permission, and therefore a path worth being able to reach without a phone.
      */
     fun create(
         hardware: ClockHardware? = null,
         spotify: SpotifyHardware? = null,
         system: SystemHardware? = null,
         radio: RadioHardware? = null,
+        weather: WeatherHardware? = null,
     ): Wiring {
         var directory: Introspection? = null
         val clock = if (hardware == null) {
@@ -87,6 +96,10 @@ object DobbySocks {
         val tuner = RadioSock(player = radio?.player ?: RadioPlayer.NONE)
         val device = SystemSock(system?.volume ?: VolumeControl.NONE)
         val notes = MemoSock()
+        val sky = WeatherSock(
+            source = weather?.source ?: WeatherSource.NONE,
+            location = weather?.location ?: DeviceLocation.NONE,
+        )
         val socks = buildList {
             add(clock)
             add(music)
@@ -95,9 +108,10 @@ object DobbySocks {
             add(CalculatorSock())
             add(ConversationSock())
             add(notes)
+            add(sky)
             add(HelpSock { directory })
             addAll(DevSocks.create())
         }
-        return Wiring(socks, clock, music, tuner, device, notes) { directory = it }
+        return Wiring(socks, clock, music, tuner, device, notes, sky) { directory = it }
     }
 }

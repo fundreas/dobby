@@ -25,6 +25,7 @@ import io.dobby.socks.radio.RadioSock
 import io.dobby.socks.spotify.SpotifySock
 import io.dobby.socks.system.SystemSock
 import io.dobby.socks.system.VolumeControl
+import io.dobby.socks.weather.WeatherSock
 import io.dobby.socks.winky.WinkySock
 import io.dobby.socks.help.HelpSock
 import kotlinx.coroutines.CoroutineScope
@@ -74,6 +75,13 @@ object DobbySocks {
             // storage is the same code the panel runs: the walk, the five-minute session and
             // every sentence.
             MemoSock(),
+            // No phone to ask where it is and — unlike every other Sock here — a real HTTP
+            // call it *could* make. It gets neither: `DeviceLocation.NONE` leaves the panel
+            // permanently un-set-up, which is the same code path as a refused permission, and
+            // `WeatherSource.NONE` means nothing in a terminal session reaches the internet.
+            // What stays drivable is the part this harness is for: every template, every
+            // utterance table, and the German for both failures.
+            WeatherSock(),
             WinkySock(),
             HelpSock { directory },
         )

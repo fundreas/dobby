@@ -59,6 +59,15 @@ class DobbyService : Service() {
     /** And the same rule again for the ExoPlayer: whoever built it releases it. */
     private var radioHardware: RadioHardware? = null
 
+    /**
+     * `LocationManager` and the Open-Meteo client for the Weather Sock.
+     *
+     * Nothing to release, and that is a property rather than an oversight: every position
+     * request it makes is one-shot with its own cancellation signal, so there is no listener
+     * left registered when the service goes (`weather.specs.md` §6).
+     */
+    private var weatherHardware: WeatherHardware? = null
+
     /** The local model, once it has loaded. Null on every device and every path that cannot. */
     private var tier2: LlamaTier2? = null
 
@@ -123,6 +132,7 @@ class DobbyService : Service() {
         // effect on the next turn instead of on the next restart.
         val turnAudio = AndroidTurnAudio(this, mode = { settings.turnDuck })
         radioHardware = RadioHardware(this, turnAudio.players)
+        weatherHardware = WeatherHardware(this)
         val resolver = buildTier2(settings)
         controller = DobbyController(
             scope = scope,
@@ -139,6 +149,7 @@ class DobbyService : Service() {
             spotifyHardware = spotifyHardware,
             systemHardware = systemHardware,
             radioHardware = radioHardware,
+            weatherHardware = weatherHardware,
             settings = settings,
             tier2Resolver = resolver,
             turnAudio = turnAudio,
@@ -185,7 +196,13 @@ class DobbyService : Service() {
         }
 
         val build = SockRegistry.build(
-            DobbySocks.create(clockHardware, spotifyHardware, systemHardware, radioHardware).socks,
+            DobbySocks.create(
+                clockHardware,
+                spotifyHardware,
+                systemHardware,
+                radioHardware,
+                weatherHardware,
+            ).socks,
         )
         val registry = build.registry ?: return null
         val program = Tier2Program.ofOrNull(registry, Introspection(registry)) { Log.w(TAG, it) }
@@ -265,6 +282,7 @@ class DobbyService : Service() {
         spotifyHardware = null
         radioHardware?.release()
         radioHardware = null
+        weatherHardware = null
         scope.cancel()
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
