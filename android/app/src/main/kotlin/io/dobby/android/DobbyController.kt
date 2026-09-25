@@ -29,6 +29,8 @@ import io.dobby.pipeline.audio.MicProfile
 import io.dobby.pipeline.tts.VoiceCatalogue
 import io.dobby.pipeline.tts.VoiceModelState
 import io.dobby.pipeline.tts.VoiceOption
+import io.dobby.pipeline.wakeword.WakeMode
+import io.dobby.pipeline.wakeword.WakeWord
 import io.dobby.pipeline.wakeword.WakeWordOption
 import io.dobby.socks.clock.ClockState
 import io.dobby.socks.memo.MemoState
@@ -72,6 +74,10 @@ data class DobbyUiState(
     /** Everything settings offers, and which of them is active. */
     val wakeWords: List<WakeWordOption> = emptyList(),
     val wakeWordId: String? = null,
+    /** Which of the two ways of hearing the panel's name is in use ([WakeMode]). */
+    val wakeMode: WakeMode = WakeMode.DEFAULT,
+    /** The typed phrase [WakeMode.TRANSCRIPT] answers to. Ignored by the classifier. */
+    val spokenWakePhrase: String = "",
     /** How the panel acknowledges the wake word: a buzz, a pip, or nothing. */
     val listenCue: ListenCue = ListenCue.DEFAULT,
     /** What happens to the music while somebody is talking: quieter, or stopped. */
@@ -532,6 +538,8 @@ class DobbyController(
                 wakePhrase = pipeline.wakePhrase,
                 wakeWords = wakeWordOptions,
                 wakeWordId = pipeline.selectedWakeWordId,
+                wakeMode = pipeline.wakeMode,
+                spokenWakePhrase = pipeline.spokenWakePhrase,
                 listenCue = pipeline.listenCue,
                 // From settings rather than from the pipeline: the pipeline took its profile at
                 // construction and cannot change it, and the duck is not the pipeline's at all.
@@ -563,7 +571,7 @@ class DobbyController(
         // Listening starts before prepare() finishes, so a wake word spoken during the first
         // run's download is not lost — it just waits for the turn it triggers.
         scope.launch {
-            pipeline.wakeWords.collect { onWakeWord() }
+            pipeline.wakeWords.collect { onWakeWord(it) }
         }
 
         pipeline.prepare()
@@ -588,9 +596,13 @@ class DobbyController(
      * `SockContext` (§7.2) — the pipeline has no business holding one, and a Sock asking for
      * the screen and the wake word asking for it must go through the same controller.
      */
-    private fun onWakeWord() {
+    private fun onWakeWord(detection: WakeWord) {
         sockContext.screen.wakeFor(WAKE_SCREEN_SECONDS)
-        listen()
+        // Whatever was said after the phrase in the same breath, if the detector could hear it
+        // (`WakeMode.TRANSCRIPT`). Handing it to the turn is what makes "Hey Dobby, spiele
+        // Musik" one sentence instead of two — the alternative is a panel that heard the whole
+        // thing and then asks you to say the second half again.
+        listen(detection.rest)
     }
 
     /** Chooses how the wake word is acknowledged. Takes effect on the next one. */
@@ -668,6 +680,33 @@ class DobbyController(
     }
 
     /**
+     * Switches between the two ways of hearing the panel's name (`WakeMode`).
+     *
+     * Persisted only once the pipeline has actually taken it, for the same reason
+     * [selectVoice] is: switching to the classifier can fail on a download, and writing the
+     * choice anyway would make the next start arm a mode with nothing behind it.
+     */
+    fun setWakeMode(mode: WakeMode): Job = scope.launch {
+        pipeline.selectWakeMode(mode)
+        settings?.wakeMode = pipeline.wakeMode
+        wakeWordOptions = pipeline.wakeWordOptions()
+        refresh.value = refresh.value + 1
+    }
+
+    /**
+     * Changes the phrase the transcript mode listens for.
+     *
+     * Nothing is fetched and nothing is loaded, so it takes effect at once — which is the
+     * point. Finding a phrase the recogniser hears reliably in *this* room is a matter of
+     * typing one, saying it, and typing the next.
+     */
+    fun setSpokenWakePhrase(text: String) {
+        pipeline.setSpokenWakePhrase(text)
+        settings?.spokenWakePhrase = pipeline.spokenWakePhrase
+        refresh.value = refresh.value + 1
+    }
+
+    /**
      * Switches the phrase the panel answers to.
      *
      * The first use of a phrase downloads its ~200 KB classifier, so this suspends for a moment
@@ -742,8 +781,14 @@ class DobbyController(
      *
      * [VoiceIo.endTurn] closes the turn in a `finally`, because the wake word stays off the
      * microphone until it is called and a turn that throws must not leave it off forever.
+     *
+     * [spoken] is the one thing a turn can start with instead of the microphone: the rest of
+     * the sentence the wake word arrived in, when the wake word was heard by reading a
+     * transcript (`WakeMode.TRANSCRIPT`). It is fed into the loop as the first utterance and
+     * then everything is identical — the same dispatch, the same buzz, the same open
+     * microphone afterwards. It is not a second path; it is the first one starting a step in.
      */
-    fun listen(): Job = scope.launch {
+    fun listen(spoken: String? = null): Job = scope.launch {
         turn.withLock {
             // Only once the lock is held: a job still queued behind another turn has nothing
             // to abort, and claiming the slot from there would let [stopListening] cancel a
@@ -761,9 +806,16 @@ class DobbyController(
                 turnAudio.duck()
                 var attempts = 0
                 var window = SPEECH_WINDOW
+                var pending = spoken?.trim()?.takeIf { it.isNotEmpty() }
                 while (true) {
-                    transcript.beginListening()
-                    val heard = pipeline.listen(window)
+                    val carried = pending
+                    pending = null
+                    val heard = if (carried != null) {
+                        carried
+                    } else {
+                        transcript.beginListening()
+                        pipeline.listen(window)
+                    }
                     if (heard.isNullOrBlank()) {
                         transcript.abandonListening()
                         return@withLock

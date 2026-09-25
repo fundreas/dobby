@@ -5,6 +5,8 @@ import androidx.core.content.edit
 import io.dobby.core.audio.TurnDuck
 import io.dobby.pipeline.ListenCue
 import io.dobby.pipeline.audio.MicProfile
+import io.dobby.pipeline.wakeword.WakeMode
+import io.dobby.pipeline.wakeword.WakePhrase
 
 /**
  * The panel's own settings, as opposed to a Sock's.
@@ -23,6 +25,29 @@ class Settings(context: Context) {
     var wakeWordId: String?
         get() = preferences.getString(KEY_WAKE_WORD, null)
         set(value) = preferences.edit { putString(KEY_WAKE_WORD, value) }
+
+    /**
+     * Which of the two ways of hearing its own name the panel uses.
+     *
+     * Stored by name for the same reason [listenCue] is, and defaulting to the classifier: a
+     * setting that silently upgraded an existing panel to a mode that runs ASR all day is not a
+     * setting, it is a surprise.
+     */
+    var wakeMode: WakeMode
+        get() = WakeMode.of(preferences.getString(KEY_WAKE_MODE, null))
+        set(value) = preferences.edit { putString(KEY_WAKE_MODE, value.name) }
+
+    /**
+     * The phrase [WakeMode.TRANSCRIPT] answers to, as typed.
+     *
+     * Free text, and the reason that mode exists: the classifier can only answer to phrases
+     * somebody has trained a head for, and nobody has trained one for "Hey Dobby". Blank reads
+     * back as the default rather than as a panel that answers to everything.
+     */
+    var spokenWakePhrase: String
+        get() = preferences.getString(KEY_SPOKEN_PHRASE, null)?.takeIf { it.isNotBlank() }
+            ?: WakePhrase.DEFAULT
+        set(value) = preferences.edit { putString(KEY_SPOKEN_PHRASE, value.trim()) }
 
     /**
      * The chosen voice's id, or null to let the catalogue default stand.
@@ -110,6 +135,8 @@ class Settings(context: Context) {
 
     private companion object {
         const val KEY_WAKE_WORD = "wakeword.id"
+        const val KEY_WAKE_MODE = "wakeword.mode"
+        const val KEY_SPOKEN_PHRASE = "wakeword.phrase"
         const val KEY_VOICE = "voice.id"
         const val KEY_HANDS_FREE = "wakeword.armed"
         const val KEY_LISTEN_CUE = "listen.cue"

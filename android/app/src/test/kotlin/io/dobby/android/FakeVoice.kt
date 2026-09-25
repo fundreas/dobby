@@ -6,6 +6,9 @@ import io.dobby.pipeline.VoiceState
 import io.dobby.pipeline.tts.VoiceCatalogue
 import io.dobby.pipeline.tts.VoiceModelState
 import io.dobby.pipeline.tts.VoiceOption
+import io.dobby.pipeline.wakeword.WakeMode
+import io.dobby.pipeline.wakeword.WakePhrase
+import io.dobby.pipeline.wakeword.WakeWord
 import io.dobby.pipeline.wakeword.WakeWordOption
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -85,8 +88,8 @@ internal class FakeVoice(vararg utterances: String?) : VoiceIo {
 
     override var listenCue: ListenCue = ListenCue.DEFAULT
 
-    private val _wakeWords = MutableSharedFlow<Float>(extraBufferCapacity = 1)
-    override val wakeWords: SharedFlow<Float> = _wakeWords.asSharedFlow()
+    private val _wakeWords = MutableSharedFlow<WakeWord>(extraBufferCapacity = 1)
+    override val wakeWords: SharedFlow<WakeWord> = _wakeWords.asSharedFlow()
 
     private val _handsFree = MutableStateFlow(false)
     override val handsFree: StateFlow<Boolean> = _handsFree.asStateFlow()
@@ -95,6 +98,22 @@ internal class FakeVoice(vararg utterances: String?) : VoiceIo {
 
     override var selectedWakeWordId: String? = null
         private set
+
+    override var wakeMode: WakeMode = WakeMode.DEFAULT
+        private set
+
+    override var spokenWakePhrase: String = WakePhrase.DEFAULT
+        private set
+
+    override suspend fun selectWakeMode(next: WakeMode) {
+        wakeMode = next
+        if (next == WakeMode.TRANSCRIPT) wakePhrase = spokenWakePhrase
+    }
+
+    override fun setSpokenWakePhrase(text: String) {
+        spokenWakePhrase = WakePhrase(text).text
+        if (wakeMode == WakeMode.TRANSCRIPT) wakePhrase = spokenWakePhrase
+    }
 
     override fun wakeWordOptions(): List<WakeWordOption> = listOf(
         WakeWordOption("hey_dobby", "Hey Dobby", "hey_dobby.onnx", "", ""),
@@ -169,9 +188,14 @@ internal class FakeVoice(vararg utterances: String?) : VoiceIo {
         _state.value = VoiceState.Ready
     }
 
-    /** Pretends someone said the wake phrase. */
-    fun sayWakeWord(score: Float = 0.9f) {
-        _wakeWords.tryEmit(score)
+    /**
+     * Pretends someone said the wake phrase, optionally with a command in the same breath.
+     *
+     * [rest] is what only `WakeMode.TRANSCRIPT` can supply: the detector read the whole
+     * sentence, so the turn starts with the command already in hand.
+     */
+    fun sayWakeWord(score: Float = 0.9f, rest: String = "") {
+        _wakeWords.tryEmit(WakeWord(score, rest))
     }
 
     /** Drives the pipeline state directly, for the states a whole turn passes through. */

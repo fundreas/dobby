@@ -22,6 +22,7 @@ import io.dobby.core.registry.SockRegistry
 import io.dobby.llama.LlamaTier2
 import io.dobby.pipeline.VoicePipeline
 import io.dobby.pipeline.llm.LlmModelStore
+import io.dobby.pipeline.wakeword.WakePhrase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -137,12 +138,14 @@ class DobbyService : Service() {
         controller = DobbyController(
             scope = scope,
             pipeline = VoicePipeline(
-                this,
-                scope,
-                settings.wakeWordId,
-                settings.listenCue,
-                settings.micProfile,
-                settings.voiceId,
+                context = this,
+                scope = scope,
+                selectedWakeWord = settings.wakeWordId,
+                mode = settings.wakeMode,
+                spokenPhrase = WakePhrase(settings.spokenWakePhrase),
+                initialCue = settings.listenCue,
+                micProfile = settings.micProfile,
+                selectedVoice = settings.voiceId,
             ),
             sockContext = { announce -> AndroidSockContext(this, scope, announce) },
             hardware = clockHardware,

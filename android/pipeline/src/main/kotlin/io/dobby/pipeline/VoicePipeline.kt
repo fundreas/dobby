@@ -7,6 +7,7 @@ import io.dobby.pipeline.audio.MicrophoneUnavailableException
 import io.dobby.pipeline.haptics.Haptics
 import io.dobby.pipeline.stt.ModelState
 import io.dobby.pipeline.stt.ParakeetRecognizer
+import io.dobby.pipeline.stt.SpeechModelFiles
 import io.dobby.pipeline.stt.SpeechModelStore
 import io.dobby.pipeline.stt.SpeechVad
 import io.dobby.pipeline.tts.Earcon
@@ -18,6 +19,11 @@ import io.dobby.pipeline.tts.VoiceCatalogue
 import io.dobby.pipeline.tts.VoiceModelState
 import io.dobby.pipeline.tts.VoiceOption
 import io.dobby.pipeline.tts.VoiceStore
+import io.dobby.pipeline.wakeword.TranscriptWakeWord
+import io.dobby.pipeline.wakeword.WakeListener
+import io.dobby.pipeline.wakeword.WakeMode
+import io.dobby.pipeline.wakeword.WakePhrase
+import io.dobby.pipeline.wakeword.WakeWord
 import io.dobby.pipeline.wakeword.WakeWordDetector
 import io.dobby.pipeline.wakeword.WakeWordOption
 import io.dobby.pipeline.wakeword.WakeWordModelStore
@@ -85,12 +91,21 @@ sealed interface VoiceState {
  * Two ways in, one way through. Push-to-talk calls [listen] directly; hands-free arms the wake
  * word and emits on [wakeWords], and whoever is listening calls the same [listen]. There is no
  * second path for the hands-free case, because a second path is how the two drift apart.
+ *
+ * *Hearing* the wake word, on the other hand, has two implementations ([WakeMode]) — a trained
+ * classifier and the command recogniser reading a typed phrase — and they meet at
+ * [WakeListener] well below this. Everything here arms, parks and re-arms one of those, and
+ * cannot tell which.
  */
 class VoicePipeline(
     context: Context,
     private val scope: CoroutineScope,
     /** The wake phrase id chosen in settings, or null for the catalogue default. */
     private var selectedWakeWord: String? = null,
+    /** Which of the two ways of hearing the panel's name is in use ([WakeMode]). */
+    private var mode: WakeMode = WakeMode.DEFAULT,
+    /** The phrase [WakeMode.TRANSCRIPT] listens for, as typed in settings. */
+    private var spokenPhrase: WakePhrase = WakePhrase(WakePhrase.DEFAULT),
     /** How the wake word is acknowledged, as chosen in settings. */
     initialCue: ListenCue = ListenCue.DEFAULT,
     /**
@@ -145,19 +160,46 @@ class VoicePipeline(
 
     private var recognizer: ParakeetRecognizer? = null
     private var vad: SpeechVad? = null
+
+    /**
+     * Where the speech models ended up, kept so a later switch to [WakeMode.TRANSCRIPT] can
+     * open its own VAD without going back through the store.
+     */
+    private var speechFiles: SpeechModelFiles? = null
+
+    /**
+     * A second Silero session, for [WakeMode.TRANSCRIPT] only.
+     *
+     * Not the command path's: `Vad` carries segment state across calls and
+     * [SpeechVad.capture] resets it, so one shared instance would have the utterance capture
+     * in the middle of a turn quietly resetting the capture the wake listener is parked on.
+     * A Silero graph is ~2 MB, which is a cheap price for the two never touching.
+     */
+    private var wakeVad: SpeechVad? = null
+
     private var wakeWord: WakeWordModels? = null
-    private var detector: WakeWordDetector? = null
+    private var detector: WakeListener? = null
 
     /** The detector while a turn is in flight: off the stream, still ours, not discarded. */
-    private var pausedWakeWord: WakeWordDetector? = null
+    private var pausedWakeWord: WakeListener? = null
+
+    /**
+     * One utterance inside the recogniser at a time.
+     *
+     * [WakeMode.TRANSCRIPT] puts a second caller on the one `OfflineRecognizer` — the wake
+     * listener is reading the room while a turn may be reading a command — and the cost of
+     * being wrong about whether sherpa-onnx minds is a native crash rather than an exception.
+     * A wake-phrase utterance decodes in a fraction of a second, so the turn rarely waits.
+     */
+    private val recognition = Mutex()
 
     private val _state = MutableStateFlow<VoiceState>(VoiceState.Preparing("Starte…"))
     override val state: StateFlow<VoiceState> = _state.asStateFlow()
 
-    private val _wakeWords = MutableSharedFlow<Float>(extraBufferCapacity = 1)
+    private val _wakeWords = MutableSharedFlow<WakeWord>(extraBufferCapacity = 1)
 
-    /** Fires when the wake phrase is heard. The value is the detection score. */
-    override val wakeWords: SharedFlow<Float> = _wakeWords.asSharedFlow()
+    /** Fires when the wake phrase is heard, with the score and anything said after it. */
+    override val wakeWords: SharedFlow<WakeWord> = _wakeWords.asSharedFlow()
 
     private val _handsFree = MutableStateFlow(false)
 
@@ -166,9 +208,18 @@ class VoicePipeline(
 
     override val canListen: Boolean get() = recognizer != null && vad != null
 
-    /** The phrase the panel answers to, once the wake word models are loaded. */
-    override var wakePhrase: String? = null
-        private set
+    /**
+     * The phrase the panel answers to, or null when it cannot answer to one.
+     *
+     * Derived rather than stored, because the two modes know it in two different places: a
+     * classifier head carries the phrase it was trained for, and a typed phrase is only a
+     * phrase at all once there is a recogniser to read it with.
+     */
+    override val wakePhrase: String?
+        get() = when (mode) {
+            WakeMode.CLASSIFIER -> wakeWord?.phrase
+            WakeMode.TRANSCRIPT -> spokenPhrase.text.takeIf { !spokenPhrase.isEmpty && canListen }
+        }
 
     init {
         audio.onError = { _state.value = VoiceState.Unavailable("Mikrofon abgebrochen") }
@@ -206,6 +257,7 @@ class VoicePipeline(
                 recognizer = ParakeetRecognizer.load(files, audio.sampleRate)
                 vad = SpeechVad.load(files.vad, audio.sampleRate, maxUtterance = utteranceTimeout)
             }
+            speechFiles = files
         } catch (e: RuntimeException) {
             // sherpa-onnx reports an unloadable graph as a plain runtime exception from JNI.
             releaseStt()
@@ -303,7 +355,27 @@ class VoicePipeline(
         if (previous !== platformSpeaker) previous.shutdown()
     }
 
+    /**
+     * Gets whatever the chosen [WakeMode] needs onto the device and into memory.
+     *
+     * [WakeMode.TRANSCRIPT] downloads nothing: its recogniser is the one [prepare] has already
+     * loaded and its phrase was typed, so all that is left is a VAD of its own. That is the
+     * mode's other quiet advantage — it works on first run, offline, before anything has been
+     * fetched from a repository that may or may not still be there.
+     *
+     * Never throws. A wake word that will not load costs hands-free, not the panel.
+     */
     private suspend fun prepareWakeWord() {
+        if (mode == WakeMode.TRANSCRIPT) {
+            ensureWakeVad()
+            return
+        }
+        // Already loaded, which is the common case coming back from [WakeMode.TRANSCRIPT]:
+        // neither mode's models are freed when the other is chosen, so switching between them
+        // to compare them — which is exactly what somebody will do — costs nothing the second
+        // time. Both together are a few megabytes beside Parakeet's seven hundred.
+        // [selectWakeWord] clears it first, which is what makes a *different* head load.
+        if (wakeWord != null) return
         _state.value = VoiceState.Preparing("Lade Weckwort…")
         val progress = scope.launch {
             wakeWordModels.state.collect {
@@ -326,13 +398,72 @@ class VoicePipeline(
             // will not load costs hands-free, not the panel.
             null
         }
-        wakePhrase = wakeWord?.phrase
+    }
+
+    /**
+     * Opens the second Silero session [WakeMode.TRANSCRIPT] listens through, once.
+     *
+     * Returns null when there are no speech models — which is the same panel that cannot hear a
+     * command either, and is already saying so.
+     */
+    private suspend fun ensureWakeVad(): SpeechVad? {
+        wakeVad?.let { return it }
+        val files = speechFiles ?: return null
+        return try {
+            withContext(Dispatchers.IO) {
+                SpeechVad.load(files.vad, audio.sampleRate, maxUtterance = TranscriptWakeWord.HARD_CAP)
+            }.also { wakeVad = it }
+        } catch (e: RuntimeException) {
+            // sherpa-onnx reports an unloadable graph as a plain runtime exception from JNI.
+            null
+        }
     }
 
     /** Everything settings can offer: the catalogue plus anything pushed to the device. */
     override fun wakeWordOptions(): List<WakeWordOption> = wakeWordModels.options()
 
     override val selectedWakeWordId: String? get() = selectedWakeWord
+
+    override val wakeMode: WakeMode get() = mode
+
+    override val spokenWakePhrase: String get() = spokenPhrase.text
+
+    /**
+     * Switches between the two ways of hearing the panel's name.
+     *
+     * Suspends, because switching *to* [WakeMode.CLASSIFIER] may be the first time a classifier
+     * head has ever been wanted on this device. Rearms afterwards only if it was armed before,
+     * for the same reason [selectWakeWord] does: choosing in settings is not switching the
+     * microphone on for somebody who had deliberately switched it off.
+     */
+    override suspend fun selectWakeMode(next: WakeMode) {
+        if (next == mode) return
+        val wasArmed = detector != null
+        stopHandsFree()
+        mode = next
+
+        prepareWakeWord()
+        if (wasArmed) startHandsFree() else _state.value = idleState()
+    }
+
+    /**
+     * Changes the phrase [WakeMode.TRANSCRIPT] listens for.
+     *
+     * Nothing to fetch and nothing to load — the phrase is a string and the recogniser that
+     * reads it is already resident — so this only has to put a listener holding the new phrase
+     * back where the old one was. Takes effect immediately, which is what makes the setting
+     * worth having: getting a phrase the recogniser reliably hears is a matter of trying one,
+     * saying it, and trying the next.
+     */
+    override fun setSpokenWakePhrase(text: String) {
+        val next = WakePhrase(text)
+        if (next.text == spokenPhrase.text) return
+        val wasArmed = detector != null
+        if (mode == WakeMode.TRANSCRIPT) stopHandsFree()
+        spokenPhrase = next
+        if (mode != WakeMode.TRANSCRIPT) return
+        if (wasArmed) startHandsFree() else _state.value = idleState()
+    }
 
     override var listenCue: ListenCue = initialCue
 
@@ -349,7 +480,6 @@ class VoicePipeline(
         stopHandsFree()
         wakeWord?.close()
         wakeWord = null
-        wakePhrase = null
         selectedWakeWord = id
 
         prepareWakeWord()
@@ -412,27 +542,57 @@ class VoicePipeline(
         voices.options().firstOrNull { it.id == id } ?: VoiceCatalogue.DEFAULT
 
     /**
-     * Arms the wake word: the microphone stays open and every 80 ms frame is scored.
+     * Arms the wake word: the microphone stays open and everything on it is listened to.
      *
-     * Returns false when there is no wake word model, which leaves the panel on push-to-talk.
+     * Returns false when the chosen [WakeMode] has nothing to listen with — no classifier head,
+     * or no recogniser — which leaves the panel on push-to-talk.
      */
     override fun startHandsFree(): Boolean {
-        val models = wakeWord ?: return false
         if (detector != null) return true
-
-        // Through forProfile, never the constructor: the threshold belongs to the microphone
-        // that is open, and the two profiles' numbers are not interchangeable (`m2b-plan.md` B2).
-        val listener = WakeWordDetector.forProfile(models, micProfile) { score -> onWakeWord(score) }
+        val listener = newListener() ?: return false
         detector = listener
         return try {
             audio.addSink(listener)
             _handsFree.value = true
-            if (_state.value is VoiceState.Ready) _state.value = VoiceState.Waiting(models.phrase)
+            if (_state.value is VoiceState.Ready) _state.value = VoiceState.Waiting(listener.phrase)
             true
         } catch (e: MicrophoneUnavailableException) {
             detector = null
+            // Closed rather than dropped: [TranscriptWakeWord] has a coroutine of its own, and
+            // a listener that never reached the microphone would otherwise sit there cycling
+            // captures over silence for the life of the process.
+            listener.close()
             _state.value = VoiceState.Unavailable(e.message ?: "Mikrofon nicht verfügbar")
             false
+        }
+    }
+
+    /**
+     * Builds the listener the chosen mode listens through, or null when it cannot.
+     *
+     * The one place the two ways of hearing the name are told apart. Everything downstream —
+     * arming, parking for a turn, re-arming, resetting after Dobby speaks — sees a
+     * [WakeListener] and nothing more.
+     */
+    private fun newListener(): WakeListener? = when (mode) {
+        // Through forProfile, never the constructor: the threshold belongs to the microphone
+        // that is open, and the two profiles' numbers are not interchangeable (`m2b-plan.md` B2).
+        WakeMode.CLASSIFIER -> wakeWord?.let { models ->
+            WakeWordDetector.forProfile(models, micProfile) { score -> onWakeWord(WakeWord(score)) }
+        }
+
+        WakeMode.TRANSCRIPT -> {
+            val silero = wakeVad
+            when {
+                silero == null || recognizer == null || spokenPhrase.isEmpty -> null
+                else -> TranscriptWakeWord(
+                    scope = scope,
+                    vad = silero,
+                    wakePhrase = spokenPhrase,
+                    transcribe = { samples -> transcribe(samples) },
+                    onDetected = { detection -> onWakeWord(detection) },
+                )
+            }
         }
     }
 
@@ -454,16 +614,28 @@ class VoicePipeline(
         if (_state.value is VoiceState.Waiting) _state.value = VoiceState.Ready
     }
 
-    private fun onWakeWord(score: Float) {
-        // On the audio thread: acknowledge now, and hand the turn to whoever is collecting.
-        // Doing the work here would block the microphone. Whichever cue is chosen returns
-        // immediately; NONE is a real choice and not a missing branch.
+    private fun onWakeWord(detection: WakeWord) {
+        // Possibly on the audio thread — the classifier fires from there: acknowledge now, and
+        // hand the turn to whoever is collecting. Doing the work here would block the
+        // microphone. Whichever cue is chosen returns immediately; NONE is a real choice and
+        // not a missing branch.
         when (listenCue) {
             ListenCue.VIBRATE -> haptics.listening()
             ListenCue.TONE -> earcon.play()
             ListenCue.NONE -> Unit
         }
-        _wakeWords.tryEmit(score)
+        _wakeWords.tryEmit(detection)
+    }
+
+    /**
+     * The one door into the recogniser, held open for one caller at a time.
+     *
+     * Both the command path and [WakeMode.TRANSCRIPT]'s listener come through here, which is
+     * what makes the shared `OfflineRecognizer` safe to have two callers at all.
+     */
+    private suspend fun transcribe(samples: FloatArray): String {
+        val engine = recognizer ?: return ""
+        return recognition.withLock { withContext(Dispatchers.Default) { engine.transcribe(samples) } }
     }
 
     /**
@@ -487,7 +659,7 @@ class VoicePipeline(
      * noise — all three are the same thing to the caller: no turn to take.
      */
     override suspend fun listen(openFor: Duration): String? = turn.withLock {
-        val recognizer = this.recognizer ?: return@withLock null
+        if (recognizer == null) return@withLock null
         val detector = vad ?: return@withLock null
 
         val capture = detector.capture(utteranceTimeout) { speaking ->
@@ -525,7 +697,7 @@ class VoicePipeline(
         }
 
         _state.value = VoiceState.Transcribing
-        val transcript = withContext(Dispatchers.Default) { recognizer.transcribe(samples) }
+        val transcript = transcribe(samples)
         _state.value = idleState()
         transcript.ifBlank { null }
     }
@@ -541,6 +713,12 @@ class VoicePipeline(
      */
     override fun endTurn() {
         val paused = pausedWakeWord ?: run {
+            // Nothing was parked, which does not mean nothing needs putting back:
+            // [TranscriptWakeWord] goes deaf the moment it fires, and a turn that never opened
+            // the microphone — because the command arrived in the same breath as the phrase —
+            // is a turn that left it that way. Harmless for the classifier, which is only
+            // asked to forget a window it should forget anyway.
+            detector?.reset()
             if (_state.value !is VoiceState.Unavailable) _state.value = idleState()
             return
         }
@@ -603,7 +781,7 @@ class VoicePipeline(
     }
 
     private fun idleState(): VoiceState =
-        wakeWord?.takeIf { detector != null }?.let { VoiceState.Waiting(it.phrase) } ?: VoiceState.Ready
+        detector?.let { VoiceState.Waiting(it.phrase) } ?: VoiceState.Ready
 
     override fun shutdown() {
         stopHandsFree()
@@ -624,6 +802,9 @@ class VoicePipeline(
         recognizer = null
         vad?.close()
         vad = null
+        wakeVad?.close()
+        wakeVad = null
+        speechFiles = null
     }
 
     companion object {

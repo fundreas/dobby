@@ -13,19 +13,29 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import io.dobby.android.DobbyUiState
 import io.dobby.core.audio.TurnDuck
@@ -34,6 +44,7 @@ import io.dobby.pipeline.ListenCue
 import io.dobby.pipeline.audio.MicProfile
 import io.dobby.pipeline.tts.VoiceModelState
 import io.dobby.pipeline.tts.VoiceOption
+import io.dobby.pipeline.wakeword.WakeMode
 import io.dobby.pipeline.wakeword.WakeWordOption
 
 /**
@@ -54,6 +65,8 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onHandsFree: (Boolean) -> Unit,
     onSelect: (String) -> Unit,
+    onWakeMode: (WakeMode) -> Unit,
+    onWakePhrase: (String) -> Unit,
     onSelectVoice: (String) -> Unit,
     onListenCue: (ListenCue) -> Unit,
     onTurnDuck: (TurnDuck) -> Unit,
@@ -115,25 +128,55 @@ fun SettingsScreen(
                     )
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
-                SectionLabel("Wort")
+                SectionLabel("Wie Dobby seinen Namen hört")
             }
 
-            items(state.wakeWords, key = { it.id }) { option ->
-                WakeWordRow(
-                    option = option,
-                    selected = option.phrase == state.wakePhrase,
-                    onSelect = { onSelect(option.id) },
+            items(WakeMode.entries, key = { it.name }) { mode ->
+                ChoiceRow(
+                    title = mode.title,
+                    subtitle = mode.subtitle,
+                    selected = mode == state.wakeMode,
+                    onSelect = { onWakeMode(mode) },
                 )
+            }
+
+            item { SectionLabel("Wort") }
+
+            // Only the chosen mode's half is shown. Both at once would be two lists of phrases
+            // with one of them doing nothing, which is the kind of settings screen where people
+            // change the wrong thing and conclude the panel is broken.
+            if (state.wakeMode == WakeMode.TRANSCRIPT) {
+                item {
+                    WakePhraseField(phrase = state.spokenWakePhrase, onPhrase = onWakePhrase)
+                }
+            } else {
+                items(state.wakeWords, key = { it.id }) { option ->
+                    WakeWordRow(
+                        option = option,
+                        selected = option.phrase == state.wakePhrase,
+                        onSelect = { onSelect(option.id) },
+                    )
+                }
             }
 
             item {
                 Text(
-                    // The one thing someone choosing a phrase needs to know, where they are
-                    // choosing it: these models were trained on English voices, and the only
-                    // way to find out which one survives an Austrian accent in your room is to
-                    // try it (dobby-plan.md §5.1).
-                    "Alle Modelle sind auf englische Stimmen trainiert. Welches am besten " +
-                        "erkannt wird, zeigt sich erst beim Ausprobieren.",
+                    if (state.wakeMode == WakeMode.TRANSCRIPT) {
+                        // Where somebody is typing a phrase is where they need to be told that
+                        // the recogniser gets a vote: it writes down what it heard, and a name
+                        // it has never met comes out spelled the way it sounded. Typing that
+                        // spelling in is not a workaround, it is how this is meant to be used.
+                        "Dobby hört auf alles, was ungefähr so klingt. Wenn er nicht " +
+                            "reagiert: sag den Satz, schau in den Verlauf, was verstanden " +
+                            "wurde — und schreib genau das hier hinein."
+                    } else {
+                        // The one thing someone choosing a phrase needs to know, where they are
+                        // choosing it: these models were trained on English voices, and the only
+                        // way to find out which one survives an Austrian accent in your room is
+                        // to try it (dobby-plan.md §5.1).
+                        "Alle Modelle sind auf englische Stimmen trainiert. Welches am besten " +
+                            "erkannt wird, zeigt sich erst beim Ausprobieren."
+                    },
                     Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -283,6 +326,54 @@ private val MARKETS: List<Pair<String, String>> = listOf(
     "DE" to "Deutschland",
     "CH" to "Schweiz",
 )
+
+private val WakeMode.title: String
+    get() = when (this) {
+        WakeMode.CLASSIFIER -> "Weckwort-Modell"
+        WakeMode.TRANSCRIPT -> "Spracherkennung"
+    }
+
+private val WakeMode.subtitle: String
+    get() = when (this) {
+        // Says what it costs you — the phrase is not yours to choose — because that is the
+        // only reason anybody would leave it.
+        WakeMode.CLASSIFIER ->
+            "Sparsam und schnell, läuft den ganzen Tag. Aber nur die fertig trainierten " +
+                "Wörter von unten."
+        // And says what this one costs — the CPU — because it is the reason it is not the
+        // default, and somebody who turns it on should know why the panel got warmer.
+        WakeMode.TRANSCRIPT ->
+            "Beliebiger Satz, und du kannst den Befehl gleich anhängen: „Hey Dobby, spiele " +
+                "Musik.“ Braucht dafür dauerhaft mehr Rechenleistung."
+    }
+
+/**
+ * The typed wake phrase.
+ *
+ * Committed when the field is left or the keyboard's Done is pressed, rather than on every
+ * keystroke: every commit restarts the listener, and restarting it eight times while somebody
+ * types "Hey Dobby" is eight holes in the microphone stream for no reason.
+ */
+@Composable
+private fun WakePhraseField(phrase: String, onPhrase: (String) -> Unit) {
+    val focus = LocalFocusManager.current
+    var draft by remember(phrase) { mutableStateOf(phrase) }
+    OutlinedTextField(
+        value = draft,
+        onValueChange = { draft = it },
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 8.dp)
+            .onFocusChanged { if (!it.isFocused && draft.trim() != phrase) onPhrase(draft) },
+        label = { Text("Weckwort") },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+        keyboardActions = KeyboardActions(onDone = {
+            onPhrase(draft)
+            focus.clearFocus()
+        }),
+    )
+}
 
 private val ListenCue.title: String
     get() = when (this) {

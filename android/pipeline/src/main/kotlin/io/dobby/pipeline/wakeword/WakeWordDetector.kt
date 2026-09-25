@@ -3,7 +3,6 @@ package io.dobby.pipeline.wakeword
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
-import io.dobby.pipeline.audio.FrameSink
 import io.dobby.pipeline.audio.MicProfile
 import java.io.Closeable
 import java.io.File
@@ -103,7 +102,10 @@ class WakeWordDetector(
     val patience: Int,
     private val refractoryFrames: Int = DEFAULT_REFRACTORY_FRAMES,
     private val onDetected: (Float) -> Unit,
-) : FrameSink, Closeable {
+) : WakeListener {
+
+    /** What this classifier head was trained for — the phrase the status line names. */
+    override val phrase: String get() = models.phrase
 
     private val environment = OrtEnvironment.getEnvironment()
     private val audio = AudioWindow()
@@ -190,7 +192,7 @@ class WakeWordDetector(
     }
 
     /** Forgets everything heard so far — used when the mic was closed and the stream has a hole. */
-    fun reset() {
+    override fun reset() {
         synchronized(gate) {
             audio.clear()
             mels.clear()

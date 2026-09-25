@@ -2,6 +2,8 @@ package io.dobby.pipeline
 
 import io.dobby.pipeline.tts.VoiceModelState
 import io.dobby.pipeline.tts.VoiceOption
+import io.dobby.pipeline.wakeword.WakeMode
+import io.dobby.pipeline.wakeword.WakeWord
 import io.dobby.pipeline.wakeword.WakeWordOption
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,13 +24,17 @@ interface VoiceIo {
     val canListen: Boolean
 
     /**
-     * Fires when the wake phrase is heard, carrying the detection score.
+     * Fires when the wake phrase is heard, carrying the score and whatever followed it.
      *
      * Only a signal: what happens next is the same turn the button triggers, decided one layer
      * up. Hands-free that ran its own turn would be a second path to keep in step with the
      * first, and they would not stay in step.
+     *
+     * [WakeWord.rest] is the exception that earns its place: when the phrase was recognised by
+     * reading a transcript ([WakeMode.TRANSCRIPT]), the rest of the sentence has already been
+     * heard, and the turn above starts with it instead of asking for it again.
      */
-    val wakeWords: SharedFlow<Float>
+    val wakeWords: SharedFlow<WakeWord>
 
     /** Whether the wake word is currently armed. */
     val handsFree: StateFlow<Boolean>
@@ -41,6 +47,23 @@ interface VoiceIo {
 
     /** The chosen phrase's id, or null while the catalogue default is in use. */
     val selectedWakeWordId: String?
+
+    /** Which of the two ways of hearing the panel's name is in use ([WakeMode]). */
+    val wakeMode: WakeMode
+
+    /** The phrase [WakeMode.TRANSCRIPT] listens for, as typed. Ignored by the classifier. */
+    val spokenWakePhrase: String
+
+    /**
+     * Switches between the two ways of listening.
+     *
+     * Suspends: switching to [WakeMode.CLASSIFIER] may be the first time this device has ever
+     * wanted a classifier head, and fetching one is a download.
+     */
+    suspend fun selectWakeMode(next: WakeMode)
+
+    /** Changes the phrase [WakeMode.TRANSCRIPT] answers to. Takes effect at once. */
+    fun setSpokenWakePhrase(text: String)
 
     /**
      * How the panel acknowledges the wake word. Settable, and takes effect on the next one.

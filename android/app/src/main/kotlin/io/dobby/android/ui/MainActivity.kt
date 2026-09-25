@@ -131,6 +131,10 @@ class MainActivity : ComponentActivity() {
                                     onBack = { settingsOpen = false },
                                     onHandsFree = { connected.controller.setHandsFree(it) },
                                     onSelect = { connected.controller.selectWakeWord(it) },
+                                    onWakeMode = { connected.controller.setWakeMode(it) },
+                                    onWakePhrase = {
+                                        connected.controller.setSpokenWakePhrase(it)
+                                    },
                                     onSelectVoice = { connected.controller.selectVoice(it) },
                                     onListenCue = { connected.controller.setListenCue(it) },
                                     onTurnDuck = { connected.controller.setTurnDuck(it) },
