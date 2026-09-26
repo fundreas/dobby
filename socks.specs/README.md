@@ -231,6 +231,14 @@ ExclusiveCommandSpec(
 
 `help` is optional. A command without it still appears everywhere, under a title derived from its id and with its `description` as the detail — and reads like what it is, which is the incentive to write one.
 
+## 6b. Settings, and being switched off
+
+A Sock's settings live under its id in `SockConfigStore`, and the Sock reads them **at the moment it uses them** rather than at `onStart` — that is what makes a change take effect on the next command instead of the next boot. Every Sock with settings has a `…Config` class that owns its keys, its defaults and its clamping (`RadioConfig`, `MemoConfig`, …); nothing else in the project is allowed to know what an unset value means.
+
+The panel draws those settings on a page of the Sock's own, in `android/app/.../ui/settings/socks/<Sock>Settings.kt`, registered in `SockSettingsPages`. The page reads and writes **through the Sock's `…Config` class**, so the screen and the Sock cannot disagree. The page is not in the Sock module and cannot be: the Sock modules are plain JVM, which is what makes them testable without an emulator (§2), and a `@Composable` in one would drag Android across that seam. So the Sock owns the settings; the panel owns the drawing of them. A Sock with no settings needs no page and still appears in the Socks tab, because it can still be switched off.
+
+**A Sock can be absent from the registry at runtime.** The panel's Socks tab writes to a table in `dobby.db`, and a Sock that is switched off is not filtered at dispatch — it is left out of `SockRegistry.build` altogether. Its templates are not in the palette, its commands are not in the dispatcher and its tools are not in the Tier 2 prompt, which means the words it claimed (§5 of its spec) are free while it is off. Switching it back on rebuilds the palette and calls its `onStart`; switching it off calls its `onStop` and nothing else's. A Sock therefore has to survive `onStop` followed later by a fresh `onStart` in the same process — the same requirement it already had, now reachable from a finger.
+
 ## 7. Writing a spec file
 
 Every `<sockId>.specs.md` has these sections, in this order:

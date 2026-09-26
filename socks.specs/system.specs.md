@@ -206,8 +206,8 @@ Muting does **not** stop playback and does **not** release playback focus.
 
 ### Dashboard
 
-`val muted: StateFlow<Boolean>` on the Sock, and a speaker button in `ChatScreen`'s control row
-beside the microphone — `RadioSock.state` and its X are the precedent for both halves. The
+`val muted: StateFlow<Boolean>` on the Sock, and a speaker button in `MainScreen`'s dock beside
+the microphone — `RadioSock.state` and its X are the precedent for both halves. The
 button runs `SystemSock.toggleMuteFromPanel()`, which is `mute()` with the state flipped: the
 same call `system.mute` makes, from a finger instead of a sentence.
 

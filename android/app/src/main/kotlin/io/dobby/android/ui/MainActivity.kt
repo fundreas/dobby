@@ -9,7 +9,6 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.IBinder
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -21,6 +20,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,6 +32,8 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.dobby.android.DobbyService
+import io.dobby.android.ui.settings.SettingsScreen
+import io.dobby.android.ui.settings.socks.LocalStationDirectory
 
 /**
  * The panel's one screen, and the thing that is allowed to start the microphone.
@@ -118,41 +120,65 @@ class MainActivity : ComponentActivity() {
                             var settingsOpen by remember { mutableStateOf(false) }
                             var memosOpen by remember { mutableStateOf(false) }
                             var helpOpen by remember { mutableStateOf(false) }
+                            var commandsOpen by remember { mutableStateOf(false) }
 
                             if (helpOpen) {
                                 // The same directory the Help Sock answers out of, so the
                                 // screen and the voice cannot disagree (`help.specs.md` §8).
+                                // Collected rather than read once: switching a Sock off
+                                // rebuilds the directory, and a help screen showing the
+                                // commands of a Sock that is no longer listening is worse
+                                // than no help screen.
+                                val directory by connected.controller.introspection
+                                    .collectAsStateWithLifecycle()
                                 HelpScreen(
-                                    introspection = connected.controller.introspection,
+                                    introspection = directory,
                                     onBack = { helpOpen = false },
                                 )
-                            } else if (settingsOpen) {
-                                BackHandler { settingsOpen = false }
-                                SettingsScreen(
+                            } else if (commandsOpen) {
+                                // The dock's second button. Settings has the same list behind
+                                // a tab; this is the short way to it, for the question people
+                                // ask while standing at the panel (`help.specs.md` §8).
+                                CommandsScreen(
                                     state = state,
-                                    onBack = { settingsOpen = false },
-                                    onHandsFree = { connected.controller.setHandsFree(it) },
-                                    onSelect = { connected.controller.selectWakeWord(it) },
-                                    onWakeMode = { connected.controller.setWakeMode(it) },
-                                    onWakePhrase = {
-                                        connected.controller.setSpokenWakePhrase(it)
-                                    },
-                                    onSelectVoice = { connected.controller.selectVoice(it) },
-                                    onListenCue = { connected.controller.setListenCue(it) },
-                                    onTurnDuck = { connected.controller.setTurnDuck(it) },
-                                    onMicProfile = { connected.controller.setMicProfile(it) },
-                                    onSpotifyMarket = { connected.controller.setSpotifyMarket(it) },
-                                    onSpotifyPreferTrack = {
-                                        connected.controller.setSpotifyPreferTrack(it)
-                                    },
-                                    onSpotifyAskWhenUnsure = {
-                                        connected.controller.setSpotifyAskWhenUnsure(it)
-                                    },
-                                    onRadioStation = { connected.controller.setRadioStation(it) },
-                                    onDepartureStations = {
-                                        connected.controller.setDepartureStations(it)
+                                    onBack = { commandsOpen = false },
+                                    onView = { connected.controller.setCommandView(it) },
+                                    onEnabled = { id, on ->
+                                        connected.controller.setSockEnabled(id, on)
                                     },
                                 )
+                            } else if (settingsOpen) {
+                                // No BackHandler here: SettingsScreen registers its own, so the
+                                // gesture retraces the way in — out of a Sock's page first, and
+                                // only then out of settings.
+                                //
+                                // The station list travels as a composition local rather than
+                                // as a parameter: it is one Sock's page's dependency, and the
+                                // settings signature is shared by nine (`departures.specs.md`
+                                // §7).
+                                CompositionLocalProvider(
+                                    LocalStationDirectory provides
+                                        connected.controller.stationDirectory,
+                                ) {
+                                    SettingsScreen(
+                                        state = state,
+                                        onBack = { settingsOpen = false },
+                                        onHandsFree = { connected.controller.setHandsFree(it) },
+                                        onSelect = { connected.controller.selectWakeWord(it) },
+                                        onWakeMode = { connected.controller.setWakeMode(it) },
+                                        onWakePhrase = {
+                                            connected.controller.setSpokenWakePhrase(it)
+                                        },
+                                        onSelectVoice = { connected.controller.selectVoice(it) },
+                                        onListenCue = { connected.controller.setListenCue(it) },
+                                        onTurnDuck = { connected.controller.setTurnDuck(it) },
+                                        onMicProfile = { connected.controller.setMicProfile(it) },
+                                        onSockEnabled = { id, on ->
+                                            connected.controller.setSockEnabled(id, on)
+                                        },
+                                        onCommandView = { connected.controller.setCommandView(it) },
+                                    )
+                                }
                             } else if (memosOpen) {
                                 // The card shows one memo; this is where the rest of them are,
                                 // sorted by when they were dictated (`memo.specs.md` §8).
@@ -162,7 +188,7 @@ class MainActivity : ComponentActivity() {
                                     onClose = { connected.controller.closeMemo(it) },
                                 )
                             } else {
-                                ChatScreen(
+                                MainScreen(
                                     state = state,
                                     clock = clock,
                                     nowPlaying = nowPlaying,
@@ -193,6 +219,7 @@ class MainActivity : ComponentActivity() {
                                     onAbort = { connected.controller.stopListening() },
                                     onSettings = { settingsOpen = true },
                                     onHelp = { helpOpen = true },
+                                    onCommands = { commandsOpen = true },
                                 )
                             }
                         }

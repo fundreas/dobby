@@ -169,13 +169,14 @@ Exposed state: `StateFlow<DeparturesState>` = `stations`, `board` (the last succ
 
 **`DeparturesCard`** (`android/app/.../ui/DeparturesCard.kt`) sits below the weather card, and is drawn **whenever a station is configured** — the same rule as the memo and weather cards: departures are not something the panel is *doing*, they are something that is true, and a board you have to ask for is a board you walk past.
 
-- **One block per configured station**, in configured order, each headed by its label. Grouping by station rather than sorting everything into one list: the countdown is only meaningful next to the place it is counting down at, and a merged board would ask somebody to read the station column of every row.
-- **Rows are departures**, not lines: line badge, destination, countdown. Sorted by countdown within the station, at most six — a seventh row on a wall panel is a row nobody reads, and the whole horizon is 70 minutes anyway. The same line appearing twice is what a real departure board looks like.
+- **One page per configured station**, in configured order, each headed by its label, **swiped sideways** with a dot per station underneath. Grouping by station rather than sorting everything into one list: the countdown is only meaningful next to the place it is counting down at, and a merged board would ask somebody to read the station column of every row. Grouping into *pages* rather than a stack, because the panel has one screen for the dashboard and the conversation both, and three stacked stations spend the whole height budget on the part you are not reading — sideways is the one axis nothing else on this screen uses. A single configured station is drawn without a pager and without dots.
+- **Every page is as tall as the tallest**, padded with blank rows. A pager is as high as the page it is showing, so swiping from a stop with four departures to one with none would shrink the card and shunt the conversation up the screen under a finger that was only reading.
+- **Rows are departures**, not lines: line badge, destination, countdown. Sorted by countdown within the station, **at most four** — past the fourth the question has stopped being „laufe ich" and started being „welche Verbindung nehme ich", which is a question for a phone and not for a wall. The same line appearing twice is what a real departure board looks like.
 - **The badge carries the line's colour**: the five U-Bahn lines in the city's own colours, tram red, bus blue, anything else grey. At arm's length the colour is read before the text.
 - `0` renders as **„jetzt"**. It is the one countdown that means something different in kind — not "soon" but "you are not catching this one" — and "0 min" makes it look like the smallest number in the column rather than the one that has run out.
 - **The footer** is the freshness line — „Stand vor 2 Minuten", „wird geholt…", or the error in red — and, permanently beside it, the attribution: `Datenquelle: Stadt Wien – data.wien.gv.at`. The data is CC BY 4.0 and the attribution is a licence term, so it is not a tooltip and not an about screen: it is on the card, always, in the same type as the freshness. Tapping the freshness line refreshes, within the limits of §6.
 - **Stale is marked, never blanked.** While a refresh is in flight, or after one has failed, the rows are drawn dimmed with the caveat in the footer. A card that empties itself the first time a kitchen's Wi-Fi hiccups is a card that looks broken twice a day.
-- **No station configured** → one line pointing at the settings screen, and tapping it goes there. This Sock's setup is typing a number, which is a keyboard's job and not a card's.
+- **No station configured** → one line pointing at the settings screen, and tapping it goes there. This Sock's setup is finding a station by name (§7), which is a keyboard's job and not a card's.
 
 Auto-refresh runs on a regular interval **only while the screen is on** — see §6.1, which is where that rule comes from and what it is for.
 
@@ -190,6 +191,7 @@ The OGD realtime endpoint is free and unauthenticated. Abusing it risks an IP bl
 5. A descriptive `User-Agent` identifying the app.
 6. Back off exponentially on any 5xx or 429, up to 15 minutes.
 7. Attribution rendered wherever the data is shown (§5).
+8. The **published station list** (§7) is a different request from all of the above: a static file, fetched on a human action and then not again for 30 days. It is never polled, and a failed fetch falls back to the cached copy however old it is.
 
 Where each of them lives in the code, because a rule with no address is a rule that gets refactored away:
 
@@ -202,20 +204,28 @@ Where each of them lives in the code, because a rule with no address is a rule t
 | 5 | `WienerLinien.USER_AGENT`. |
 | 6 | `DeparturesWatch.backoff` — doubling from the poll interval, capped at 15 minutes, cleared by the first good response. |
 | 7 | `DeparturesCard` footer, unconditional. |
+| 8 | `WienerLinienStations` — one in-memory list per process over a `filesDir` cache with a 30-day `MAX_AGE`, behind a `Mutex` so two taps are one download. |
 
 ## 7. Config
 
 | Key | Type | Default | Where set |
 |---|---|---|---|
-| `departures.stations` | string | `""` | Settings screen — `diva=label` entries separated by `\|`, e.g. `60201320=Stephansplatz\|60200657=Karlsplatz` |
+| `departures.stations` | string | `""` | Settings screen, via the station picker — `diva=label` entries separated by `\|`, e.g. `60201320=Stephansplatz\|60200657=Karlsplatz` |
 | `departures.min_poll_interval_s` | int | `30` | Settings (advanced), **floor of 30 enforced in code** |
 | `departures.max_spoken_lines` | int | `3` | Settings (advanced) |
 | `departures.line_articles` | string | `""` | Settings (advanced) — `u6=der,d=die Linie`, overriding what §3 derives from the API's `type` |
 
 **A single string rather than a list type**, because `SockConfigStore` stores strings and a Sock that needed a second store shape would be a core change for one Sock's convenience. An entry with no `=` is read as a DIVA with no label and falls back to displaying the id; an entry whose DIVA is not a number is dropped rather than sent, because a malformed id in a batched request costs the whole request.
 
-**The settings screen takes a raw DIVA id and a label**, and that is v1 on purpose. The ids come from the published station list at
-`https://www.wienerlinien.at/ogd_realtime/doku/ogd/wienerlinien-ogd-haltestellen.csv` (`DIVA;PlatformText;Municipality;…`, roughly 2000 rows, no auth) — one lookup, once, for a panel that does not move. A search-by-name field would mean shipping or fetching that CSV to save somebody a one-time copy-paste, and the entry field is where the label is typed anyway: „Haltestelle" on the card should read the way the household says it, which no CSV knows.
+**The settings screen finds a station by name.** „Haltestelle hinzufügen" opens a full-screen picker with a search box; typing filters the published station list and tapping a result writes `diva=PlatformText` into the list behind it. The picker stays open after a hit, because the reason this config is a list at all (§1) is somebody adding the U-Bahn and the bus at the corner in one sitting.
+
+This replaces a v1 that asked for the DIVA id typed in by hand, on the argument that it is a one-time lookup for a panel that does not move. It is — and it was also the one place in the panel that sent somebody to a spreadsheet for an eight-digit number. What changed the trade is the size of the thing: `https://www.wienerlinien.at/ogd_realtime/doku/ogd/wienerlinien-ogd-haltestellen.csv` (`DIVA;PlatformText;Municipality;…`, 2007 rows, no auth) is **130 KB**, which is one departure poll's worth of traffic once a month (§6.8), not a dataset to ship.
+
+Three parts, and the split is the module's usual one — `StationCsv` parses, `StationSearch` ranks, and `WienerLinienStations` is the only one of the three that knows HTTP exists:
+
+- **Matching folds German**: lowercase, accents dropped, `ß` → `ss`, so `wahringer` finds „Währinger Straße". Three tiers — prefix, word-start, contains — and no fuzzy matching, because an edit distance that ranks „Siebenbrunnengasse" over „Siebensterngasse" for `sieben` is worse than no help at all. Within a tier: Wien before Schwechat and Baden, then the shorter name, which puts „Floridsdorf" above „Floridsdorfer Markt".
+- **The label is still editable**, by tapping a configured station. The picker fills in the official `PlatformText`, which is the right default and the wrong answer exactly where it matters: „Haltestelle" on the card should read the way the household says it, and no CSV knows that.
+- **Offline the DIVA field comes back.** With no list the picker says so, offers a retry, and takes the search box itself as a DIVA when what was typed is all digits. Nothing that worked before this existed stopped working.
 
 Changing the station list clears the held board rather than refetching immediately — §6.2 has no bypass. The next tick fills it, which with the screen on is within 30 seconds of pressing the button.
 

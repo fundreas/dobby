@@ -15,6 +15,9 @@ import android.os.Binder
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
+import io.dobby.android.data.DatabaseSockCatalog
+import io.dobby.android.data.DobbyDatabase
+import io.dobby.android.data.SockCatalog
 import io.dobby.android.ui.MainActivity
 import io.dobby.core.nlu.llm.Tier2Program
 import io.dobby.core.registry.Introspection
@@ -81,6 +84,16 @@ class DobbyService : Service() {
     /** The local model, once it has loaded. Null on every device and every path that cannot. */
     private var tier2: LlamaTier2? = null
 
+    /**
+     * The panel's database, and the one thing in this process that knows which Socks are off.
+     *
+     * Opened here because this is where the Socks are assembled, and closed in [onDestroy] for
+     * the same reason every other handle in this class is: whoever opens it closes it.
+     */
+    private var database: DobbyDatabase? = null
+
+    private lateinit var catalog: SockCatalog
+
     lateinit var controller: DobbyController
         private set
 
@@ -134,6 +147,10 @@ class DobbyService : Service() {
         spotifyHardware = SpotifyHardware(this, scope)
         systemHardware = SystemHardware(this)
         val settings = Settings(this)
+        // Before the registry is built, and that order is the whole point: the first palette
+        // this process assembles is already the one the user chose, so there is no window
+        // after boot in which Dobby answers a command somebody switched off.
+        catalog = DatabaseSockCatalog(DobbyDatabase(this).also { database = it }, scope)
         // Built here rather than inline at the call site below, because [RadioHardware] has to
         // register its player with **this** object's `InProcessPlayers` and not a second one
         // (`radio-plan.md` §D5). A second registry compiles, runs, and ducks nothing.
@@ -143,7 +160,7 @@ class DobbyService : Service() {
         val turnAudio = AndroidTurnAudio(this, mode = { settings.turnDuck })
         radioHardware = RadioHardware(this, turnAudio.players)
         weatherHardware = WeatherHardware(this)
-        departuresHardware = DeparturesHardware()
+        departuresHardware = DeparturesHardware(this)
         val resolver = buildTier2(settings)
         controller = DobbyController(
             scope = scope,
@@ -167,6 +184,7 @@ class DobbyService : Service() {
             settings = settings,
             tier2Resolver = resolver,
             turnAudio = turnAudio,
+            catalog = catalog,
         )
         scope.launch { controller.start() }
 
@@ -209,6 +227,10 @@ class DobbyService : Service() {
             return null
         }
 
+        // Filtered by the catalogue, exactly as the controller filters its own: the system
+        // prefix prefilled here is the one the controller's requests will carry, and a
+        // mismatch would cost a full re-prefill on the first utterance. `LlamaTier2` notices
+        // and recovers — this only makes sure it has nothing to recover from at boot.
         val build = SockRegistry.build(
             DobbySocks.create(
                 clockHardware,
@@ -217,7 +239,7 @@ class DobbyService : Service() {
                 radioHardware,
                 weatherHardware,
                 departuresHardware,
-            ).socks,
+            ).socks.filter { catalog.isEnabled(it.id) },
         )
         val registry = build.registry ?: return null
         val program = Tier2Program.ofOrNull(registry, Introspection(registry)) { Log.w(TAG, it) }
@@ -300,6 +322,8 @@ class DobbyService : Service() {
         weatherHardware = null
         departuresHardware = null
         scope.cancel()
+        database?.close()
+        database = null
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
         super.onDestroy()

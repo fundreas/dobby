@@ -5,6 +5,9 @@ import android.util.Log
 import io.dobby.android.chat.ChatMessage
 import io.dobby.android.chat.Transcript
 import io.dobby.android.chat.detailLine
+import io.dobby.android.data.CommandView
+import io.dobby.android.data.SockCatalog
+import io.dobby.android.data.SockConfig
 import io.dobby.core.DobbyEngine
 import io.dobby.core.Fallthrough
 import io.dobby.core.FallthroughLog
@@ -17,6 +20,7 @@ import io.dobby.core.nlu.llm.Tier2
 import io.dobby.core.nlu.llm.Tier2Program
 import io.dobby.core.nlu.llm.Tier2Request
 import io.dobby.core.nlu.llm.Tier2Resolver
+import io.dobby.core.registry.CommandInfo
 import io.dobby.core.registry.Introspection
 import io.dobby.core.registry.SockRegistry
 import io.dobby.core.sock.Lang
@@ -24,6 +28,7 @@ import io.dobby.core.sock.Phrase
 import io.dobby.core.sock.SockContext
 import io.dobby.core.sock.SockLog
 import io.dobby.core.sock.SockResult
+import io.dobby.core.sock.SockStatus
 import io.dobby.pipeline.ListenCue
 import io.dobby.pipeline.audio.MicProfile
 import io.dobby.pipeline.tts.VoiceCatalogue
@@ -35,15 +40,10 @@ import io.dobby.pipeline.wakeword.WakeWordOption
 import io.dobby.socks.clock.ClockState
 import io.dobby.socks.memo.MemoState
 import io.dobby.socks.spotify.PlayerSnapshot
-import io.dobby.socks.radio.RadioConfig
 import io.dobby.socks.radio.RadioState
 import io.dobby.socks.radio.Station
-import io.dobby.socks.spotify.SpotifyConfig
-import io.dobby.socks.departures.DeparturesConfig
 import io.dobby.socks.departures.DeparturesState
-// Aliased: `Station` is already the Radio Sock's, and a wall panel has both a radio station
-// and a tram stop. Neither name is wrong, so the shorter one keeps the name it had.
-import io.dobby.socks.departures.Station as TransitStation
+import io.dobby.socks.departures.StationDirectory
 import io.dobby.socks.weather.LocateOutcome
 import io.dobby.socks.weather.WeatherState
 import io.dobby.pipeline.VoiceIo
@@ -55,6 +55,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -94,17 +95,50 @@ data class DobbyUiState(
     val voiceId: String = "",
     /** A voice download, so the row that started one can show it. */
     val voiceState: VoiceModelState = VoiceModelState.Absent,
-    /** The Spotify Sock's three settings (`spotify.specs.md` §9), read out of its config store. */
-    val spotifyMarket: String = SpotifyConfig.DEFAULT_MARKET,
-    val spotifyPreferTrack: Boolean = true,
-    val spotifyAskWhenUnsure: Boolean = true,
-    /** The Radio Sock's default station id (`radio.specs.md` §9), for the settings dropdown. */
-    val radioStation: String = "",
+    /** Every Sock in the build, switched on or not, for the Socks tab. */
+    val socks: List<SockEntry> = emptyList(),
     /**
-     * The Departures Sock's configured stations (`departures.specs.md` §7), for the settings
-     * editor — which is the only place in the panel where they can be added or removed.
+     * The commands of the switched-on Socks, grouped by the Sock they belong to.
+     *
+     * Grouped rather than flat because one of the Commands tab's two views is the grouping, and
+     * flattening it back into A–Z is one `flatMap` while re-grouping a flat list would mean
+     * carrying the owner on every row anyway. A shared command appears under every Sock that
+     * subscribes to it — which is true, and is why the flat view de-duplicates by id.
      */
-    val departureStations: List<TransitStation> = emptyList(),
+    val commandGroups: List<SockCommands> = emptyList(),
+    /** Which of the two ways of reading the command list is showing. Remembered in the database. */
+    val commandView: CommandView = CommandView.DEFAULT,
+    /**
+     * Every Sock's own settings, read and written through the store the Socks themselves read.
+     *
+     * One handle rather than a field per setting: the panel has nine Socks with settings and
+     * around twenty values between them, and a state class that named them all would grow a
+     * line every time a Sock grew a preference. See [SockConfig].
+     */
+    val sockConfig: SockConfig = SockConfig.EMPTY,
+)
+
+/**
+ * One Sock, as the Socks tab needs to see it: switched on or not, and how much is behind it.
+ *
+ * Deliberately **not** [io.dobby.core.registry.SockInfo], which is a view of the registry and
+ * therefore a view of what is switched *on*. A screen whose job is to switch things back on
+ * cannot be built out of a list that leaves them out.
+ */
+data class SockEntry(
+    val id: String,
+    val displayName: String,
+    val enabled: Boolean,
+    /** Exclusive commands plus chain subscriptions, whether or not the Sock is in the palette. */
+    val commandCount: Int,
+    val status: SockStatus,
+)
+
+/** One Sock's commands, for the Commands tab's grouped view. */
+data class SockCommands(
+    val sockId: String,
+    val displayName: String,
+    val commands: List<CommandInfo>,
 )
 
 /**
@@ -202,6 +236,14 @@ class DobbyController(
      * and single-slot. [TurnAudio.NONE] off-device, where there is nothing to duck.
      */
     private val turnAudio: TurnAudio = TurnAudio.NONE,
+    /**
+     * Which Socks are switched on, out of the panel's database.
+     *
+     * [SockCatalog.ALL_ENABLED] in tests and off-device — the same bargain every hardware seam
+     * in this class makes, and the one that keeps a switchable palette out of every test that
+     * only wanted a turn of conversation.
+     */
+    private val catalog: SockCatalog = SockCatalog.ALL_ENABLED,
     sockContext: (announce: suspend (Phrase) -> Unit) -> SockContext,
 ) {
     private val transcript = Transcript()
@@ -336,6 +378,17 @@ class DobbyController(
     val departures: StateFlow<DeparturesState> get() = wiring.departures.state
 
     /**
+     * The published station list, for the settings screen's station picker
+     * (`departures.specs.md` §7).
+     *
+     * Exposed here rather than reached for through the service, because this class is already
+     * the panel's one view of the device half — and [StationDirectory.NONE] off-device, where
+     * the picker says it cannot search and the DIVA field underneath it still works.
+     */
+    val stationDirectory: StationDirectory =
+        departuresHardware?.stations ?: StationDirectory.NONE
+
+    /**
      * The freshness line on the departure card, tapped.
      *
      * It may do nothing, and that is the design: the 30-second floor has no bypass, including
@@ -343,20 +396,6 @@ class DobbyController(
      * „gerade eben", which is the honest answer to "is this current".
      */
     fun refreshDepartures(): Job = scope.launch { wiring.departures.refreshFromPanel() }
-
-    /**
-     * The settings screen's station list, written to the store the Sock reads.
-     *
-     * Two steps and not one: the config write is what survives a restart, and the call into the
-     * Sock is what makes the card stop showing a board fetched for the previous stops. Skipping
-     * the second would leave a panel drawing Karlsplatz under the heading somebody just renamed
-     * to Josefstädter Straße.
-     */
-    fun setDepartureStations(stations: List<TransitStation>): Job = scope.launch {
-        sockContext.config.put(DeparturesConfig.STATIONS, DeparturesConfig.encode(stations))
-        wiring.departures.stationsChangedFromPanel()
-        refresh.value = refresh.value + 1
-    }
 
     /**
      * Whether the room is silent, and the button that changes it (`system.specs.md` §4).
@@ -379,9 +418,49 @@ class DobbyController(
     val spotifyArtwork: StateFlow<Bitmap?>
         get() = spotifyHardware?.artwork ?: SpotifyHardware.NO_ARTWORK
 
-    private val registry: SockRegistry?
-    private val engine: DobbyEngine?
-    private val summary: String
+    /**
+     * The Socks that are switched on, assembled into everything downstream of them.
+     *
+     * One object because everything in it is only ever correct *together*: the registry, the
+     * dispatcher built over it, the directory that describes it, the Tier 2 program generated
+     * from it and the banner that counts it. Swapping them one at a time is how a panel ends up
+     * matching a template for a command the dispatcher no longer has an owner for.
+     *
+     * A [StateFlow] rather than a field because switching a Sock off rebuilds it, and the
+     * screens that draw the palette — help, the Commands tab, the banner — have to hear about
+     * that. See [rebuildLoadout].
+     */
+    private class Loadout(
+        val registry: SockRegistry?,
+        val engine: DobbyEngine?,
+        val directory: Introspection?,
+        val summary: String,
+    ) {
+        /** The Socks actually in the palette, for working out what a rebuild has to start and stop. */
+        val socks: Set<String> = registry?.socks.orEmpty().map { it.id }.toSet()
+
+        /**
+         * The Commands tab's list, derived once per palette rather than once per emission.
+         *
+         * `lazy` and not a function, because describing a command walks the palette to collect
+         * the templates that produced it — cheap once, and O(commands × templates) if it were
+         * recomputed every time the phase moved from LISTENING to THINKING. The palette cannot
+         * change under a [Loadout]: a different set of Socks is a different one of these.
+         */
+        val commandGroups: List<SockCommands> by lazy {
+            val directory = directory ?: return@lazy emptyList()
+            directory.socks().mapNotNull { sock ->
+                val commands = directory.commands(sock.id).orEmpty()
+                if (commands.isEmpty()) null else SockCommands(sock.id, sock.displayName, commands)
+            }.sortedBy { it.displayName.lowercase() }
+        }
+    }
+
+    private val loadout: MutableStateFlow<Loadout> = MutableStateFlow(buildLoadout())
+
+    private val engine: DobbyEngine? get() = loadout.value.engine
+
+    private val summary: String get() = loadout.value.summary
 
     /**
      * What Dobby can do, for the screen that draws it.
@@ -389,12 +468,25 @@ class DobbyController(
      * The same object the Help Sock answers out of (`help.specs.md` §1), handed to the help
      * screen so the panel and the voice cannot disagree about what exists. Null only when the
      * registry did not build, which is the state the chat already says out loud.
+     *
+     * A flow since Socks became switchable: the help screen took this as a plain value and
+     * would have gone on drawing the commands of a Sock somebody had just switched off.
      */
-    val introspection: Introspection?
+    val introspection: StateFlow<Introspection?> =
+        loadout.map { it.directory }.stateIn(scope, SharingStarted.Eagerly, loadout.value.directory)
 
-    init {
-        val build = SockRegistry.build(wiring.socks)
-        registry = build.registry
+    /**
+     * Assembles one [Loadout] out of the Socks the catalogue says are on.
+     *
+     * Everything a disabled Sock owns disappears here and nowhere else: its templates never
+     * reach the palette, its commands never reach the dispatcher, and its tools never reach the
+     * Tier 2 prompt. That is the whole implementation of "switched off", and the reason it is
+     * one function rather than a flag consulted in four places.
+     */
+    private fun buildLoadout(): Loadout {
+        val wanted = wiring.socks.filter { catalog.isEnabled(it.id) }
+        val build = SockRegistry.build(wanted)
+        val registry = build.registry
         if (registry == null) {
             // §3.5: fatal in development, a surfaced degraded state in the field. Crashing a
             // START_STICKY foreground service would restart-loop, so it is surfaced either
@@ -402,53 +494,143 @@ class DobbyController(
             build.errors.forEach { Log.e(TAG, "registry: $it") }
             transcript.note("Dobby kann nicht starten — die Socks passen nicht zusammen:")
             build.errors.forEach { transcript.note("• $it") }
-            engine = null
-            introspection = null
-            summary = "Registry ungültig"
-        } else {
-            val directory = Introspection(registry, health)
-            introspection = directory
-            wiring.bindDirectory(directory)
-            registry.checkExamples().forEach { Log.w(TAG, "palette collision: $it") }
-            registry.checkFillers().forEach { Log.w(TAG, "filler conflict: $it") }
-            // Never fatal: `lauter` and `stumm` are this shape and are correct. Logged so the
-            // judgement behind each one stays visible (`socks.specs/README.md` §6).
-            registry.checkSingleKeywordTemplates().forEach { Log.w(TAG, "single keyword: $it") }
-            // Null when a Sock declares a few-shot the prompt cannot render, and null when no
-            // resolver was supplied at all. Both leave the engine byte-for-byte what it was.
-            val program = Tier2Program.ofOrNull(registry, directory) { Log.w(TAG, it) }
-            engine = DobbyEngine(
-                registry = registry,
-                dispatcher = Dispatcher(registry, health),
-                // §5.4's flywheel: every utterance Tier 1 could not match, with what Tier 2
-                // made of it, ready to be promoted into a template in the owning Sock's spec.
-                onFallthrough = { entry: Fallthrough ->
-                    Log.i(TAG, "fallthrough: $entry")
-                    fallthrough.record(entry)
-                },
-                // The other end of the same flywheel (M6c): utterances the filler-skipping pass
-                // kept out of Tier 2. This is the number that says whether the filler list was
-                // worth adding — and a rescue that looks wrong is a word to take off it.
-                onRescue = { entry: Rescue ->
-                    Log.i(TAG, "rescued: $entry")
-                    fallthrough.record(entry)
-                },
-                log = object : SockLog {
-                    override fun debug(message: String) = Unit
-
-                    override fun warn(message: String, cause: Throwable?) {
-                        Log.w(TAG, message, cause)
-                    }
-                },
-                tier2 = if (tier2Resolver != null && program != null) {
-                    Tier2(registry, announcing(tier2Resolver), program)
-                } else {
-                    null
-                },
-            )
-            summary = "${registry.socks.size} Socks · ${registry.commands.size} Befehle · " +
-                "${registry.palette.entries.size} Vorlagen"
+            return Loadout(null, null, null, "Registry ungültig")
         }
+
+        val directory = Introspection(registry, health)
+        wiring.bindDirectory(directory)
+        registry.checkExamples().forEach { Log.w(TAG, "palette collision: $it") }
+        registry.checkFillers().forEach { Log.w(TAG, "filler conflict: $it") }
+        // Never fatal: `lauter` and `stumm` are this shape and are correct. Logged so the
+        // judgement behind each one stays visible (`socks.specs/README.md` §6).
+        registry.checkSingleKeywordTemplates().forEach { Log.w(TAG, "single keyword: $it") }
+        // Null when a Sock declares a few-shot the prompt cannot render, and null when no
+        // resolver was supplied at all. Both leave the engine byte-for-byte what it was.
+        val program = Tier2Program.ofOrNull(registry, directory) { Log.w(TAG, it) }
+        val engine = DobbyEngine(
+            registry = registry,
+            dispatcher = Dispatcher(registry, health),
+            // §5.4's flywheel: every utterance Tier 1 could not match, with what Tier 2
+            // made of it, ready to be promoted into a template in the owning Sock's spec.
+            onFallthrough = { entry: Fallthrough ->
+                Log.i(TAG, "fallthrough: $entry")
+                fallthrough.record(entry)
+            },
+            // The other end of the same flywheel (M6c): utterances the filler-skipping pass
+            // kept out of Tier 2. This is the number that says whether the filler list was
+            // worth adding — and a rescue that looks wrong is a word to take off it.
+            onRescue = { entry: Rescue ->
+                Log.i(TAG, "rescued: $entry")
+                fallthrough.record(entry)
+            },
+            log = object : SockLog {
+                override fun debug(message: String) = Unit
+
+                override fun warn(message: String, cause: Throwable?) {
+                    Log.w(TAG, message, cause)
+                }
+            },
+            tier2 = if (tier2Resolver != null && program != null) {
+                Tier2(registry, announcing(tier2Resolver), program)
+            } else {
+                null
+            },
+        )
+        return Loadout(
+            registry = registry,
+            engine = engine,
+            directory = directory,
+            summary = "${registry.socks.size} Socks · ${registry.commands.size} Befehle · " +
+                "${registry.palette.entries.size} Vorlagen",
+        )
+    }
+
+    /**
+     * Switches a Sock on or off, and rebuilds everything that was derived from the old set.
+     *
+     * Three things happen, in this order and for a reason each:
+     *
+     * 1. The catalogue is written, so the answer survives a restart and so the rebuild below
+     *    reads the set somebody just asked for rather than the one before it.
+     * 2. The palette is reassembled. Under the turn lock, because a rebuild halfway through a
+     *    dispatch would swap the registry out from under a Sock that is still answering.
+     * 3. Only the Socks whose membership actually changed are started or stopped. **Not all of
+     *    them** — `onStop` is a Sock giving up its state, and restarting every Sock because
+     *    somebody switched off the calculator would cancel the timers, drop the App Remote
+     *    connection and stop the radio. One toggle should cost exactly one Sock.
+     *
+     * The old engine's pending question goes with it: a follow-up is a palette compiled for a
+     * command list that no longer exists, and an answer routed into it would reach a Sock
+     * through a registry nothing else is dispatching through any more.
+     */
+    fun setSockEnabled(sockId: String, enabled: Boolean): Job = scope.launch {
+        if (catalog.isEnabled(sockId) == enabled) return@launch
+        catalog.setEnabled(sockId, enabled)
+        turn.withLock { rebuildLoadout() }
+    }
+
+    /** Assembles the new palette and moves the Socks that changed sides. Caller holds [turn]. */
+    private suspend fun rebuildLoadout() {
+        val previous = loadout.value
+        val wanted = wiring.socks.filter { catalog.isEnabled(it.id) }.map { it.id }.toSet()
+        // "Alle anziehen" is one tap and N calls to [setSockEnabled]; the first rebuild already
+        // sees the finished set, and the rest would each reassemble the identical palette.
+        if (wanted == previous.socks && previous.registry != null) return
+
+        previous.engine?.endTurn()
+        val next = buildLoadout()
+
+        val gone = previous.socks - next.socks
+        val arrived = next.socks - previous.socks
+        for (sock in wiring.socks.filter { it.id in gone }) {
+            // Guarded: a Sock that throws on the way out must not take the rebuild with it, or
+            // the panel is left with a registry nobody is dispatching through.
+            try {
+                sock.onStop()
+            } catch (e: Exception) {
+                Log.w(TAG, "${sock.id} threw on being switched off", e)
+            }
+        }
+        for (sock in wiring.socks.filter { it.id in arrived }) {
+            try {
+                sock.onStart(sockContext)
+            } catch (e: Exception) {
+                Log.w(TAG, "${sock.id} threw on being switched on", e)
+            }
+        }
+
+        loadout.value = next
+        Log.i(TAG, "loadout: ${next.summary} (−${gone.size} +${arrived.size})")
+    }
+
+    /** Remembers how the Commands tab is being read. A view, so it is worth persisting. */
+    fun setCommandView(view: CommandView) = catalog.setCommandView(view)
+
+    /**
+     * Every Sock the build contains, switched on or not, for the Socks tab.
+     *
+     * Read off the Sock objects rather than off the registry, which is exactly the point: the
+     * registry holds what is *switched on*, and a screen whose job is to switch things on
+     * cannot be built from a list that omits everything already off.
+     */
+    private fun sockEntries(): List<SockEntry> {
+        val on = loadout.value.socks
+        return wiring.socks
+            .map { sock ->
+                SockEntry(
+                    id = sock.id,
+                    displayName = sock.displayName,
+                    enabled = catalog.isEnabled(sock.id),
+                    // Commands plus chains: a shared command is genuinely part of what a Sock
+                    // does, which is the same count `SockInfo.commandCount` reports.
+                    commandCount = sock.commands.size + sock.shared.size,
+                    // A Sock that is off reports whatever it last reported, which would be a
+                    // stale "Nicht verfügbar" on a row whose only remaining question is
+                    // whether to switch it back on.
+                    status = if (sock.id in on) sock.status.value else SockStatus.Ready,
+                )
+            }
+            .sortedBy { it.displayName.lowercase() }
     }
 
     /**
@@ -545,30 +727,58 @@ class DobbyController(
     private val refresh = MutableStateFlow(0)
 
     /**
-     * The counter and the voice download, as one flow.
+     * Everything the settings screens read that is not a flow of its own.
      *
-     * [combine] takes five typed flows and this is the sixth thing the state is built from, so
-     * the two that change least often travel together. They belong together anyway: both are
-     * about what settings is showing, and a download's percentage has to reach the screen
+     * [combine] takes five typed flows and the state is built from more than five things, so
+     * the ones that change least often travel together. They belong together anyway: all four
+     * are about what settings is showing, and a download's percentage has to reach the screen
      * between two taps of the counter.
      */
-    private val settingsChanges =
-        combine(refresh, pipeline.voiceState) { count, voice -> count to voice }
+    private data class SettingsChange(
+        val revision: Int,
+        val voice: VoiceModelState,
+        val loadout: Loadout,
+        val commandView: CommandView,
+    )
+
+    private val settingsChanges = combine(
+        refresh,
+        pipeline.voiceState,
+        loadout,
+        catalog.enabled,
+        catalog.commandView,
+    ) { count, voice, palette, _, view -> SettingsChange(count, voice, palette, view) }
 
     /**
-     * The Spotify Sock's settings, read through the same store the Sock reads.
+     * Every Sock's settings, through the same store the Socks read.
      *
      * Not through [settings], which is the panel's own file and namespaced by nobody: a Sock's
-     * configuration lives under its id in `SockConfigStore`, and the settings screen writes to
-     * exactly the keys the Sock reads.
+     * configuration lives under its id in `SockConfigStore`, and a settings page writes to
+     * exactly the keys the Sock reads. Rebuilt per emission so its revision — and therefore its
+     * identity, and therefore the recomposition — moves with the write counter.
      */
-    private val spotifyConfig = SpotifyConfig(this.sockContext.config)
+    private fun sockConfig(revision: Int) =
+        SockConfig(sockContext.config, ::onSockConfigWritten, revision)
 
-    /** The Radio Sock's settings, read through the same store the Sock reads (§9). */
-    private val radioConfig = RadioConfig(this.sockContext.config)
-
-    /** And the Departures Sock's, for the station editor (`departures.specs.md` §7). */
-    private val departuresConfig = DeparturesConfig(this.sockContext.config)
+    /**
+     * A Sock's setting was changed from the panel, and one of them has to be told.
+     *
+     * Almost none do: every config class in the project reads its values at the moment it uses
+     * them, precisely so a change lands on the next command rather than on the next boot. The
+     * exception is a setting that has already produced something on screen — the departure
+     * board is fetched *for* a set of stops, so editing the stops has to invalidate the board
+     * as well as the preference, or the panel keeps drawing Karlsplatz under a heading somebody
+     * just renamed (`departures.specs.md` §7).
+     *
+     * Keyed off the namespace rather than called by the page, so a page stays a thing that
+     * writes settings and nothing else.
+     */
+    private fun onSockConfigWritten(key: String) {
+        when (key.substringBefore('.')) {
+            wiring.departures.id -> scope.launch { wiring.departures.stationsChangedFromPanel() }
+        }
+        refresh.value = refresh.value + 1
+    }
 
     val state: StateFlow<DobbyUiState> =
         combine(
@@ -577,13 +787,14 @@ class DobbyController(
             thinking,
             pipeline.handsFree,
             settingsChanges,
-        ) { voice, messages, isThinking, armed, (_, voiceDownload) ->
+        ) { voice, messages, isThinking, armed, changes ->
+            val voiceDownload = changes.voice
             DobbyUiState(
                 phase = phaseOf(voice, isThinking),
                 detail = detailOf(voice, isThinking),
                 messages = messages,
-                summary = summary,
-                canListen = pipeline.canListen && engine != null,
+                summary = changes.loadout.summary,
+                canListen = pipeline.canListen && changes.loadout.engine != null,
                 handsFree = armed,
                 wakePhrase = pipeline.wakePhrase,
                 wakeWords = wakeWordOptions,
@@ -598,11 +809,10 @@ class DobbyController(
                 voices = voiceOptions,
                 voiceId = pipeline.selectedVoiceId,
                 voiceState = voiceDownload,
-                spotifyMarket = spotifyConfig.market,
-                spotifyPreferTrack = spotifyConfig.preferTrackOverArtist,
-                spotifyAskWhenUnsure = spotifyConfig.askWhenUnsure,
-                radioStation = radioConfig.defaultStation.id,
-                departureStations = departuresConfig.stations,
+                socks = sockEntries(),
+                commandGroups = changes.loadout.commandGroups,
+                commandView = changes.commandView,
+                sockConfig = sockConfig(changes.revision),
             )
         }.stateIn(
             scope,
@@ -685,42 +895,6 @@ class DobbyController(
      */
     fun setMicProfile(profile: MicProfile) {
         settings?.micProfile = profile
-        refresh.value = refresh.value + 1
-    }
-
-    /**
-     * The three Spotify settings (`spotify.specs.md` §9).
-     *
-     * Written straight into the Sock's own config store, which the Sock reads at the moment it
-     * uses them — so a change takes effect on the next command, not on the next restart.
-     * `ask_when_unsure` in particular exists to be switched off without a rebuild: its trigger
-     * is a guess about human patience, and the honest way to find out whether the guess is
-     * right is to be able to turn it off in the room.
-     */
-    fun setSpotifyMarket(market: String) {
-        sockContext.config.put(SpotifyConfig.MARKET, market)
-        refresh.value = refresh.value + 1
-    }
-
-    fun setSpotifyPreferTrack(prefer: Boolean) {
-        sockContext.config.put(SpotifyConfig.PREFER_TRACK, prefer.toString())
-        refresh.value = refresh.value + 1
-    }
-
-    fun setSpotifyAskWhenUnsure(ask: Boolean) {
-        sockContext.config.put(SpotifyConfig.ASK_WHEN_UNSURE, ask.toString())
-        refresh.value = refresh.value + 1
-    }
-
-    /**
-     * Which station "radio an" means (`radio.specs.md` §9).
-     *
-     * Read per invocation by the Sock, so it takes effect on the next command. An id that names
-     * nothing falls back to the table's own default rather than failing — which is also what
-     * happens to a station removed from the table under a stored preference.
-     */
-    fun setRadioStation(stationId: String) {
-        sockContext.config.put(RadioConfig.DEFAULT_STATION, stationId)
         refresh.value = refresh.value + 1
     }
 

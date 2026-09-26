@@ -9,8 +9,13 @@ import java.time.Duration
  * Read at the moment they are used rather than captured at `onStart`, the way `ClockConfig` and
  * `RadioConfig` are: a session length somebody has just changed should apply to the next memo
  * they read out, not to the next boot.
+ *
+ * Public, unlike the rest of this Sock's internals, because the panel's settings page reads and
+ * writes through it. That is the rule every Sock's page follows: the page owns the drawing, the
+ * Sock owns the keys, the defaults and the clamping — so the two cannot disagree about what an
+ * unset value means.
  */
-internal class MemoConfig(private val store: SockConfigStore) {
+class MemoConfig(private val store: SockConfigStore) {
 
     /**
      * How long "das Memo" keeps meaning the one that was just read out.

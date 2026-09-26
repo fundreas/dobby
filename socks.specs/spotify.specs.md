@@ -720,7 +720,7 @@ date.
 
 `val nowPlaying: StateFlow<PlayerSnapshot?>` on the Sock, mapped straight from the subscription:
 title, artist, `isPaused`, `positionMs`, `durationMs`, `artUri`. `DobbySocks.Wiring` keeps the
-Sock by name, `DobbyController` exposes it as `val spotify`, and `ChatScreen` draws a
+Sock by name, `DobbyController` exposes it as `val spotify`, and `MainScreen` draws a
 `NowPlayingCard` under the existing `ClockCard`. That path already existed end to end for the
 clock; this is its second user and it needed nothing new.
 

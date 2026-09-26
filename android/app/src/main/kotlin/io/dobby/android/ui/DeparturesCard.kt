@@ -4,12 +4,17 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -39,14 +44,21 @@ import java.time.Instant
  * footer already says why.
  *
  * 1. **No station configured.** One line that says where to fix it, and tapping it goes there.
- *    Unlike the weather's Setup button this cannot be a button: setting this up means typing a
- *    number, which is a keyboard's job and not a card's.
- * 2. **A board**, which is what this Sock exists for: one block per station, rows sorted by
+ *    Unlike the weather's Setup button this cannot be a button: setting this up means finding
+ *    a station, which is a keyboard's job and not a card's.
+ * 2. **A board**, which is what this Sock exists for: one page per station, rows sorted by
  *    countdown, and the attribution that the licence requires.
+ *
+ * **One station at a time, swiped.** Stacking every station cost the card its whole height
+ * budget — three stops at four rows each pushed the conversation off a panel that has one
+ * screen for all of it. Sideways is the axis nothing else on this screen uses, so a page per
+ * station costs no vertical space at all, and the station whose stop is outside the door is
+ * page one because that is the order it was configured in.
  *
  * **Rows are departures, not lines.** The same line twice in six minutes is two rows, which is
  * what a real departure board looks like and what somebody deciding whether to run needs to
- * see. Six rows per station, because a seventh is one nobody reads from across a kitchen.
+ * see. Four per station: it is the next one and the one after it that decide whether to run,
+ * and the fifth is already a different journey.
  *
  * **Stale is dimmed, never blanked.** A refresh in flight or a failed one dims the rows and
  * says so in the footer; it does not empty the card. A board that disappears every time a
@@ -77,9 +89,11 @@ fun DeparturesCard(
             .animateContentSize(),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        for (station in state.stations) {
-            StationBlock(station, board, dimmed = state.refreshing || state.error != null)
-        }
+        StationPages(
+            stations = state.stations,
+            board = board,
+            dimmed = state.refreshing || state.error != null,
+        )
         Footer(
             state = state,
             age = board?.let { Duration.between(it.fetchedAt, now) },
@@ -121,18 +135,100 @@ private fun SetupHint(onOpenSettings: () -> Unit) {
     }
 }
 
-/** One configured station: its name, and the next few things leaving it. */
+/**
+ * The stations, one per page.
+ *
+ * **Every page is as tall as the tallest**, which is the whole reason [StationBlock] takes a
+ * `padTo` at all. A pager is exactly as high as the page it is showing, so
+ * swiping from a stop with four departures to one with none would shrink the card by three
+ * rows and shunt the conversation underneath it up the screen — the panel jumping about under
+ * a finger that was only reading. Blank rows are cheaper than that.
+ *
+ * One station is drawn without a pager and without dots. A pager over one page swipes
+ * nowhere, and a single dot is an indicator that indicates nothing.
+ */
 @Composable
-private fun StationBlock(station: Station, board: DepartureBoard?, dimmed: Boolean) {
-    val rows = board?.at(station).orEmpty().flatMap { direction ->
-        direction.countdowns.map { direction to it }
-    }.sortedBy { (_, countdown) -> countdown }.take(MAX_ROWS)
+private fun StationPages(stations: List<Station>, board: DepartureBoard?, dimmed: Boolean) {
+    if (stations.size == 1) {
+        StationBlock(stations.first(), board, dimmed, padTo = 0)
+        return
+    }
+    val pager = rememberPagerState(pageCount = { stations.size })
+    val padTo = stations.maxOf { rows(board, it).size }
 
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    HorizontalPager(
+        state = pager,
+        // Top, not centre: the station's name is the thing that has to line up between two
+        // pages, and it is the first row of both.
+        verticalAlignment = Alignment.Top,
+    ) { page ->
+        StationBlock(stations[page], board, dimmed, padTo = padTo)
+    }
+    Dots(count = stations.size, current = pager.currentPage)
+}
+
+/** Which of the stations is showing, and how many there are. */
+@Composable
+private fun Dots(count: Int, current: Int) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 2.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        repeat(count) { index ->
+            Box(
+                Modifier
+                    .padding(horizontal = 3.dp)
+                    .size(if (index == current) DOT_ON else DOT_OFF)
+                    .clip(CircleShape)
+                    .background(
+                        if (index == current) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = DOT_ALPHA)
+                        },
+                    ),
+            )
+        }
+    }
+}
+
+/**
+ * The next few departures from one station, soonest first.
+ *
+ * Flattened out of the direction boards rather than read off them: a [DirectionBoard] is one
+ * line going one way with several countdowns behind it, and what somebody standing in a
+ * kitchen wants is the next four *vehicles*, whichever lines they happen to belong to.
+ */
+private fun rows(board: DepartureBoard?, station: Station): List<Pair<DirectionBoard, Int>> =
+    board?.at(station).orEmpty()
+        .flatMap { direction -> direction.countdowns.map { direction to it } }
+        .sortedBy { (_, countdown) -> countdown }
+        .take(MAX_ROWS)
+
+/**
+ * One configured station: its name, and the next few things leaving it.
+ *
+ * @param padTo how many departure rows this page must occupy whether it has them or not, so
+ *   that swiping between stations does not resize the card. Zero for the station that is on
+ *   its own and has nothing to line up with.
+ */
+@Composable
+private fun StationBlock(
+    station: Station,
+    board: DepartureBoard?,
+    dimmed: Boolean,
+    padTo: Int,
+) {
+    val rows = rows(board, station)
+
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(
             station.display,
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
         if (rows.isEmpty()) {
             Text(
@@ -144,6 +240,39 @@ private fun StationBlock(station: Station, board: DepartureBoard?, dimmed: Boole
         for ((direction, countdown) in rows) {
             DepartureRow(direction, countdown, dimmed)
         }
+        // The message above already took one row's worth of height, so a station with nothing
+        // to report pads one row less than an empty one would.
+        val drawn = if (rows.isEmpty()) 1 else rows.size
+        repeat((padTo - drawn).coerceAtLeast(0)) { EmptyRow() }
+    }
+}
+
+/**
+ * A departure row with nothing in it.
+ *
+ * Built out of the same two texts as [DepartureRow] rather than out of a `Spacer` of some
+ * measured height: the row is as tall as its type and its badge padding make it, and a
+ * hard-coded dp would be right until somebody changed the type scale.
+ */
+@Composable
+private fun EmptyRow() {
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            " ",
+            Modifier.widthIn(min = BADGE_MIN_WIDTH).padding(horizontal = 6.dp, vertical = 2.dp),
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+        )
+        Text(
+            " ",
+            Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 1,
+        )
     }
 }
 
@@ -281,9 +410,22 @@ private val TRAIN = Color(0xFF1B5E9E)
 
 private val OTHER = Color(0xFF505050)
 
-/** Six per station: a seventh row on a wall panel is a row nobody reads. */
-private const val MAX_ROWS = 6
+/**
+ * Four per station.
+ *
+ * Six fitted while the stations were stacked and the card could be as tall as it liked. A
+ * page is read at a glance from across a kitchen, and past the fourth row the question has
+ * stopped being „laufe ich" and started being „welche Verbindung nehme ich" — which is a
+ * question for a phone, not for a wall.
+ */
+private const val MAX_ROWS = 4
 
 private const val DIMMED = 0.45f
+
+private val DOT_ON = 7.dp
+
+private val DOT_OFF = 5.dp
+
+private const val DOT_ALPHA = 0.35f
 
 private val BADGE_MIN_WIDTH = 34.dp
